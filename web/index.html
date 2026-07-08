@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Active-Inference Arm Painter</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="app">
+    <section id="scene">
+      <div class="scene-tag">
+        <div class="eyebrow">4-DOF Manipulator</div>
+        <div class="title-row">
+          <h1>Active-Inference Arm Painter</h1>
+          <span id="codeVersion" class="version-pill">v0.1.0</span>
+        </div>
+        <div class="sub">Python active-inference core · Three.js body/canvas renderer</div>
+      </div>
+      <div class="readout" id="readout">connecting...</div>
+      <div class="hint">drag orbit/tilt · right/shift drag pan · scroll zoom</div>
+    </section>
+    <aside id="panel">
+      <button id="btnMax" class="primary">Max speed: off</button>
+      <div class="button-grid">
+        <button id="btnPause">Pause</button>
+        <button id="btnReset">Reset</button>
+        <button id="btnClear">Clear</button>
+        <button id="btnPaint">Paint: on</button>
+        <button id="btnAgent">Agent: on</button>
+        <button id="btnHomeView">Home view</button>
+        <button id="btnFaceCanvas">Face canvas</button>
+        <button id="btnBlack">Black</button>
+        <button id="btnWhite">White</button>
+      </div>
+      <div class="divider"></div>
+      <p class="plabel">Telemetry</p>
+      <div class="specs" id="specs"></div>
+      <div class="divider"></div>
+      <p class="plabel">Canvas</p>
+      <canvas id="miniCanvas" width="256" height="256"></canvas>
+    </aside>
+  </main>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script>
+    fetch("/api/version", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!data || !data.version) return;
+        const versionText = `v${data.version}`;
+        document.getElementById("codeVersion").textContent = versionText;
+        document.title = `Active-Inference Arm Painter ${versionText}`;
+      })
+      .catch(() => {});
+  </script>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

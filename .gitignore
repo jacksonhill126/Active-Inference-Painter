@@ -1,0 +1,11 @@
+.active_painter_code_version.json
+.claude/
+.pytest_cache/
+.mplconfig/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.pid
+runs/
+src/*.egg-info/
