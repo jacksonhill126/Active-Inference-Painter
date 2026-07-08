@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from torch.distributions import Normal
 
+from .action_encoding import coerce_action_raster, coerce_action_tensor
 from .config import PainterConfig
 from .efe_common import project_material_support
 
@@ -51,6 +52,7 @@ class DynamicsEnsemble(nn.Module):
     def __init__(self, config: PainterConfig) -> None:
         super().__init__()
         self.bootstrap_probability = config.ensemble_bootstrap_probability
+        self.action_dim = config.action_dim
         self.members = nn.ModuleList(
             [
                 TransitionMember(config.state_dim, config.action_dim, config.hidden_dim)
@@ -59,6 +61,7 @@ class DynamicsEnsemble(nn.Module):
         )
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        action = coerce_action_tensor(action, self.action_dim)
         means, logvars = zip(*(m(state, action) for m in self.members))
         return torch.stack(means, dim=0), torch.stack(logvars, dim=0)
 
@@ -147,6 +150,7 @@ class SpatialDynamicsEnsemble(nn.Module):
     def __init__(self, config: PainterConfig) -> None:
         super().__init__()
         self.bootstrap_probability = config.ensemble_bootstrap_probability
+        self.action_channels = config.spatial_action_channels
         self.members = nn.ModuleList(
             [
                 SpatialTransitionMember(
@@ -162,6 +166,7 @@ class SpatialDynamicsEnsemble(nn.Module):
         )
 
     def forward(self, material: torch.Tensor, action_raster: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        action_raster = coerce_action_raster(action_raster, self.action_channels)
         means, logvars = zip(*(member(material, action_raster) for member in self.members))
         return torch.stack(means, dim=0), torch.stack(logvars, dim=0)
 

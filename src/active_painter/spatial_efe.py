@@ -304,7 +304,12 @@ class SpatialExpectedFreeEnergy:
                     sequential_steps[policy_index] += 1
                 row_slice, col_slice = bounds.slices()
                 action_raster = torch.tensor(
-                    rasterize_stroke_action(action, width),
+                    rasterize_stroke_action(
+                        action,
+                        width,
+                        motor_primitive=policy.motor_primitive if step == 0 else None,
+                        config=self.cfg,
+                    ),
                     device=device,
                     dtype=torch.float32,
                 )[:, row_slice, col_slice]
@@ -472,7 +477,7 @@ class SpatialExpectedFreeEnergy:
         sequential_steps = 0
         first_transition_used = False
 
-        for action in policy.actions:
+        for step, action in enumerate(policy.actions):
             if action.stop:
                 break
             if first_transition is not None and not first_transition_used:
@@ -499,7 +504,12 @@ class SpatialExpectedFreeEnergy:
                 sequential_steps += 1
             row_slice, col_slice = bounds.slices()
             action_raster = torch.tensor(
-                rasterize_stroke_action(action, width),
+                rasterize_stroke_action(
+                    action,
+                    width,
+                    motor_primitive=policy.motor_primitive if step == 0 else None,
+                    config=self.cfg,
+                ),
                 device=device,
                 dtype=torch.float32,
             )[:, row_slice, col_slice]
@@ -622,7 +632,7 @@ class SpatialExpectedFreeEnergy:
         sequential_steps = 0
         first_transition_used = False
 
-        for action in policy.actions:
+        for step, action in enumerate(policy.actions):
             if action.stop:
                 break
             if first_transition is not None and not first_transition_used:
@@ -650,7 +660,12 @@ class SpatialExpectedFreeEnergy:
             row_slice, col_slice = bounds.slices()
             patch_mean = mean[:, :, row_slice, col_slice]
             action_raster = torch.tensor(
-                rasterize_stroke_action(action, width),
+                rasterize_stroke_action(
+                    action,
+                    width,
+                    motor_primitive=policy.motor_primitive if step == 0 else None,
+                    config=self.cfg,
+                ),
                 device=device,
                 dtype=torch.float32,
             ).unsqueeze(0)[:, :, row_slice, col_slice]
@@ -859,7 +874,15 @@ class SpatialExpectedFreeEnergy:
                 first_transition_used = True
             else:
                 rasters = np.stack(
-                    [rasterize_stroke_action(policies[index].actions[step], belief.grid_size) for index in active]
+                    [
+                        rasterize_stroke_action(
+                            policies[index].actions[step],
+                            belief.grid_size,
+                            motor_primitive=policies[index].motor_primitive if step == 0 else None,
+                            config=self.cfg,
+                        )
+                        for index in active
+                    ]
                 )
                 action_batch = torch.from_numpy(rasters).to(device=device, dtype=torch.float32)
                 flat_states = member_states[active_t].reshape(len(active) * member_count, *field_shape)
@@ -1016,7 +1039,7 @@ class SpatialExpectedFreeEnergy:
         epistemic_value = torch.tensor(0.0, device=self.device)
         first_transition_used = False
 
-        for action in policy.actions:
+        for step, action in enumerate(policy.actions):
             if action.stop:
                 break
             if first_transition is not None and not first_transition_used:
@@ -1038,7 +1061,12 @@ class SpatialExpectedFreeEnergy:
                 first_transition_used = True
             else:
                 action_raster = torch.tensor(
-                    rasterize_stroke_action(action, belief.grid_size),
+                    rasterize_stroke_action(
+                        action,
+                        belief.grid_size,
+                        motor_primitive=policy.motor_primitive if step == 0 else None,
+                        config=self.cfg,
+                    ),
                     device=self.device,
                     dtype=torch.float32,
                 ).unsqueeze(0)

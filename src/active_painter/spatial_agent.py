@@ -10,7 +10,7 @@ from .config import PainterConfig
 from .env import StrokeAction
 from .local_spatial import LocalPatchReplayBuffer
 from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
-from .policies import Policy, PolicySampler, policy_stop_log_prior
+from .policies import MotorPrimitiveLatent, Policy, PolicySampler, policy_stop_log_prior
 from .preferences import TerminalCoveragePreference
 from .replay import ReplayBuffer
 from .spatial_efe import SpatialEFEComponents, SpatialExpectedFreeEnergy
@@ -73,18 +73,29 @@ class SpatialActiveInferencePainter:
         state: SpatialCanvasState,
         action: StrokeAction,
         next_state: SpatialCanvasState,
+        motor_primitive: MotorPrimitiveLatent | None = None,
     ) -> None:
         if isinstance(self.replay, LocalPatchReplayBuffer):
-            self.replay.add_from_states(state, action, next_state, self.cfg)
+            self.replay.add_from_states(state, action, next_state, self.cfg, motor_primitive)
         else:
             self.replay.add(
                 state.flatten_mean(),
-                rasterize_stroke_action(action, state.grid_size).reshape(-1),
+                rasterize_stroke_action(
+                    action,
+                    state.grid_size,
+                    motor_primitive=motor_primitive,
+                    config=self.cfg,
+                ).reshape(-1),
                 next_state.flatten_mean(),
             )
         self.composition_replay.add(
             state.flatten_mean(),
-            rasterize_stroke_action(action, state.grid_size).reshape(-1),
+            rasterize_stroke_action(
+                action,
+                state.grid_size,
+                motor_primitive=motor_primitive,
+                config=self.cfg,
+            ).reshape(-1),
             next_state.flatten_mean(),
         )
 

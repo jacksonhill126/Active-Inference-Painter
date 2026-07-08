@@ -15,7 +15,7 @@ from active_painter.arm_sim import ArmPainterSim
 from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
-from active_painter.policies import PassageLatent, PassagePlanLatent, Policy
+from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
 from active_painter.spatial_state import SpatialCanvasState
 from active_painter.stroke_execution import ExecutionForecast, adaptive_stroke_timing
 
@@ -188,6 +188,22 @@ def test_driver_reports_motor_primitive_policy_latents_and_efe_terms() -> None:
     assert "motorAmbiguity" in diagnostics["topPolicies"][0]
     assert diagnostics["efe"]["motor_risk"] >= 0.0
     assert diagnostics["efe"]["motor_ambiguity"] >= 0.0
+
+
+def test_summary_driver_replay_stores_selected_motor_realization_condition() -> None:
+    cfg = PainterConfig(candidate_policies=2, motor_realization_candidate_limit=3)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    before = canvas_summary_state(sim)
+    after = before.copy()
+    after[0] += 0.05
+    action = StrokeAction(0.2, 0.3, 0.7, 0.4, 0.08, 0.6, 1.0)
+
+    driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+
+    stored_action = driver.agent.replay.data[-1][1]
+    assert stored_action.shape == (cfg.action_dim,)
+    assert np.allclose(stored_action[7:], [0.0, 0.0, 1.0])
 
 
 def test_spatial_material_driver_can_use_dense_grid_transition_mode() -> None:

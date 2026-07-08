@@ -9,6 +9,7 @@ from typing import Any, Callable
 import numpy as np
 import torch
 
+from .action_encoding import encoded_action_vector
 from .agent import ActiveInferencePainter
 from .arm_control import ik_pose_for_canvas_point
 from .arm_sim import ArmPainterSim, ArmPose
@@ -107,7 +108,12 @@ class ArmActiveInferenceDriver:
     _pending_ranked: list[tuple[Policy, EFEComponents | SpatialEFEComponents, float]] | None = field(default=None, init=False)
     _pending_components: EFEComponents | SpatialEFEComponents | None = field(default=None, init=False)
     _pending_error: str | None = field(default=None, init=False)
-    _transition_to_learn: tuple[np.ndarray | SpatialCanvasState, StrokeAction, np.ndarray | SpatialCanvasState] | None = field(default=None, init=False)
+    _transition_to_learn: tuple[
+        np.ndarray | SpatialCanvasState,
+        StrokeAction,
+        MotorPrimitiveLatent | None,
+        np.ndarray | SpatialCanvasState,
+    ] | None = field(default=None, init=False)
     _post_stroke_retract_remaining: float = field(default=0.0, init=False)
     _cached_belief_gap: float | None = field(default=None, init=False)
 
@@ -189,7 +195,12 @@ class ArmActiveInferenceDriver:
             assert isinstance(state, np.ndarray)
             self.agent.reset_belief(state)
 
-    def _update_agent_belief(self, action: StrokeAction, state: np.ndarray | SpatialCanvasState) -> None:
+    def _update_agent_belief(
+        self,
+        action: StrokeAction,
+        state: np.ndarray | SpatialCanvasState,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+    ) -> None:
         if self._uses_spatial_planner():
             assert isinstance(self.agent, SpatialActiveInferencePainter)
             assert isinstance(state, SpatialCanvasState)
@@ -197,24 +208,25 @@ class ArmActiveInferenceDriver:
         else:
             assert isinstance(self.agent, ActiveInferencePainter)
             assert isinstance(state, np.ndarray)
-            self.agent.update_belief(action, state)
+            self.agent.update_belief(action, state, motor_primitive)
 
     def _add_transition_to_agent(
         self,
         state: np.ndarray | SpatialCanvasState,
         action: StrokeAction,
         next_state: np.ndarray | SpatialCanvasState,
+        motor_primitive: MotorPrimitiveLatent | None = None,
     ) -> None:
         if self._uses_spatial_planner():
             assert isinstance(self.agent, SpatialActiveInferencePainter)
             assert isinstance(state, SpatialCanvasState)
             assert isinstance(next_state, SpatialCanvasState)
-            self.agent.add_transition(state, action, next_state)
+            self.agent.add_transition(state, action, next_state, motor_primitive)
         else:
             assert isinstance(self.agent, ActiveInferencePainter)
             assert isinstance(state, np.ndarray)
             assert isinstance(next_state, np.ndarray)
-            self.agent.replay.add(state, action.vector(), next_state)
+            self.agent.replay.add(state, encoded_action_vector(action, self.config, motor_primitive), next_state)
 
     def step(self, sim: ArmPainterSim, dt: float) -> None:
         if not self.enabled or self.stopped:
@@ -279,7 +291,12 @@ class ArmActiveInferenceDriver:
     def _background_plan(
         self,
         state: np.ndarray | SpatialCanvasState,
-        transition: tuple[np.ndarray | SpatialCanvasState, StrokeAction, np.ndarray | SpatialCanvasState] | None,
+        transition: tuple[
+            np.ndarray | SpatialCanvasState,
+            StrokeAction,
+            MotorPrimitiveLatent | None,
+            np.ndarray | SpatialCanvasState,
+        ] | None,
         body_snapshot: ArmPainterSim | None = None,
     ) -> None:
         started = time.perf_counter()
@@ -290,10 +307,10 @@ class ArmActiveInferenceDriver:
         error: str | None = None
         try:
             if transition is not None:
-                before, action, after = transition
-                self._add_transition_to_agent(before, action, after)
+                before, action, motor_primitive, after = transition
+                self._add_transition_to_agent(before, action, after, motor_primitive)
                 self.trained_transitions += 1
-                self._update_agent_belief(action, after)
+                self._update_agent_belief(action, after, motor_primitive)
             else:
                 self._reset_agent_belief(state)
             self.belief = self.agent.belief
@@ -414,7 +431,7 @@ class ArmActiveInferenceDriver:
             after = self._planner_state(sim)
             if ex.initial_state is not None:
                 with self._planner_lock:
-                    self._transition_to_learn = (ex.initial_state, ex.action, after)
+                    self._transition_to_learn = (ex.initial_state, ex.action, ex.motor_primitive, after)
 
     def _yield_to_runtime(self) -> None:
         delay = max(0.0, float(self.config.background_planner_yield_seconds))

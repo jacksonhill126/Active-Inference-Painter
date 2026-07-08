@@ -13,12 +13,12 @@ class PainterConfig:
     smear_observation_std: float = 0.02
 
     state_dim: int = 6
-    action_dim: int = 7
+    action_dim: int = 10
     planner_state_kind: str = "summary"
     spatial_grid_size: int = 16
     material_pyramid_levels: tuple[int, ...] = (64, 32, 16)
     spatial_material_channels: int = 6
-    spatial_action_channels: int = 6
+    spatial_action_channels: int = 9
     spatial_transition_mode: str = "local_patch"
     spatial_hidden_channels: int = 32
     spatial_residual_blocks: int = 3

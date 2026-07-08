@@ -5,12 +5,13 @@ from dataclasses import asdict
 import numpy as np
 import torch
 
+from .action_encoding import encoded_action_vector
 from .config import PainterConfig
 from .efe import EFEComponents, ExpectedFreeEnergy
 from .env import PaintCanvasEnv, StrokeAction
 from .inference import VariationalStateEstimator
 from .models import DynamicsEnsemble, GaussianBelief, ObservationModel
-from .policies import Policy, PolicySampler, policy_stop_log_prior
+from .policies import MotorPrimitiveLatent, Policy, PolicySampler, policy_stop_log_prior
 from .preferences import TerminalCoveragePreference
 from .replay import ReplayBuffer
 
@@ -40,8 +41,13 @@ class ActiveInferencePainter:
         prior = GaussianBelief(o.clone(), torch.full_like(o, -4.0))
         self.belief = self.estimator.infer(prior, o)
 
-    def update_belief(self, previous_action: StrokeAction, observation: np.ndarray) -> None:
-        a = torch.from_numpy(previous_action.vector()).to(self.device).unsqueeze(0)
+    def update_belief(
+        self,
+        previous_action: StrokeAction,
+        observation: np.ndarray,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+    ) -> None:
+        a = torch.from_numpy(encoded_action_vector(previous_action, self.cfg, motor_primitive)).to(self.device).unsqueeze(0)
         with torch.no_grad():
             mean, aleatoric, epistemic = self.dynamics.predictive_moments(self.belief.mean.unsqueeze(0), a)
         prior = GaussianBelief(mean.squeeze(0), torch.log(torch.clamp(aleatoric + epistemic, min=1e-7)).squeeze(0))
@@ -84,7 +90,7 @@ class ActiveInferencePainter:
         state = env.latent_state().copy()
         observation, done, _ = env.step(action)
         next_state = env.latent_state().copy()
-        self.replay.add(state, action.vector(), next_state)
+        self.replay.add(state, encoded_action_vector(action, self.cfg), next_state)
         if done:
             env.reset()
         _ = observation

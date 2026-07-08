@@ -6,6 +6,7 @@ from typing import Sequence
 import numpy as np
 import torch
 
+from .action_encoding import encoded_action_vector
 from .config import PainterConfig
 from .efe_common import project_summary_transition_support, terminal_preference_terms
 from .inference import normal_entropy_from_variance
@@ -201,7 +202,16 @@ class ExpectedFreeEnergy:
                 )
                 first_transition_used = True
             else:
-                actions = np.stack([policies[index].actions[step].vector() for index in active])
+                actions = np.stack(
+                    [
+                        encoded_action_vector(
+                            policies[index].actions[step],
+                            self.cfg,
+                            policies[index].motor_primitive if step == 0 else None,
+                        )
+                        for index in active
+                    ]
+                )
                 action_batch = torch.from_numpy(actions).to(device=device, dtype=member_states.dtype)
                 flat_states = member_states[active_t].reshape(len(active) * member_count, state_dim)
                 flat_actions = action_batch.repeat_interleave(member_count, dim=0)
@@ -308,7 +318,7 @@ class ExpectedFreeEnergy:
         epistemic_value = torch.tensor(0.0, device=mean.device)
         first_transition_used = False
 
-        for action in policy.actions:
+        for step, action in enumerate(policy.actions):
             if action.stop:
                 break
             if first_transition is not None and not first_transition_used:
@@ -323,7 +333,13 @@ class ExpectedFreeEnergy:
                 next_variance = torch.clamp(next_variance, min=1e-8)
                 first_transition_used = True
             else:
-                a = torch.from_numpy(action.vector()).to(mean.device).unsqueeze(0)
+                a = torch.from_numpy(
+                    encoded_action_vector(
+                        action,
+                        self.cfg,
+                        policy.motor_primitive if step == 0 else None,
+                    )
+                ).to(mean.device).unsqueeze(0)
                 next_mean, aleatoric, epistemic = self.dynamics.predictive_moments(mean, a)
                 marginal_entropy = normal_entropy_from_variance(aleatoric + epistemic).mean()
                 conditional_entropy = normal_entropy_from_variance(aleatoric).mean()

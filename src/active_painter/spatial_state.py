@@ -4,13 +4,23 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .action_encoding import BASE_SPATIAL_ACTION_CHANNELS, DEFAULT_MOTOR_KINDS, motor_condition_raster
 from .arm_sim import ArmPainterSim, VerticalCanvas
 from .config import PainterConfig
 from .env import StrokeAction
+from .policies import MotorPrimitiveLatent
 
 
 MATERIAL_CHANNELS = ("thickness", "wetness", "black_mass", "observed_tone", "ground_contrast", "material_coverage")
-ACTION_CHANNELS = ("footprint", "start", "end", "width", "amount", "tone")
+ACTION_CHANNELS = (
+    "footprint",
+    "start",
+    "end",
+    "width",
+    "amount",
+    "tone",
+    *(f"motor_{kind}" for kind in DEFAULT_MOTOR_KINDS),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,17 +163,24 @@ def coverage_from_thickness(thickness: np.ndarray, thickness_scale: float) -> np
 def rasterize_stroke_action(
     action: StrokeAction,
     grid_size: int,
+    motor_primitive: MotorPrimitiveLatent | None = None,
+    config: PainterConfig | None = None,
 ) -> np.ndarray:
     """Rasterize a StrokeAction into deterministic action-conditioning fields."""
 
     if grid_size <= 0:
         raise ValueError("grid_size must be positive.")
+    channel_count = (
+        len(ACTION_CHANNELS)
+        if config is None
+        else int(config.spatial_action_channels)
+    )
     yy, xx = np.mgrid[0:grid_size, 0:grid_size]
     x = (xx.astype(np.float32) + 0.5) / grid_size
     y = (yy.astype(np.float32) + 0.5) / grid_size
 
     if action.stop:
-        return np.zeros((len(ACTION_CHANNELS), grid_size, grid_size), dtype=np.float32)
+        return np.zeros((channel_count, grid_size, grid_size), dtype=np.float32)
 
     ax, ay = float(action.x0), float(action.y0)
     bx, by = float(action.x1), float(action.y1)
@@ -183,7 +200,7 @@ def rasterize_stroke_action(
     start[start < 1e-4] = 0.0
     end[end < 1e-4] = 0.0
 
-    return np.stack(
+    base = np.stack(
         [
             footprint,
             start,
@@ -194,6 +211,16 @@ def rasterize_stroke_action(
         ],
         axis=0,
     ).astype(np.float32)
+    if channel_count <= BASE_SPATIAL_ACTION_CHANNELS:
+        return base[:channel_count]
+    motor = motor_condition_raster(
+        grid_size,
+        channel_count - BASE_SPATIAL_ACTION_CHANNELS,
+        config,
+        motor_primitive,
+        stop=action.stop,
+    )
+    return np.concatenate([base, motor], axis=0).astype(np.float32)
 
 
 def spatial_state_diagnostics(state: SpatialCanvasState, config: PainterConfig) -> dict[str, object]:

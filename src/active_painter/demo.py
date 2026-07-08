@@ -8,6 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from .action_encoding import encoded_action_vector
 from .agent import ActiveInferencePainter
 from .config import PainterConfig
 from .env import PaintCanvasEnv, StrokeAction
@@ -61,9 +62,9 @@ def run(args: argparse.Namespace) -> None:
             observation, done, info = env.step(action)
             after = env.latent_state().copy()
             if not action.stop:
-                agent.replay.add(before, action.vector(), after)
+                agent.replay.add(before, encoded_action_vector(action, cfg, policy.motor_primitive), after)
                 agent.train_dynamics(gradient_steps=4)
-                agent.update_belief(action, observation)
+                agent.update_belief(action, observation, policy.motor_primitive)
 
             trace.append(
                 {

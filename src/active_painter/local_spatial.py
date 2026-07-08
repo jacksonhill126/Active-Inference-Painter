@@ -8,6 +8,7 @@ import torch
 
 from .config import PainterConfig
 from .env import StrokeAction
+from .policies import MotorPrimitiveLatent
 from .spatial_state import SpatialCanvasState, rasterize_stroke_action
 
 
@@ -84,8 +85,9 @@ class LocalPatchReplayBuffer:
         action: StrokeAction,
         next_state: SpatialCanvasState,
         config: PainterConfig,
+        motor_primitive: MotorPrimitiveLatent | None = None,
     ) -> None:
-        transition = local_patch_transition_from_states(state, action, next_state, config)
+        transition = local_patch_transition_from_states(state, action, next_state, config, motor_primitive)
         if transition is not None:
             self.add(transition)
 
@@ -136,7 +138,7 @@ def local_patch_bounds_for_action(
 ) -> LocalPatchBounds | None:
     if action.stop:
         return None
-    raster = rasterize_stroke_action(action, grid_size)
+    raster = rasterize_stroke_action(action, grid_size, config=config)
     support = np.any(raster[:3] > 0.0, axis=0)
     if not np.any(support):
         return None
@@ -168,6 +170,7 @@ def local_patch_transition_from_states(
     action: StrokeAction,
     next_state: SpatialCanvasState,
     config: PainterConfig,
+    motor_primitive: MotorPrimitiveLatent | None = None,
 ) -> LocalPatchTransition | None:
     material = pixel_material_from_state(state)
     next_material = pixel_material_from_state(next_state)
@@ -175,7 +178,7 @@ def local_patch_transition_from_states(
     bounds = local_patch_bounds_for_action(action, grid_size, config)
     if bounds is None:
         return None
-    action_raster = rasterize_stroke_action(action, grid_size)
+    action_raster = rasterize_stroke_action(action, grid_size, motor_primitive=motor_primitive, config=config)
     return LocalPatchTransition(
         bounds=bounds,
         material=crop_patch(material, bounds),

@@ -108,7 +108,10 @@ increase the hierarchy's explanatory advantage near the coverage band.
   homeostatic prior over current, torque, acceleration, limit proximity, and
   target-error observations; motor ambiguity is a likelihood-entropy proxy
   from contact loss, pressure variance, path covariance, and tracking
-  uncertainty. Hard joint/current/workspace limits remain external safety
+  uncertainty. The selected primitive is also encoded into replay transitions
+  and learned rollouts as motor-conditioned action channels, so the learned
+  transition likelihood is `p(s_next | s, stroke, motor_realization)` rather
+  than stroke-only. Hard joint/current/workspace limits remain external safety
   constraints, and no motor-ease reward is introduced.
 - **Per-modality precisions.** `terminal_risk_precision`,
   `ambiguity_precision`, `transition_precision`,
