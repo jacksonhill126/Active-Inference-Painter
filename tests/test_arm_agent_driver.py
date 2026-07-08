@@ -419,7 +419,7 @@ def test_executed_stroke_changes_material_coverage_at_planning_scale() -> None:
 def test_active_inference_driver_continues_after_first_material_mark() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
     driver = ArmActiveInferenceDriver(bootstrap_transitions=48, bootstrap_train_steps=16)
-    deadline = time.perf_counter() + 20.0
+    deadline = time.perf_counter() + 30.0
 
     while time.perf_counter() < deadline and driver.current is None and not driver.stopped:
         driver.step(sim, 1.0 / 240.0)

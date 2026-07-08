@@ -232,6 +232,15 @@ class WebSimRuntime:
                         "torque": telemetry.torque[name],
                         "velocityRadS": self.sim.plant.velocity[name],
                         "velocityDegS": float(np.rad2deg(self.sim.plant.velocity[name])),
+                        "actuatorAngleDeg": telemetry.actuator_angle_deg[name],
+                        "actuatorVelocityRadS": telemetry.actuator_velocity_rad_s[name],
+                        "elasticDeflectionDeg": telemetry.elastic_deflection_deg[name],
+                        "backlashDeflectionDeg": telemetry.backlash_deflection_deg[name],
+                        "frictionTorque": telemetry.friction_torque[name],
+                        "loadTorque": telemetry.load_torque[name],
+                        "encoderStdDeg": telemetry.encoder_std_deg[name],
+                        "thermalFraction": telemetry.thermal_fraction[name],
+                        "torqueLimitFraction": telemetry.torque_limit_fraction[name],
                     }
                     for name in JOINT_NAMES
                 },

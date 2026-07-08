@@ -28,6 +28,9 @@ def test_arm_telemetry_log_records_pose_velocity_current_and_torque() -> None:
         assert f"velocity_{name}_deg_s" in sample
         assert f"current_{name}_a" in sample
         assert f"torque_{name}_nm" in sample
+        assert f"actuator_position_{name}_deg" in sample
+        assert f"elastic_deflection_{name}_deg" in sample
+        assert f"encoder_std_{name}_deg" in sample
 
 
 def test_arm_telemetry_log_exports_stable_csv_header() -> None:
@@ -42,3 +45,5 @@ def test_arm_telemetry_log_exports_stable_csv_header() -> None:
     assert "position_yaw_deg" in csv_text
     assert "current_elbow_a" in csv_text
     assert "torque_pitch_nm" in csv_text
+    assert "elastic_deflection_pitch_deg" in csv_text
+    assert "encoder_std_elbow_deg" in csv_text

@@ -1,6 +1,7 @@
+import pytest
 import numpy as np
 
-from active_painter.arm_sim import ArmPainterSim, ArmPose, VerticalCanvas
+from active_painter.arm_sim import ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, safe_home_pose
 from active_painter.config import PainterConfig
 
 
@@ -59,6 +60,47 @@ def test_joint_plant_moves_actual_pose_toward_target_without_selecting_policy() 
         sim.step(1.0 / 120.0)
     assert sim.actual_pose.yaw > 0.0
     assert sim.actual_pose.elbow > 0.0
+
+
+def test_joint_plant_backlash_deadband_delays_small_link_motion() -> None:
+    plant = JointPlant(backlash_deadband_deg=dict.fromkeys(("yaw", "pitch", "roll", "elbow"), 2.0))
+    actual = safe_home_pose()
+    target = ArmPose(yaw=actual.yaw + 0.5, pitch=actual.pitch, roll=actual.roll, elbow=actual.elbow)
+
+    after = plant.step(actual, target, 1.0 / 120.0)
+
+    assert after.yaw == pytest.approx(actual.yaw)
+    assert abs(plant.telemetry.backlash_deflection_deg["yaw"]) > 0.0
+    assert plant.telemetry.elastic_deflection_deg["yaw"] == pytest.approx(0.0)
+
+
+def test_joint_plant_contact_load_increases_encoder_uncertainty_and_load_torque() -> None:
+    unloaded = JointPlant()
+    loaded = JointPlant()
+    actual = safe_home_pose()
+    target = ArmPose(yaw=actual.yaw + 25.0, pitch=actual.pitch, roll=actual.roll, elbow=actual.elbow)
+
+    unloaded.step(actual, target, 1.0 / 60.0, contact_force=0.0)
+    loaded.step(actual, target, 1.0 / 60.0, contact_force=18.0)
+
+    assert abs(loaded.telemetry.load_torque["yaw"]) > abs(unloaded.telemetry.load_torque["yaw"])
+    assert loaded.telemetry.encoder_std_deg["yaw"] > unloaded.telemetry.encoder_std_deg["yaw"]
+
+
+def test_reset_pose_realigns_motor_and_link_state() -> None:
+    sim = ArmPainterSim(PainterConfig())
+    sim.set_target(ArmPose(yaw=20.0, pitch=-30.0, roll=15.0, elbow=80.0))
+    for _ in range(10):
+        sim.step(1.0 / 120.0)
+
+    sim.reset_pose()
+
+    home = safe_home_pose()
+    assert sim.actual_pose == home
+    for name, radians in home.radians().items():
+        assert sim.plant.motor_angle[name] == pytest.approx(radians)
+        assert sim.plant.motor_velocity[name] == pytest.approx(0.0)
+        assert sim.plant.velocity[name] == pytest.approx(0.0)
 
 
 def test_arm_safety_rolls_back_canvas_overtravel() -> None:

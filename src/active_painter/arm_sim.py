@@ -71,43 +71,213 @@ class MotorTelemetry:
     voltage: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     current: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    actuator_angle_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    actuator_velocity_rad_s: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    elastic_deflection_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    backlash_deflection_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    friction_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    load_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    encoder_std_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    thermal_fraction: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    torque_limit_fraction: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
 
 
 @dataclass(slots=True)
 class JointPlant:
+    """Deterministic actuator/link approximation beneath painting inference.
+
+    The values are representative small-arm parameters, not vendor-specific
+    motor measurements. The plant exposes prediction-error-relevant mechanics
+    to policy forecasts while safety limits stay external to painting choice.
+    """
+
     supply_voltage: float = 24.0
     current_limit: float = 7.0
-    servo_stiffness: float = 0.65
-    damping: float = 0.9
+    servo_stiffness: float = 1.0
+    damping: float = 0.48
     inertia: float = 0.065
     kt: float = 0.42
     resistance: float = 2.1
+    motor_inertia: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.012, "pitch": 0.014, "roll": 0.006, "elbow": 0.010}
+    )
+    link_inertia: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.060, "pitch": 0.074, "roll": 0.036, "elbow": 0.060}
+    )
+    transmission_stiffness: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 28.0, "pitch": 32.0, "roll": 18.0, "elbow": 24.0}
+    )
+    transmission_damping: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.72, "pitch": 0.82, "roll": 0.46, "elbow": 0.62}
+    )
+    motor_viscous_friction: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.018, "pitch": 0.022, "roll": 0.012, "elbow": 0.016}
+    )
+    link_viscous_friction: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.010, "pitch": 0.014, "roll": 0.007, "elbow": 0.010}
+    )
+    coulomb_friction: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.018, "pitch": 0.025, "roll": 0.012, "elbow": 0.018}
+    )
+    static_friction: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.030, "pitch": 0.040, "roll": 0.020, "elbow": 0.030}
+    )
+    backlash_deadband_deg: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.035, "pitch": 0.045, "roll": 0.060, "elbow": 0.040}
+    )
+    contact_load_gain: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.0015, "pitch": 0.0050, "roll": 0.0010, "elbow": 0.0040}
+    )
+    max_motor_velocity: float = 7.0
+    max_link_velocity: float = 5.0
+    thermal_time_constant: float = 18.0
+    cooling_time_constant: float = 65.0
+    thermal_current_derate: float = 0.35
+    encoder_base_noise_deg: float = 0.035
+    encoder_velocity_noise_deg: float = 0.020
+    encoder_current_noise_deg: float = 0.025
+    encoder_contact_noise_deg: float = 0.003
     velocity: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    motor_angle: dict[str, float] = field(default_factory=dict)
+    motor_velocity: dict[str, float] = field(default_factory=dict)
+    temperature: dict[str, float] = field(default_factory=dict)
     telemetry: MotorTelemetry = field(default_factory=MotorTelemetry)
 
-    def step(self, actual: ArmPose, target: ArmPose, dt: float) -> ArmPose:
+    def reset_state(self, pose: ArmPose) -> None:
+        q = pose.clipped().radians()
+        self.velocity = dict.fromkeys(JOINT_NAMES, 0.0)
+        self.motor_angle = {name: float(q[name]) for name in JOINT_NAMES}
+        self.motor_velocity = dict.fromkeys(JOINT_NAMES, 0.0)
+        self.temperature = dict.fromkeys(JOINT_NAMES, 0.0)
+        self.telemetry = MotorTelemetry()
+        for name in JOINT_NAMES:
+            self.telemetry.actuator_angle_deg[name] = float(getattr(pose.clipped(), name))
+
+    def state_snapshot(self) -> dict[str, object]:
+        return {
+            "velocity": dict(self.velocity),
+            "motor_angle": dict(self.motor_angle),
+            "motor_velocity": dict(self.motor_velocity),
+            "temperature": dict(self.temperature),
+            "telemetry": {
+                field_name: dict(getattr(self.telemetry, field_name))
+                for field_name in MotorTelemetry.__dataclass_fields__
+            },
+        }
+
+    def restore_state(self, snapshot: dict[str, object]) -> None:
+        self.velocity = dict(snapshot["velocity"])  # type: ignore[arg-type]
+        self.motor_angle = dict(snapshot["motor_angle"])  # type: ignore[arg-type]
+        self.motor_velocity = dict(snapshot["motor_velocity"])  # type: ignore[arg-type]
+        self.temperature = dict(snapshot["temperature"])  # type: ignore[arg-type]
+        telemetry_values = snapshot["telemetry"]
+        self.telemetry = MotorTelemetry()
+        if isinstance(telemetry_values, dict):
+            for field_name in MotorTelemetry.__dataclass_fields__:
+                values = telemetry_values.get(field_name, {})
+                if isinstance(values, dict):
+                    setattr(self.telemetry, field_name, dict(values))
+
+    def _ensure_state(self, pose: ArmPose) -> None:
+        q = pose.clipped().radians()
+        for name in JOINT_NAMES:
+            self.velocity.setdefault(name, 0.0)
+            self.motor_angle.setdefault(name, float(q[name]))
+            self.motor_velocity.setdefault(name, float(self.velocity[name]))
+            self.temperature.setdefault(name, 0.0)
+
+    @staticmethod
+    def _joint_param(values: dict[str, float] | float, name: str, fallback: float) -> float:
+        if isinstance(values, dict):
+            return float(values.get(name, fallback))
+        return float(values)
+
+    @staticmethod
+    def _compliance_deflection(raw_deflection: float, deadband: float) -> tuple[float, float]:
+        if abs(raw_deflection) <= deadband:
+            return 0.0, raw_deflection
+        sign = float(np.sign(raw_deflection))
+        return raw_deflection - sign * deadband, sign * deadband
+
+    def _friction_torque(self, name: str, drive: float, link_velocity: float) -> float:
+        static = self._joint_param(self.static_friction, name, 0.15)
+        coulomb = self._joint_param(self.coulomb_friction, name, 0.10)
+        viscous = self._joint_param(self.link_viscous_friction, name, 0.06)
+        if abs(link_velocity) < 0.015 and abs(drive) < static:
+            return float(drive)
+        direction = float(np.sign(link_velocity if abs(link_velocity) >= 0.015 else drive))
+        return float(coulomb * direction + viscous * link_velocity)
+
+    def step(self, actual: ArmPose, target: ArmPose, dt: float, contact_force: float = 0.0) -> ArmPose:
         values: dict[str, float] = {}
         actual = actual.clipped()
         target = target.clipped()
+        self._ensure_state(actual)
+        contact_force = max(0.0, float(contact_force))
         for name in JOINT_NAMES:
             q = np.deg2rad(getattr(actual, name))
             q_target = np.deg2rad(getattr(target, name))
-            err = q_target - q
-            w = self.velocity[name]
+            link_w = float(self.velocity[name])
+            previous_motor_q = float(self.motor_angle[name])
+            temperature = float(np.clip(self.temperature[name], 0.0, 1.0))
+            current_limit = self.current_limit * max(0.25, 1.0 - self.thermal_current_derate * temperature)
+            deadband = np.deg2rad(self._joint_param(self.backlash_deadband_deg, name, 0.2))
+            command_error, backlash_deflection = self._compliance_deflection(q_target - q, deadband)
             voltage = np.clip(
-                self.supply_voltage * self.servo_stiffness * err - self.damping * w,
+                self.supply_voltage * self.servo_stiffness * command_error - self.damping * link_w,
                 -self.supply_voltage,
                 self.supply_voltage,
             )
-            current = np.clip(voltage / self.resistance, -self.current_limit, self.current_limit)
-            torque = self.kt * current
-            accel = torque / max(1e-5, self.inertia)
-            w = np.clip(w + accel * dt, -5.0, 5.0)
-            q = q + w * dt
-            self.velocity[name] = float(w)
+            current = np.clip(voltage / self.resistance, -current_limit, current_limit)
+            motor_torque = self.kt * current
+
+            load_direction = float(np.sign(link_w if abs(link_w) >= 0.015 else motor_torque))
+            load_torque = contact_force * self._joint_param(self.contact_load_gain, name, 0.0) * load_direction
+            drive = motor_torque - load_torque
+            friction_torque = self._friction_torque(name, drive, link_w)
+            link_accel = (drive - friction_torque) / max(1e-5, self._joint_param(self.link_inertia, name, self.inertia))
+            link_w = float(np.clip(link_w + link_accel * dt, -self.max_link_velocity, self.max_link_velocity))
+            q = q + link_w * dt
+            spring_deflection = (drive - friction_torque) / max(
+                1e-5, self._joint_param(self.transmission_stiffness, name, 8.0)
+            )
+            spring_deflection += self._joint_param(self.transmission_damping, name, 0.35) * link_w / max(
+                1e-5, self._joint_param(self.transmission_stiffness, name, 8.0)
+            )
+            motor_q = float(q + backlash_deflection + spring_deflection)
+            motor_w = float(
+                np.clip(
+                    (motor_q - previous_motor_q) / max(1e-6, dt),
+                    -self.max_motor_velocity,
+                    self.max_motor_velocity,
+                )
+            )
+
+            heat = (abs(current) / max(1e-6, self.current_limit)) ** 2 * dt / max(1e-6, self.thermal_time_constant)
+            cool = temperature * dt / max(1e-6, self.cooling_time_constant)
+            temperature = float(np.clip(temperature + heat - cool, 0.0, 1.0))
+
+            self.velocity[name] = float(link_w)
+            self.motor_angle[name] = float(motor_q)
+            self.motor_velocity[name] = float(motor_w)
+            self.temperature[name] = temperature
             self.telemetry.voltage[name] = float(voltage)
             self.telemetry.current[name] = float(current)
-            self.telemetry.torque[name] = float(torque)
+            self.telemetry.torque[name] = float(motor_torque)
+            self.telemetry.actuator_angle_deg[name] = float(np.rad2deg(motor_q))
+            self.telemetry.actuator_velocity_rad_s[name] = float(motor_w)
+            self.telemetry.elastic_deflection_deg[name] = float(np.rad2deg(spring_deflection))
+            self.telemetry.backlash_deflection_deg[name] = float(np.rad2deg(backlash_deflection))
+            self.telemetry.friction_torque[name] = float(friction_torque)
+            self.telemetry.load_torque[name] = float(load_torque)
+            self.telemetry.encoder_std_deg[name] = float(
+                self.encoder_base_noise_deg
+                + self.encoder_velocity_noise_deg * abs(link_w)
+                + self.encoder_current_noise_deg * abs(current) / max(1e-6, self.current_limit)
+                + self.encoder_contact_noise_deg * contact_force
+            )
+            self.telemetry.thermal_fraction[name] = temperature
+            self.telemetry.torque_limit_fraction[name] = float(current_limit / max(1e-6, self.current_limit))
             values[name] = float(np.rad2deg(q))
         return ArmPose(**values).clipped()
 
@@ -245,6 +415,7 @@ class ArmPainterSim:
         self.canvas = VerticalCanvas(self.config)
         self.actual_pose = safe_home_pose()
         self.target_pose = safe_home_pose()
+        self.plant.reset_state(self.actual_pose)
         self.paint_enabled = False
         self.brush_tone = 1.0
         self.intended_contact_pressure = 0.0
@@ -253,7 +424,7 @@ class ArmPainterSim:
     def reset_pose(self) -> None:
         self.actual_pose = safe_home_pose()
         self.target_pose = safe_home_pose()
-        self.plant.velocity = dict.fromkeys(JOINT_NAMES, 0.0)
+        self.plant.reset_state(self.actual_pose)
         self.paint_enabled = False
         self.intended_contact_pressure = 0.0
 
@@ -262,13 +433,13 @@ class ArmPainterSim:
 
     def step(self, dt: float) -> None:
         previous_pose = self.actual_pose
-        previous_velocity = dict(self.plant.velocity)
-        self.actual_pose = self.plant.step(self.actual_pose, self.target_pose, dt)
+        previous_plant_state = self.plant.state_snapshot()
+        self.actual_pose = self.plant.step(self.actual_pose, self.target_pose, dt, contact_force=self.contact.force)
         tip = self.kinematics.tip(self.actual_pose)
         if self.canvas.too_deep(tip):
             self.actual_pose = previous_pose
             self.target_pose = self.actual_pose
-            self.plant.velocity = {name: 0.0 for name in previous_velocity}
+            self.plant.restore_state(previous_plant_state)
             tip = self.kinematics.tip(self.actual_pose)
         self.contact = self.canvas.contact_from_tip(tip, self.intended_contact_pressure)
         if self.paint_enabled:

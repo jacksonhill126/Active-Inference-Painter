@@ -44,6 +44,15 @@ JOINT_COLUMNS = tuple(
         f"current_{name}_a",
         f"torque_{name}_nm",
         f"voltage_{name}_v",
+        f"actuator_position_{name}_deg",
+        f"actuator_velocity_{name}_rad_s",
+        f"elastic_deflection_{name}_deg",
+        f"backlash_deflection_{name}_deg",
+        f"friction_torque_{name}_nm",
+        f"load_torque_{name}_nm",
+        f"encoder_std_{name}_deg",
+        f"thermal_fraction_{name}",
+        f"torque_limit_fraction_{name}",
     )
 )
 
@@ -103,6 +112,15 @@ class ArmTelemetryLog:
             row[f"current_{name}_a"] = float(telemetry.current[name])
             row[f"torque_{name}_nm"] = float(telemetry.torque[name])
             row[f"voltage_{name}_v"] = float(telemetry.voltage[name])
+            row[f"actuator_position_{name}_deg"] = float(telemetry.actuator_angle_deg[name])
+            row[f"actuator_velocity_{name}_rad_s"] = float(telemetry.actuator_velocity_rad_s[name])
+            row[f"elastic_deflection_{name}_deg"] = float(telemetry.elastic_deflection_deg[name])
+            row[f"backlash_deflection_{name}_deg"] = float(telemetry.backlash_deflection_deg[name])
+            row[f"friction_torque_{name}_nm"] = float(telemetry.friction_torque[name])
+            row[f"load_torque_{name}_nm"] = float(telemetry.load_torque[name])
+            row[f"encoder_std_{name}_deg"] = float(telemetry.encoder_std_deg[name])
+            row[f"thermal_fraction_{name}"] = float(telemetry.thermal_fraction[name])
+            row[f"torque_limit_fraction_{name}"] = float(telemetry.torque_limit_fraction[name])
         self._samples.append(row)
 
     def clear(self) -> None:
