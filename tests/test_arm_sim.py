@@ -69,9 +69,26 @@ def test_joint_plant_backlash_deadband_delays_small_link_motion() -> None:
 
     after = plant.step(actual, target, 1.0 / 120.0)
 
-    assert after.yaw == pytest.approx(actual.yaw)
+    assert abs(after.yaw - actual.yaw) < 0.05
+    assert plant.telemetry.position_error_deg["yaw"] == pytest.approx(0.5)
+    assert abs(plant.telemetry.current["yaw"]) > 0.0
     assert abs(plant.telemetry.backlash_deflection_deg["yaw"]) > 0.0
-    assert plant.telemetry.elastic_deflection_deg["yaw"] == pytest.approx(0.0)
+
+
+def test_encoded_servo_hold_brakes_residual_velocity_without_drifting() -> None:
+    plant = JointPlant()
+    actual = safe_home_pose()
+    plant.reset_state(actual)
+    plant.velocity["yaw"] = 1.2
+    target = actual
+
+    pose = actual
+    for _ in range(480):
+        pose = plant.step(pose, target, 1.0 / 240.0)
+
+    assert abs(pose.yaw - actual.yaw) < 0.5
+    assert abs(plant.velocity["yaw"]) < 0.05
+    assert plant.telemetry.encoder_angle_deg["yaw"] == pytest.approx(pose.yaw)
 
 
 def test_joint_plant_contact_load_increases_encoder_uncertainty_and_load_torque() -> None:

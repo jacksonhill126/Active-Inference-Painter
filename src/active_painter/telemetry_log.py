@@ -46,6 +46,9 @@ JOINT_COLUMNS = tuple(
         f"voltage_{name}_v",
         f"actuator_position_{name}_deg",
         f"actuator_velocity_{name}_rad_s",
+        f"encoder_position_{name}_deg",
+        f"encoder_velocity_{name}_rad_s",
+        f"position_error_{name}_deg",
         f"elastic_deflection_{name}_deg",
         f"backlash_deflection_{name}_deg",
         f"friction_torque_{name}_nm",
@@ -114,6 +117,9 @@ class ArmTelemetryLog:
             row[f"voltage_{name}_v"] = float(telemetry.voltage[name])
             row[f"actuator_position_{name}_deg"] = float(telemetry.actuator_angle_deg[name])
             row[f"actuator_velocity_{name}_rad_s"] = float(telemetry.actuator_velocity_rad_s[name])
+            row[f"encoder_position_{name}_deg"] = float(telemetry.encoder_angle_deg[name])
+            row[f"encoder_velocity_{name}_rad_s"] = float(telemetry.encoder_velocity_rad_s[name])
+            row[f"position_error_{name}_deg"] = float(telemetry.position_error_deg[name])
             row[f"elastic_deflection_{name}_deg"] = float(telemetry.elastic_deflection_deg[name])
             row[f"backlash_deflection_{name}_deg"] = float(telemetry.backlash_deflection_deg[name])
             row[f"friction_torque_{name}_nm"] = float(telemetry.friction_torque[name])

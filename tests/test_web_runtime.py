@@ -33,6 +33,8 @@ def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
     assert state["telemetryLog"]["sampleCount"] >= 1
     assert state["telemetryLog"]["csvEndpoint"] == "/api/telemetry.csv"
     assert "velocityRadS" in state["motor"]["yaw"]
+    assert "encoderAngleDeg" in state["motor"]["yaw"]
+    assert "positionErrorDeg" in state["motor"]["yaw"]
     assert "elasticDeflectionDeg" in state["motor"]["yaw"]
     assert "encoderStdDeg" in state["motor"]["yaw"]
 

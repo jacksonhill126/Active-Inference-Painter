@@ -73,6 +73,9 @@ class MotorTelemetry:
     torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     actuator_angle_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     actuator_velocity_rad_s: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    encoder_angle_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    encoder_velocity_rad_s: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    position_error_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     elastic_deflection_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     backlash_deflection_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     friction_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
@@ -137,6 +140,8 @@ class JointPlant:
     encoder_velocity_noise_deg: float = 0.020
     encoder_current_noise_deg: float = 0.025
     encoder_contact_noise_deg: float = 0.003
+    encoder_position_bias_deg: dict[str, float] | float = 0.0
+    encoder_velocity_bias_rad_s: dict[str, float] | float = 0.0
     velocity: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     motor_angle: dict[str, float] = field(default_factory=dict)
     motor_velocity: dict[str, float] = field(default_factory=dict)
@@ -152,6 +157,7 @@ class JointPlant:
         self.telemetry = MotorTelemetry()
         for name in JOINT_NAMES:
             self.telemetry.actuator_angle_deg[name] = float(getattr(pose.clipped(), name))
+            self.telemetry.encoder_angle_deg[name] = float(getattr(pose.clipped(), name))
 
     def state_snapshot(self) -> dict[str, object]:
         return {
@@ -222,9 +228,12 @@ class JointPlant:
             temperature = float(np.clip(self.temperature[name], 0.0, 1.0))
             current_limit = self.current_limit * max(0.25, 1.0 - self.thermal_current_derate * temperature)
             deadband = np.deg2rad(self._joint_param(self.backlash_deadband_deg, name, 0.2))
-            command_error, backlash_deflection = self._compliance_deflection(q_target - q, deadband)
+            measured_q = q + np.deg2rad(self._joint_param(self.encoder_position_bias_deg, name, 0.0))
+            measured_w = link_w + self._joint_param(self.encoder_velocity_bias_rad_s, name, 0.0)
+            command_error = q_target - measured_q
+            _, backlash_deflection = self._compliance_deflection(command_error, deadband)
             voltage = np.clip(
-                self.supply_voltage * self.servo_stiffness * command_error - self.damping * link_w,
+                self.supply_voltage * self.servo_stiffness * command_error - self.damping * measured_w,
                 -self.supply_voltage,
                 self.supply_voltage,
             )
@@ -266,6 +275,11 @@ class JointPlant:
             self.telemetry.torque[name] = float(motor_torque)
             self.telemetry.actuator_angle_deg[name] = float(np.rad2deg(motor_q))
             self.telemetry.actuator_velocity_rad_s[name] = float(motor_w)
+            encoder_q_after = q + np.deg2rad(self._joint_param(self.encoder_position_bias_deg, name, 0.0))
+            encoder_w_after = link_w + self._joint_param(self.encoder_velocity_bias_rad_s, name, 0.0)
+            self.telemetry.encoder_angle_deg[name] = float(np.rad2deg(encoder_q_after))
+            self.telemetry.encoder_velocity_rad_s[name] = float(encoder_w_after)
+            self.telemetry.position_error_deg[name] = float(np.rad2deg(command_error))
             self.telemetry.elastic_deflection_deg[name] = float(np.rad2deg(spring_deflection))
             self.telemetry.backlash_deflection_deg[name] = float(np.rad2deg(backlash_deflection))
             self.telemetry.friction_torque[name] = float(friction_torque)
