@@ -8,6 +8,7 @@ from active_painter.efe_common import project_material_support
 from active_painter.env import StrokeAction
 from active_painter.local_spatial import (
     local_patch_bounds_for_action,
+    local_patch_bounds_for_raster,
     local_patch_transition_from_states,
     paste_patch,
 )
@@ -70,6 +71,17 @@ def test_local_patch_bounds_cover_compact_action_support_and_clip_edges() -> Non
     assert bounds.col0 == 0
     assert bounds.height >= cfg.local_patch_min_cells
     assert bounds.width >= cfg.local_patch_min_cells
+
+
+def test_local_patch_bounds_from_raster_match_action_bounds() -> None:
+    cfg = PainterConfig(canvas_size=32, local_patch_margin_cells=3, local_patch_min_cells=10)
+    action = StrokeAction(0.15, 0.2, 0.65, 0.48, 0.11, 0.5, 1.0)
+    raster = rasterize_stroke_action(action, 32, config=cfg)
+
+    from_action = local_patch_bounds_for_action(action, 32, cfg)
+    from_raster = local_patch_bounds_for_raster(raster, 32, cfg)
+
+    assert from_action == from_raster
 
 
 def test_stop_action_has_no_local_patch() -> None:

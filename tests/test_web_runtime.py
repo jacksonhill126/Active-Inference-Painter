@@ -254,6 +254,8 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "/api/version" in index_html
     assert "state.codeVersion" in main_js
     assert "currentPlanningSeconds" in main_js
+    assert "planningProfile" in main_js
+    assert "Plan base EFE" in main_js
     assert "retentionPolicy" in main_js
 
 

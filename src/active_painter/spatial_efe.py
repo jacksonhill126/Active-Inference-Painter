@@ -12,7 +12,11 @@ from torch.distributions import Normal
 from .config import PainterConfig
 from .efe_common import project_material_support, terminal_preference_terms
 from .inference import normal_entropy_from_variance
-from .local_spatial import local_patch_bounds_for_action, pixel_logvar_from_state, pixel_material_from_state
+from .local_spatial import (
+    local_patch_bounds_for_raster,
+    pixel_logvar_from_state,
+    pixel_material_from_state,
+)
 from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
 from .policies import Policy
 from .preferences import TerminalCoveragePreference
@@ -297,22 +301,19 @@ class SpatialExpectedFreeEnergy:
                 if depths[policy_index] <= step:
                     continue
                 action = policy.actions[step]
-                bounds = local_patch_bounds_for_action(action, width, self.cfg)
+                raster = rasterize_stroke_action(
+                    action,
+                    width,
+                    motor_primitive=policy.motor_primitive if step == 0 else None,
+                    config=self.cfg,
+                )
+                bounds = local_patch_bounds_for_raster(raster, width, self.cfg)
                 if bounds is None:
                     continue
                 if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
                     sequential_steps[policy_index] += 1
                 row_slice, col_slice = bounds.slices()
-                action_raster = torch.tensor(
-                    rasterize_stroke_action(
-                        action,
-                        width,
-                        motor_primitive=policy.motor_primitive if step == 0 else None,
-                        config=self.cfg,
-                    ),
-                    device=device,
-                    dtype=torch.float32,
-                )[:, row_slice, col_slice]
+                action_raster = torch.tensor(raster, device=device, dtype=torch.float32)[:, row_slice, col_slice]
                 specs.append((policy_index, bounds, action_raster))
             if not specs:
                 continue
@@ -497,22 +498,19 @@ class SpatialExpectedFreeEnergy:
                 first_transition_used = True
                 continue
 
-            bounds = local_patch_bounds_for_action(action, width, self.cfg)
+            raster = rasterize_stroke_action(
+                action,
+                width,
+                motor_primitive=policy.motor_primitive if step == 0 else None,
+                config=self.cfg,
+            )
+            bounds = local_patch_bounds_for_raster(raster, width, self.cfg)
             if bounds is None:
                 continue
             if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
                 sequential_steps += 1
             row_slice, col_slice = bounds.slices()
-            action_raster = torch.tensor(
-                rasterize_stroke_action(
-                    action,
-                    width,
-                    motor_primitive=policy.motor_primitive if step == 0 else None,
-                    config=self.cfg,
-                ),
-                device=device,
-                dtype=torch.float32,
-            )[:, row_slice, col_slice]
+            action_raster = torch.tensor(raster, device=device, dtype=torch.float32)[:, row_slice, col_slice]
             patch_states = member_states[:, :, row_slice, col_slice]
             patch_actions = action_raster.unsqueeze(0).expand(member_count, -1, -1, -1)
             selected_means: list[torch.Tensor] = []
@@ -652,23 +650,20 @@ class SpatialExpectedFreeEnergy:
                 first_transition_used = True
                 continue
 
-            bounds = local_patch_bounds_for_action(action, width, self.cfg)
+            raster = rasterize_stroke_action(
+                action,
+                width,
+                motor_primitive=policy.motor_primitive if step == 0 else None,
+                config=self.cfg,
+            )
+            bounds = local_patch_bounds_for_raster(raster, width, self.cfg)
             if bounds is None:
                 continue
             if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
                 sequential_steps += 1
             row_slice, col_slice = bounds.slices()
             patch_mean = mean[:, :, row_slice, col_slice]
-            action_raster = torch.tensor(
-                rasterize_stroke_action(
-                    action,
-                    width,
-                    motor_primitive=policy.motor_primitive if step == 0 else None,
-                    config=self.cfg,
-                ),
-                device=device,
-                dtype=torch.float32,
-            ).unsqueeze(0)[:, :, row_slice, col_slice]
+            action_raster = torch.tensor(raster, device=device, dtype=torch.float32).unsqueeze(0)[:, :, row_slice, col_slice]
             next_patch, aleatoric, epistemic = self.dynamics.predictive_moments(patch_mean, action_raster)
             next_patch = project_material_support(
                 patch_mean,

@@ -96,12 +96,16 @@ class ArmActiveInferenceDriver:
     stroke_count: int = field(default=0, init=False)
     trained_transitions: int = field(default=0, init=False)
     last_training_loss: float | None = field(default=None, init=False)
+    last_training_seconds: float = field(default=0.0, init=False)
     last_stop_blocked: bool = field(default=False, init=False)
     last_execution_forecast: ExecutionForecast | None = field(default=None, init=False)
     last_motor_rejections: int = field(default=0, init=False)
     last_motor_primitive_candidates: int = field(default=0, init=False)
     planning: bool = field(default=False, init=False)
     last_planning_seconds: float = field(default=0.0, init=False)
+    last_planning_profile: dict[str, object] = field(default_factory=dict, init=False)
+    _planning_profile_current: dict[str, object] | None = field(default=None, init=False)
+    _planning_forecast_cache: dict[tuple[object, ...], ExecutionForecast] = field(default_factory=dict, init=False)
     _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
@@ -171,6 +175,9 @@ class ArmActiveInferenceDriver:
             self.last_motor_rejections = 0
             self.last_motor_primitive_candidates = 0
             self.planning = False
+            self.last_planning_profile = {}
+            self._planning_profile_current = None
+            self._planning_forecast_cache = {}
             self._planning_started_at = None
             self._planner_thread = None
             self._pending_current = None
@@ -460,7 +467,32 @@ class ArmActiveInferenceDriver:
         pending_passage: PassageLatent | None = None
         pending_passage_plan: PassagePlanLatent | None = None
         error: str | None = None
+        profile: dict[str, object] = {
+            "kind": "planning_profile",
+            "totalSeconds": 0.0,
+            "beliefUpdateSeconds": 0.0,
+            "policyInferenceSeconds": 0.0,
+            "policySampleSeconds": 0.0,
+            "baseEFESeconds": 0.0,
+            "motorForecastSeconds": 0.0,
+            "motorEFERescoreSeconds": 0.0,
+            "posteriorSeconds": 0.0,
+            "compositionDiagnosticSeconds": 0.0,
+            "selectedForecastSeconds": 0.0,
+            "selectedForecastCacheHits": 0,
+            "trailingTrainingSeconds": 0.0,
+            "publishSeconds": 0.0,
+            "policyCount": 0,
+            "motorForecastCount": 0,
+            "motorForecastCacheHits": 0,
+            "candidateMotorRealizations": 0,
+            "trainingAfterPublish": False,
+            "beliefUpdateRequiredBeforeInference": transition is not None,
+        }
+        self._planning_profile_current = profile
+        self._planning_forecast_cache = {}
         try:
+            phase_started = time.perf_counter()
             if transition is not None:
                 before, action, motor_primitive, after = transition
                 self._add_transition_to_agent(before, action, after, motor_primitive)
@@ -469,14 +501,18 @@ class ArmActiveInferenceDriver:
             else:
                 self._reset_agent_belief(state)
             self.belief = self.agent.belief
+            self._profile_add_seconds("beliefUpdateSeconds", time.perf_counter() - phase_started)
+            phase_started = time.perf_counter()
             if body_snapshot is None:
                 _, _, ranked = self.agent.infer_policy()
                 self.last_motor_rejections = 0
                 self.last_motor_primitive_candidates = 0
+                self._profile_set("policyCount", len(ranked))
             elif self._uses_spatial_planner():
                 ranked = self._infer_spatial_policy_with_execution_forecasts(body_snapshot)
             else:
                 ranked = self._infer_policy_with_execution_forecasts(body_snapshot)
+            self._profile_add_seconds("policyInferenceSeconds", time.perf_counter() - phase_started)
             pending_ranked = ranked
             policy, efe, prob = ranked[0]
             action = policy.actions[0]
@@ -496,18 +532,18 @@ class ArmActiveInferenceDriver:
                     efe=efe,
                     posterior=float(prob),
                     initial_state=state,
-                    forecast=(
-                        self._forecast_action(body_snapshot, action, motor_primitive)
-                        if body_snapshot is not None
-                        else None
-                    ),
+                    forecast=self._profiled_forecast_action(body_snapshot, action, motor_primitive),
                     motor_primitive=motor_primitive,
                     controller=controller_for_motor_primitive(motor_primitive),
                 )
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
             error = repr(exc)
         if error is None:
+            phase_started = time.perf_counter()
             self._refresh_composition_diagnostics()
+            self._profile_add_seconds("compositionDiagnosticSeconds", time.perf_counter() - phase_started)
+        phase_started = time.perf_counter()
+        profile["totalSeconds"] = time.perf_counter() - started
         with self._planner_lock:
             self._pending_current = pending_current
             self._pending_stopped = pending_stopped
@@ -518,18 +554,76 @@ class ArmActiveInferenceDriver:
             self._pending_passage_plan = pending_passage_plan
             self._pending_error = error
             self.last_planning_seconds = time.perf_counter() - started
+            profile["totalSeconds"] = self.last_planning_seconds
+            self.last_planning_profile = dict(profile)
             self.planning = False
             self._planning_started_at = None
+        self._profile_add_seconds("publishSeconds", time.perf_counter() - phase_started)
+        with self._planner_lock:
+            self.last_planning_profile = dict(profile)
         # Model learning runs after the plan is published, so it overlaps the
         # selected stroke's execution instead of extending the planning gap.
         # _start_background_plan will not launch the next planner thread until
         # this one exits, so training never races policy evaluation.
         if error is None and transition is not None:
             try:
+                train_started = time.perf_counter()
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
+                self.last_training_seconds = time.perf_counter() - train_started
+                with self._planner_lock:
+                    self.last_planning_profile = {
+                        **self.last_planning_profile,
+                        "trailingTrainingSeconds": self.last_training_seconds,
+                        "trainingAfterPublish": True,
+                    }
             except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
                 with self._planner_lock:
                     self._pending_error = repr(exc)
+        self._planning_profile_current = None
+        self._planning_forecast_cache = {}
+
+    def _profile_add_seconds(self, key: str, seconds: float) -> None:
+        profile = self._planning_profile_current
+        if profile is None:
+            return
+        profile[key] = float(profile.get(key, 0.0)) + max(0.0, float(seconds))
+
+    def _profile_increment(self, key: str, amount: int = 1) -> None:
+        profile = self._planning_profile_current
+        if profile is None:
+            return
+        profile[key] = int(profile.get(key, 0)) + int(amount)
+
+    def _profile_set(self, key: str, value: object) -> None:
+        profile = self._planning_profile_current
+        if profile is not None:
+            profile[key] = value
+
+    def _profiled_forecast_action(
+        self,
+        sim: ArmPainterSim | None,
+        action: StrokeAction,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+    ) -> ExecutionForecast | None:
+        if sim is None or action.stop:
+            return None
+        key = self._forecast_cache_key(action, motor_primitive)
+        cached = self._planning_forecast_cache.get(key)
+        if cached is not None:
+            self._profile_increment("selectedForecastCacheHits")
+            return cached
+        started = time.perf_counter()
+        forecast = self._forecast_action(sim, action, motor_primitive)
+        self._profile_add_seconds("selectedForecastSeconds", time.perf_counter() - started)
+        return forecast
+
+    def _forecast_cache_key(
+        self,
+        action: StrokeAction,
+        motor_primitive: MotorPrimitiveLatent | None,
+    ) -> tuple[object, ...]:
+        primitive_key = "" if motor_primitive is None else motor_primitive.kind
+        return tuple(float(x) for x in action.vector()) + (primitive_key,)
 
     def _refresh_composition_diagnostics(self) -> None:
         # Cached so UI polling never runs a model forward concurrently with
@@ -672,8 +766,13 @@ class ArmActiveInferenceDriver:
         assert isinstance(self.belief, GaussianBelief)
         agent = self.agent
         belief = self.belief
+        phase_started = time.perf_counter()
         policies = agent.policy_sampler.sample()
+        self._profile_add_seconds("policySampleSeconds", time.perf_counter() - phase_started)
+        self._profile_set("policyCount", len(policies))
+        phase_started = time.perf_counter()
         base_components = agent.efe.evaluate_batch(belief, policies)
+        self._profile_add_seconds("baseEFESeconds", time.perf_counter() - phase_started)
         believed_coverage = float(belief.mean[0].item())
         stop_indices = [i for i, policy in enumerate(policies) if policy.actions[0].stop]
         non_stop_indices = [i for i, policy in enumerate(policies) if not policy.actions[0].stop]
@@ -697,11 +796,12 @@ class ArmActiveInferenceDriver:
             best_feasible = False
             for motor_policy in motor_realization_policy_alternatives(policy, self.config):
                 motor_primitive_candidates += 1
+                self._profile_increment("candidateMotorRealizations")
                 primitive = motor_policy.motor_primitive
-                primitive_key = "" if primitive is None else primitive.kind
-                key = tuple(float(x) for x in first_action.vector()) + (primitive_key,)
+                key = self._forecast_cache_key(first_action, primitive)
                 forecast = forecast_cache.get(key)
                 if forecast is None:
+                    forecast_started = time.perf_counter()
                     forecast = forecast_stroke_execution(
                         body_snapshot,
                         first_action,
@@ -709,8 +809,14 @@ class ArmActiveInferenceDriver:
                         motor_primitive=primitive,
                         dt=1.0 / 45.0,
                     )
+                    self._profile_add_seconds("motorForecastSeconds", time.perf_counter() - forecast_started)
+                    self._profile_increment("motorForecastCount")
                     forecast_cache[key] = forecast
+                    self._planning_forecast_cache[key] = forecast
                     self._yield_to_runtime()
+                else:
+                    self._profile_increment("motorForecastCacheHits")
+                rescore_started = time.perf_counter()
                 motor_terms = motor_efe_terms(forecast, self.config)
                 mean = torch.tensor(forecast.next_state_mean, device=agent.device)
                 variance = torch.tensor(forecast.next_state_variance, device=agent.device)
@@ -728,6 +834,7 @@ class ArmActiveInferenceDriver:
                     motor_epistemic_value=motor_terms.epistemic_value,
                     motor_efe_approximation=motor_terms.approximation,
                 )
+                self._profile_add_seconds("motorEFERescoreSeconds", time.perf_counter() - rescore_started)
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
@@ -765,6 +872,7 @@ class ArmActiveInferenceDriver:
 
         self.last_motor_rejections = rejections
         self.last_motor_primitive_candidates = motor_primitive_candidates
+        phase_started = time.perf_counter()
         active_g = torch.tensor([components[i].total for i in active_indices], device=agent.device)
         active_log_prior = torch.tensor(
             [
@@ -786,6 +894,7 @@ class ArmActiveInferenceDriver:
             key=lambda item: item[2],
             reverse=True,
         )
+        self._profile_add_seconds("posteriorSeconds", time.perf_counter() - phase_started)
         return ranked
 
     def _infer_spatial_policy_with_execution_forecasts(
@@ -796,8 +905,13 @@ class ArmActiveInferenceDriver:
         assert isinstance(self.belief, SpatialCanvasState)
         agent = self.agent
         belief = self.belief
+        phase_started = time.perf_counter()
         policies = agent.policy_sampler.sample(belief.coverage(self.config.thickness_scale))
+        self._profile_add_seconds("policySampleSeconds", time.perf_counter() - phase_started)
+        self._profile_set("policyCount", len(policies))
+        phase_started = time.perf_counter()
         base_components = agent.efe.evaluate_batch(belief, policies)
+        self._profile_add_seconds("baseEFESeconds", time.perf_counter() - phase_started)
         believed_coverage = belief.material_coverage_mean(self.config.thickness_scale)
         stop_indices = [i for i, policy in enumerate(policies) if policy.actions[0].stop]
         non_stop_indices = [i for i, policy in enumerate(policies) if not policy.actions[0].stop]
@@ -837,11 +951,12 @@ class ArmActiveInferenceDriver:
             best_feasible = False
             for motor_policy in motor_realization_policy_alternatives(policy, self.config):
                 motor_primitive_candidates += 1
+                self._profile_increment("candidateMotorRealizations")
                 primitive = motor_policy.motor_primitive
-                primitive_key = "" if primitive is None else primitive.kind
-                key = tuple(float(x) for x in first_action.vector()) + (primitive_key,)
+                key = self._forecast_cache_key(first_action, primitive)
                 forecast = forecast_cache.get(key)
                 if forecast is None:
+                    forecast_started = time.perf_counter()
                     forecast = forecast_stroke_execution(
                         body_snapshot,
                         first_action,
@@ -849,8 +964,14 @@ class ArmActiveInferenceDriver:
                         motor_primitive=primitive,
                         dt=1.0 / 45.0,
                     )
+                    self._profile_add_seconds("motorForecastSeconds", time.perf_counter() - forecast_started)
+                    self._profile_increment("motorForecastCount")
                     forecast_cache[key] = forecast
+                    self._planning_forecast_cache[key] = forecast
                     self._yield_to_runtime()
+                else:
+                    self._profile_increment("motorForecastCacheHits")
+                rescore_started = time.perf_counter()
                 next_material = forecast.next_state_mean.reshape(material_shape)
                 mean = torch.tensor(next_material, device=agent.device, dtype=torch.float32)
                 variance = torch.tensor(
@@ -873,6 +994,7 @@ class ArmActiveInferenceDriver:
                     motor_epistemic_value=motor_terms.epistemic_value,
                     motor_efe_approximation=motor_terms.approximation,
                 )
+                self._profile_add_seconds("motorEFERescoreSeconds", time.perf_counter() - rescore_started)
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
@@ -910,6 +1032,7 @@ class ArmActiveInferenceDriver:
 
         self.last_motor_rejections = rejections
         self.last_motor_primitive_candidates = motor_primitive_candidates
+        phase_started = time.perf_counter()
         active_g = torch.tensor([components[i].total for i in active_indices], device=agent.device)
         active_log_prior = torch.tensor(
             [
@@ -931,6 +1054,7 @@ class ArmActiveInferenceDriver:
             key=lambda item: item[2],
             reverse=True,
         )
+        self._profile_add_seconds("posteriorSeconds", time.perf_counter() - phase_started)
         return ranked
 
     def _spatial_material_variance_from_forecast(
@@ -1021,6 +1145,8 @@ class ArmActiveInferenceDriver:
             "plannerError": self._pending_error,
             "lastPlanningSeconds": self.last_planning_seconds,
             "currentPlanningSeconds": self._current_planning_seconds(),
+            "planningProfile": dict(self.last_planning_profile),
+            "lastTrainingSeconds": self.last_training_seconds,
             "postStrokeRetractRemaining": self._post_stroke_retract_remaining,
             "planningScope": self._planning_scope(),
             "holdScope": self._hold_scope,

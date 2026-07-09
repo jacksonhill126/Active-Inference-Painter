@@ -139,6 +139,14 @@ def local_patch_bounds_for_action(
     if action.stop:
         return None
     raster = rasterize_stroke_action(action, grid_size, config=config)
+    return local_patch_bounds_for_raster(raster, grid_size, config)
+
+
+def local_patch_bounds_for_raster(
+    raster: np.ndarray,
+    grid_size: int,
+    config: PainterConfig,
+) -> LocalPatchBounds | None:
     support = np.any(raster[:3] > 0.0, axis=0)
     if not np.any(support):
         return None

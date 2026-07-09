@@ -415,6 +415,43 @@ def test_driver_reports_current_background_planning_elapsed_time() -> None:
     assert diagnostics["currentPlanningSeconds"] >= 1.0
 
 
+def test_background_planning_reports_phase_profile() -> None:
+    cfg = PainterConfig(candidate_policies=4, planning_horizon=1, motor_forecast_candidates=1)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+
+    driver._background_plan(canvas_summary_state(sim), None, sim)
+    diagnostics = driver.diagnostics()
+    profile = diagnostics["planningProfile"]
+
+    assert profile["kind"] == "planning_profile"
+    assert profile["totalSeconds"] >= 0.0
+    assert profile["policyCount"] == 4
+    assert "baseEFESeconds" in profile
+    assert "motorForecastSeconds" in profile
+    assert "motorEFERescoreSeconds" in profile
+    assert "trailingTrainingSeconds" in profile
+    assert profile["beliefUpdateRequiredBeforeInference"] is False
+
+
+def test_planning_profile_marks_training_after_publish_without_moving_belief_update() -> None:
+    cfg = PainterConfig(candidate_policies=4, planning_horizon=1, motor_forecast_candidates=1, batch_size=1)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    action = StrokeAction(0.2, 0.3, 0.6, 0.4, 0.08, 0.5, 1.0)
+    before = canvas_summary_state(sim)
+    execute_stroke_action(sim, action, dt=1.0 / 120.0)
+    after = canvas_summary_state(sim)
+
+    driver._background_plan(after, (before, action, None, after), sim)
+    profile = driver.diagnostics()["planningProfile"]
+
+    assert profile["beliefUpdateRequiredBeforeInference"] is True
+    assert profile["trainingAfterPublish"] is True
+    assert profile["trailingTrainingSeconds"] >= 0.0
+    assert driver.trained_transitions == 1
+
+
 def test_hold_uses_extra_damping_and_stroke_execution_clears_it() -> None:
     cfg = PainterConfig(canvas_size=48, hold_damping_multiplier=2.5)
     sim = ArmPainterSim(cfg)

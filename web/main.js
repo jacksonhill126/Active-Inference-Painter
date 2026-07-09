@@ -227,6 +227,7 @@ async function pollState() {
     ? materialPyramid.map((level) => `${level.name}:${level.gridSize}`).join(" -> ")
     : "-";
   const telemetryLog = state.telemetryLog || {};
+  const planningProfile = state.agent?.planningProfile || {};
   const topPolicies = state.agent?.topPolicies || [];
   const policyRows = topPolicies.slice(0, 4).map((p, i) =>
     row(
@@ -252,6 +253,12 @@ async function pollState() {
     row("Agent phase", agentPhaseLabel(state.agent)),
     row("Current planner time", `${num(state.agent?.currentPlanningSeconds)} s`),
     row("Last planner time", `${num(state.agent?.lastPlanningSeconds)} s`),
+    row("Plan base EFE", `${num(planningProfile.baseEFESeconds)} s`),
+    row("Plan motor forecast", `${num(planningProfile.motorForecastSeconds)} s / ${planningProfile.motorForecastCount ?? 0}`),
+    row("Plan motor rescore", `${num(planningProfile.motorEFERescoreSeconds)} s`),
+    row("Plan composition", `${num(planningProfile.compositionDiagnosticSeconds)} s`),
+    row("Plan trailing train", `${num(planningProfile.trailingTrainingSeconds)} s`),
+    row("Plan policies", String(planningProfile.policyCount ?? 0)),
     row(
       "Planner status",
       state.agent?.planning ? `running ${num(state.agent?.currentPlanningSeconds)} s` : (state.agent?.plannerError || "idle")
