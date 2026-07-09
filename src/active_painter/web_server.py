@@ -151,8 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stroke-tone-prior", choices=("black", "white", "random"), default="random")
     parser.add_argument("--save-every-paintings", type=int, default=5)
     parser.add_argument("--archive-dir", default="runs/web")
-    parser.add_argument("--telemetry-max-samples", type=int, default=18_000)
-    parser.add_argument("--telemetry-sample-hz", type=float, default=60.0)
+    parser.add_argument("--telemetry-max-samples", type=int, default=54_000)
+    parser.add_argument("--telemetry-sample-hz", type=float, default=15.0)
     parser.add_argument("--driver-bootstrap-transitions", type=int, default=None)
     parser.add_argument("--driver-bootstrap-train-steps", type=int, default=None)
     return parser

@@ -75,10 +75,11 @@ def test_web_runtime_uses_bounded_passage_planning_budget() -> None:
         driver_bootstrap_train_steps=0,
     )
 
-    assert runtime.agent_driver.config.planning_horizon == 5
-    assert runtime.agent_driver.config.candidate_policies == 48
-    assert runtime.agent_driver.config.motor_forecast_candidates == 3
+    assert runtime.agent_driver.config.planning_horizon == 4
+    assert runtime.agent_driver.config.candidate_policies == 32
+    assert runtime.agent_driver.config.motor_forecast_candidates == 2
     assert runtime.agent_driver.config.passage_proposal_mix == 0.45
+    assert runtime.agent_driver.config.passage_plan_proposal_mix == 0.15
 
 
 def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
@@ -101,6 +102,8 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert resolved_bootstrap(summary) == (96, 180)
     assert resolved_bootstrap(overridden) == (7, 3)
     assert summary.port == 8017
+    assert summary.telemetry_max_samples == 54_000
+    assert summary.telemetry_sample_hz == 15.0
 
 
 def test_web_server_falls_back_when_requested_port_is_busy() -> None:
@@ -199,6 +202,20 @@ def test_web_runtime_exports_arm_telemetry_csv() -> None:
     assert "target_tip_y" in csv_text
 
 
+def test_web_runtime_default_telemetry_is_sparse_rolling_window() -> None:
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    state = runtime.state()
+
+    assert runtime.telemetry_sample_period == pytest.approx(1.0 / 15.0)
+    assert state["telemetryLog"]["maxSamples"] == 54_000
+    assert "rolling overwrite" in state["telemetryLog"]["retentionPolicy"]
+    assert "estimatedSampleHz" in state["telemetryLog"]
+
+
 def test_web_runtime_state_exposes_python_code_version() -> None:
     state = WebSimRuntime(canvas_size=32).state()
     assert state["codeVersion"] == code_version()
@@ -234,6 +251,8 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert f"v{package_version()}" in index_html
     assert "/api/version" in index_html
     assert "state.codeVersion" in main_js
+    assert "currentPlanningSeconds" in main_js
+    assert "retentionPolicy" in main_js
 
 
 def test_web_server_renders_literal_fallback_version_before_javascript_runs() -> None:

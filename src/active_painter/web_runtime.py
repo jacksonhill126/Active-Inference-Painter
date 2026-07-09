@@ -27,8 +27,8 @@ class WebSimRuntime:
     stroke_tone_prior: float | None = None
     save_every_paintings: int = 5
     archive_dir: Path | str = Path("runs/web")
-    telemetry_max_samples: int = 18_000
-    telemetry_sample_period: float = 1.0 / 60.0
+    telemetry_max_samples: int = 54_000
+    telemetry_sample_period: float = 1.0 / 15.0
     driver_bootstrap_transitions: int = 96
     driver_bootstrap_train_steps: int = 180
     sim: ArmPainterSim = field(init=False)
@@ -56,13 +56,13 @@ class WebSimRuntime:
         )
         driver_config = PainterConfig(
             canvas_size=64,
-            candidate_policies=48,
-            planning_horizon=5,
+            candidate_policies=32,
+            planning_horizon=4,
             passage_proposal_mix=0.45,
-            passage_plan_proposal_mix=0.20,
+            passage_plan_proposal_mix=0.15,
             policy_precision=0.35,
             batch_size=32,
-            motor_forecast_candidates=3,
+            motor_forecast_candidates=2,
             planner_state_kind=self.planner_state_kind,
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,

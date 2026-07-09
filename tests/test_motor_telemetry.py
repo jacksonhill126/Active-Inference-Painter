@@ -51,3 +51,21 @@ def test_arm_telemetry_log_exports_stable_csv_header() -> None:
     assert "position_error_roll_deg" in csv_text
     assert "elastic_deflection_pitch_deg" in csv_text
     assert "encoder_std_elbow_deg" in csv_text
+
+
+def test_arm_telemetry_summary_reports_rolling_retention_and_estimated_rate() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=24))
+    log = ArmTelemetryLog(max_samples=3)
+
+    for index in range(5):
+        log.append_from_sim(float(index), sim, phase="planning", painting_count=0, agent_enabled=True)
+
+    summary = log.summary(4.0)
+
+    assert summary["sampleCount"] == 3
+    assert summary["maxSamples"] == 3
+    assert summary["firstSampleTime"] == 2.0
+    assert summary["lastSampleTime"] == 4.0
+    assert summary["windowSeconds"] == 2.0
+    assert summary["estimatedSampleHz"] == 1.0
+    assert "rolling overwrite" in summary["retentionPolicy"]

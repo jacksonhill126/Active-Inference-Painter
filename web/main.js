@@ -250,10 +250,16 @@ async function pollState() {
     row("Spatial transition mode", state.agent?.spatialTransitionMode || "-"),
     row("Transition model", state.agent?.transitionModel || "-"),
     row("Agent phase", agentPhaseLabel(state.agent)),
+    row("Current planner time", `${num(state.agent?.currentPlanningSeconds)} s`),
     row("Last planner time", `${num(state.agent?.lastPlanningSeconds)} s`),
-    row("Planner status", state.agent?.planning ? "running in background" : (state.agent?.plannerError || "idle")),
+    row(
+      "Planner status",
+      state.agent?.planning ? `running ${num(state.agent?.currentPlanningSeconds)} s` : (state.agent?.plannerError || "idle")
+    ),
     row("Telemetry samples", `${telemetryLog.sampleCount ?? 0} / ${telemetryLog.maxSamples ?? "-"}`),
     row("Telemetry window", `${num(telemetryLog.windowSeconds)} s`),
+    row("Telemetry rate", `${num(telemetryLog.estimatedSampleHz)} Hz`),
+    row("Telemetry retention", telemetryLog.retentionPolicy || "-"),
     row("Telemetry CSV", `<a href="${telemetryLog.csvEndpoint || "/api/telemetry.csv"}">download</a>`),
     row("Paintings completed", String(state.paintingCount ?? 0)),
     row("Last saved canvas", state.lastSavedCanvas || "-"),

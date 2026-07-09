@@ -102,6 +102,7 @@ class ArmActiveInferenceDriver:
     last_motor_primitive_candidates: int = field(default=0, init=False)
     planning: bool = field(default=False, init=False)
     last_planning_seconds: float = field(default=0.0, init=False)
+    _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
     _pending_current: StrokeExecution | None = field(default=None, init=False)
@@ -167,6 +168,7 @@ class ArmActiveInferenceDriver:
             self.last_motor_rejections = 0
             self.last_motor_primitive_candidates = 0
             self.planning = False
+            self._planning_started_at = None
             self._planner_thread = None
             self._pending_current = None
             self._pending_stopped = False
@@ -356,6 +358,7 @@ class ArmActiveInferenceDriver:
             state = self._planner_state(sim)
             body_snapshot = copy.deepcopy(sim)
             self.planning = True
+            self._planning_started_at = time.perf_counter()
             self._pending_error = None
         thread = threading.Thread(
             target=self._background_plan,
@@ -446,6 +449,7 @@ class ArmActiveInferenceDriver:
             self._pending_error = error
             self.last_planning_seconds = time.perf_counter() - started
             self.planning = False
+            self._planning_started_at = None
         # Model learning runs after the plan is published, so it overlaps the
         # selected stroke's execution instead of extending the planning gap.
         # _start_background_plan will not launch the next planner thread until
@@ -462,6 +466,11 @@ class ArmActiveInferenceDriver:
         # background training.
         if isinstance(self.agent, SpatialActiveInferencePainter) and self.agent.composition is not None:
             self._cached_belief_gap = self.agent.belief_composition_gap()
+
+    def _current_planning_seconds(self) -> float:
+        if not self.planning or self._planning_started_at is None:
+            return 0.0
+        return max(0.0, time.perf_counter() - self._planning_started_at)
 
     def _consume_background_plan(self) -> bool:
         with self._planner_lock:
@@ -934,6 +943,7 @@ class ArmActiveInferenceDriver:
             "planning": self.planning,
             "plannerError": self._pending_error,
             "lastPlanningSeconds": self.last_planning_seconds,
+            "currentPlanningSeconds": self._current_planning_seconds(),
             "postStrokeRetractRemaining": self._post_stroke_retract_remaining,
             "planningScope": self._planning_scope(),
             "holdScope": self._hold_scope,

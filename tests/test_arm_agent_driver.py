@@ -386,6 +386,32 @@ def test_global_hold_escapes_canvas_contact_before_center_translation() -> None:
     assert float(sim.kinematics.tip(sim.actual_pose)[1]) < sim.canvas.distance - 0.1
 
 
+def test_global_hold_targets_visible_planning_clearance() -> None:
+    cfg = PainterConfig(canvas_size=48)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+
+    for _ in range(80):
+        driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+        sim.step(1.0 / 240.0)
+    target_tip = sim.kinematics.tip(sim.target_pose)
+    actual_tip = sim.kinematics.tip(sim.actual_pose)
+
+    assert float(target_tip[1]) <= sim.canvas.distance - 3.5
+    assert float(actual_tip[1]) <= sim.canvas.distance - 1.5
+
+
+def test_driver_reports_current_background_planning_elapsed_time() -> None:
+    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    with driver._planner_lock:
+        driver.planning = True
+        driver._planning_started_at = time.perf_counter() - 1.25
+
+    diagnostics = driver.diagnostics()
+
+    assert diagnostics["currentPlanningSeconds"] >= 1.0
+
+
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:
     cfg = PainterConfig(canvas_size=48, post_stroke_retract_seconds=0.2)
     sim = ArmPainterSim(cfg)

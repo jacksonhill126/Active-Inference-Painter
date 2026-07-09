@@ -64,7 +64,7 @@ TELEMETRY_COLUMNS = BASE_COLUMNS + JOINT_COLUMNS
 
 @dataclass(slots=True)
 class ArmTelemetryLog:
-    max_samples: int = 18_000
+    max_samples: int = 54_000
     _samples: deque[dict[str, Any]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -140,12 +140,16 @@ class ArmTelemetryLog:
     def summary(self, sim_time: float) -> dict[str, Any]:
         first = self._samples[0]["sim_time_s"] if self._samples else None
         last = self._samples[-1]["sim_time_s"] if self._samples else None
+        window = float(last - first) if first is not None and last is not None else 0.0
+        estimated_hz = float((len(self._samples) - 1) / window) if len(self._samples) > 1 and window > 0.0 else 0.0
         return {
             "sampleCount": len(self._samples),
             "maxSamples": self._samples.maxlen,
             "firstSampleTime": first,
             "lastSampleTime": last,
-            "windowSeconds": float(last - first) if first is not None and last is not None else 0.0,
+            "windowSeconds": window,
+            "estimatedSampleHz": estimated_hz,
+            "retentionPolicy": "rolling overwrite; oldest samples are dropped after maxSamples",
             "currentSimTime": float(sim_time),
             "csvEndpoint": "/api/telemetry.csv",
         }
