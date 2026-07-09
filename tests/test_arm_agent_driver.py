@@ -11,7 +11,7 @@ from active_painter.arm_agent_driver import (
     execute_stroke_action,
     pose_for_execution,
 )
-from active_painter.arm_sim import ArmPainterSim
+from active_painter.arm_sim import ArmPainterSim, ArmPose
 from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
@@ -346,6 +346,27 @@ def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan()
     assert sim.intended_contact_pressure == 0.0
     assert float(sim.kinematics.tip(sim.actual_pose)[1]) < initial_tip_y - 0.05
     assert sim.contact.pressure == 0.0
+
+
+def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=48))
+    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver.planning = True
+
+    for _ in range(80):
+        driver.step(sim, 1.0 / 240.0)
+        sim.step(1.0 / 240.0)
+    held_target = sim.target_pose
+
+    sim.actual_pose = ArmPose(
+        yaw=held_target.yaw + 18.0,
+        pitch=held_target.pitch - 12.0,
+        roll=held_target.roll,
+        elbow=held_target.elbow,
+    ).clipped()
+    driver.step(sim, 1.0 / 240.0)
+
+    assert sim.target_pose == held_target
 
 
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:

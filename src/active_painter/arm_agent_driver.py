@@ -115,6 +115,7 @@ class ArmActiveInferenceDriver:
         np.ndarray | SpatialCanvasState,
     ] | None = field(default=None, init=False)
     _post_stroke_retract_remaining: float = field(default=0.0, init=False)
+    _hold_pose: ArmPose | None = field(default=None, init=False)
     _cached_belief_gap: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -164,6 +165,7 @@ class ArmActiveInferenceDriver:
             self._pending_error = None
             self._transition_to_learn = None
             self._post_stroke_retract_remaining = 0.0
+            self._hold_pose = None
         self._observe(sim)
 
     def _observe(self, sim: ArmPainterSim) -> GaussianBelief | SpatialCanvasState:
@@ -244,18 +246,21 @@ class ArmActiveInferenceDriver:
             self._hold_retracted(sim, dt)
             self._start_background_plan(sim)
             return
+        self._hold_pose = None
         self._execute_current(sim, dt)
 
     def _hold_retracted(self, sim: ArmPainterSim, dt: float) -> None:
         sim.paint_enabled = False
         sim.intended_contact_pressure = 0.0
-        tip = sim.kinematics.tip(sim.actual_pose)
-        lateral_limit = 0.46 * min(sim.canvas.width, sim.canvas.height)
-        x = float(np.clip(tip[0], -lateral_limit, lateral_limit))
-        z = float(np.clip(tip[2], -lateral_limit, lateral_limit))
-        if not np.isfinite(x) or not np.isfinite(z):
-            x, z = 0.0, 0.0
-        desired = ik_pose_for_canvas_point(x, z, sim.canvas.distance - 1.2)
+        if self._hold_pose is None:
+            tip = sim.kinematics.tip(sim.actual_pose)
+            lateral_limit = 0.46 * min(sim.canvas.width, sim.canvas.height)
+            x = float(np.clip(tip[0], -lateral_limit, lateral_limit))
+            z = float(np.clip(tip[2], -lateral_limit, lateral_limit))
+            if not np.isfinite(x) or not np.isfinite(z):
+                x, z = 0.0, 0.0
+            self._hold_pose = ik_pose_for_canvas_point(x, z, sim.canvas.distance - 1.2)
+        desired = self._hold_pose
         max_delta = 82.0 * max(float(dt), 1.0 / 240.0)
         sim.set_target(rate_limit_pose(desired, sim.target_pose, max_delta=max_delta))
 
