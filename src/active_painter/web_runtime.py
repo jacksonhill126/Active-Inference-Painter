@@ -57,7 +57,9 @@ class WebSimRuntime:
         driver_config = PainterConfig(
             canvas_size=64,
             candidate_policies=80,
-            planning_horizon=4,
+            planning_horizon=6,
+            passage_proposal_mix=0.45,
+            passage_plan_proposal_mix=0.25,
             policy_precision=0.35,
             batch_size=32,
             motor_forecast_candidates=4,

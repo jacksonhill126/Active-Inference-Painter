@@ -18,7 +18,7 @@ from .efe import EFEComponents
 from .env import StrokeAction
 from .models import GaussianBelief
 from .motor_planning import motor_efe_terms, motor_policy_log_prior, motor_realization_policy_alternatives
-from .policies import MotorPrimitiveLatent, Policy, policy_stop_log_prior
+from .policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy, policy_stop_log_prior
 from .spatial_agent import SpatialActiveInferencePainter
 from .spatial_efe import SpatialEFEComponents
 from .spatial_hierarchy import infer_mark_event_belief
@@ -33,6 +33,7 @@ from .stroke_execution import (
     forecast_stroke_execution,
     pose_for_reference,
     rate_limit_pose,
+    stroke_world_endpoints,
     stroke_reference,
 )
 
@@ -107,6 +108,9 @@ class ArmActiveInferenceDriver:
     _pending_stopped: bool = field(default=False, init=False)
     _pending_ranked: list[tuple[Policy, EFEComponents | SpatialEFEComponents, float]] | None = field(default=None, init=False)
     _pending_components: EFEComponents | SpatialEFEComponents | None = field(default=None, init=False)
+    _pending_passage_queue: tuple[StrokeAction, ...] = field(default_factory=tuple, init=False)
+    _pending_passage: PassageLatent | None = field(default=None, init=False)
+    _pending_passage_plan: PassagePlanLatent | None = field(default=None, init=False)
     _pending_error: str | None = field(default=None, init=False)
     _transition_to_learn: tuple[
         np.ndarray | SpatialCanvasState,
@@ -116,6 +120,12 @@ class ArmActiveInferenceDriver:
     ] | None = field(default=None, init=False)
     _post_stroke_retract_remaining: float = field(default=0.0, init=False)
     _hold_pose: ArmPose | None = field(default=None, init=False)
+    _hold_scope: str = field(default="global", init=False)
+    _passage_queue: list[StrokeAction] = field(default_factory=list, init=False)
+    _active_passage: PassageLatent | None = field(default=None, init=False)
+    _active_passage_plan: PassagePlanLatent | None = field(default=None, init=False)
+    _active_passage_total_strokes: int = field(default=0, init=False)
+    _active_passage_completed_strokes: int = field(default=0, init=False)
     _cached_belief_gap: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -162,10 +172,19 @@ class ArmActiveInferenceDriver:
             self._pending_stopped = False
             self._pending_ranked = None
             self._pending_components = None
+            self._pending_passage_queue = ()
+            self._pending_passage = None
+            self._pending_passage_plan = None
             self._pending_error = None
             self._transition_to_learn = None
             self._post_stroke_retract_remaining = 0.0
             self._hold_pose = None
+            self._hold_scope = "global"
+            self._passage_queue = []
+            self._active_passage = None
+            self._active_passage_plan = None
+            self._active_passage_total_strokes = 0
+            self._active_passage_completed_strokes = 0
         self._observe(sim)
 
     def _observe(self, sim: ArmPainterSim) -> GaussianBelief | SpatialCanvasState:
@@ -232,39 +251,74 @@ class ArmActiveInferenceDriver:
 
     def step(self, sim: ArmPainterSim, dt: float) -> None:
         if not self.enabled or self.stopped:
-            self._hold_retracted(sim, dt)
+            self._hold_retracted(sim, dt, scope="global")
             return
         if self._post_stroke_retract_remaining > 0.0:
-            self._hold_retracted(sim, dt)
+            hold_scope = "passage" if self._passage_queue else "global"
+            self._hold_retracted(sim, dt, scope=hold_scope)
             self._post_stroke_retract_remaining = max(0.0, self._post_stroke_retract_remaining - dt)
-            self._start_background_plan(sim)
+            if self._post_stroke_retract_remaining <= 0.0 and self._passage_queue:
+                self._start_next_passage_stroke(sim)
+            if not self._passage_queue and self.current is None:
+                self._start_background_plan(sim)
             return
         if self._consume_background_plan():
-            self._hold_retracted(sim, dt)
+            self._hold_retracted(sim, dt, scope="global")
             return
         if self.current is None:
-            self._hold_retracted(sim, dt)
+            if self._passage_queue:
+                self._start_next_passage_stroke(sim)
+                return
+            self._hold_retracted(sim, dt, scope="global")
             self._start_background_plan(sim)
             return
         self._hold_pose = None
         self._execute_current(sim, dt)
 
-    def _hold_retracted(self, sim: ArmPainterSim, dt: float) -> None:
+    def _hold_retracted(self, sim: ArmPainterSim, dt: float, *, scope: str) -> None:
         sim.paint_enabled = False
         sim.intended_contact_pressure = 0.0
-        if self._hold_pose is None:
-            tip = sim.kinematics.tip(sim.actual_pose)
-            lateral_limit = 0.46 * min(sim.canvas.width, sim.canvas.height)
-            x = float(np.clip(tip[0], -lateral_limit, lateral_limit))
-            z = float(np.clip(tip[2], -lateral_limit, lateral_limit))
-            if not np.isfinite(x) or not np.isfinite(z):
-                x, z = 0.0, 0.0
-            self._hold_pose = ik_pose_for_canvas_point(x, z, sim.canvas.distance - 1.2)
+        if self._hold_pose is None or self._hold_scope != scope:
+            self._hold_scope = scope
+            self._hold_pose = self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
         desired = self._hold_pose
         max_delta = 82.0 * max(float(dt), 1.0 / 240.0)
         sim.set_target(rate_limit_pose(desired, sim.target_pose, max_delta=max_delta))
 
+    def _global_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
+        return ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance - self.config.global_planning_retract_depth)
+
+    def _passage_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
+        x, z = self._active_passage_world_center(sim)
+        return ik_pose_for_canvas_point(x, z, sim.canvas.distance - self.config.local_passage_retract_depth)
+
+    def _active_passage_world_center(self, sim: ArmPainterSim) -> tuple[float, float]:
+        if self._active_passage is not None:
+            x = (self._active_passage.center_x - 0.5) * sim.canvas.width * 0.98
+            z = (0.5 - self._active_passage.center_y) * sim.canvas.height * 0.98
+            return float(x), float(z)
+        if self._active_passage_plan is not None:
+            x = (self._active_passage_plan.center_x - 0.5) * sim.canvas.width * 0.98
+            z = (0.5 - self._active_passage_plan.center_y) * sim.canvas.height * 0.98
+            return float(x), float(z)
+        actions = self._passage_queue
+        if actions:
+            centers: list[tuple[float, float]] = []
+            for action in actions[: max(1, min(3, len(actions)))]:
+                x0, z0, x1, z1 = stroke_world_endpoints(action, sim.canvas)
+                centers.append((0.5 * (x0 + x1), 0.5 * (z0 + z1)))
+            return tuple(float(v) for v in np.mean(np.asarray(centers, dtype=np.float64), axis=0))  # type: ignore[return-value]
+        tip = sim.kinematics.tip(sim.actual_pose)
+        lateral_limit = 0.46 * min(sim.canvas.width, sim.canvas.height)
+        x = float(np.clip(tip[0], -lateral_limit, lateral_limit))
+        z = float(np.clip(tip[2], -lateral_limit, lateral_limit))
+        if not np.isfinite(x) or not np.isfinite(z):
+            return 0.0, 0.0
+        return x, z
+
     def _start_background_plan(self, sim: ArmPainterSim) -> None:
+        if self.current is not None or self._passage_queue:
+            return
         with self._planner_lock:
             if (
                 self.planning
@@ -309,6 +363,9 @@ class ArmActiveInferenceDriver:
         pending_stopped = False
         pending_ranked: list[tuple[Policy, EFEComponents | SpatialEFEComponents, float]] | None = None
         pending_components: EFEComponents | SpatialEFEComponents | None = None
+        pending_passage_queue: tuple[StrokeAction, ...] = ()
+        pending_passage: PassageLatent | None = None
+        pending_passage_plan: PassagePlanLatent | None = None
         error: str | None = None
         try:
             if transition is not None:
@@ -337,6 +394,10 @@ class ArmActiveInferenceDriver:
                 pending_stopped = True
             else:
                 motor_primitive = policy.motor_primitive
+                if policy.passage is not None or policy.passage_plan is not None:
+                    pending_passage_queue = tuple(action for action in policy.actions[1:] if not action.stop)
+                    pending_passage = policy.passage
+                    pending_passage_plan = policy.passage_plan
                 pending_current = StrokeExecution(
                     action=action,
                     efe=efe,
@@ -359,6 +420,9 @@ class ArmActiveInferenceDriver:
             self._pending_stopped = pending_stopped
             self._pending_ranked = pending_ranked
             self._pending_components = pending_components
+            self._pending_passage_queue = pending_passage_queue
+            self._pending_passage = pending_passage
+            self._pending_passage_plan = pending_passage_plan
             self._pending_error = error
             self.last_planning_seconds = time.perf_counter() - started
             self.planning = False
@@ -389,6 +453,9 @@ class ArmActiveInferenceDriver:
             pending_stopped = self._pending_stopped
             pending_ranked = self._pending_ranked
             pending_components = self._pending_components
+            pending_passage_queue = self._pending_passage_queue
+            pending_passage = self._pending_passage
+            pending_passage_plan = self._pending_passage_plan
             # Diagnostic: stop had the lowest expected free energy, but the
             # declared stop prior demoted it below a continuation policy.
             stop_blocked = False
@@ -401,6 +468,9 @@ class ArmActiveInferenceDriver:
             self._pending_stopped = False
             self._pending_ranked = None
             self._pending_components = None
+            self._pending_passage_queue = ()
+            self._pending_passage = None
+            self._pending_passage_plan = None
         if pending_ranked is not None:
             self.last_ranked = pending_ranked
         if pending_components is not None:
@@ -412,7 +482,27 @@ class ArmActiveInferenceDriver:
                 self.on_stop()
             return True
         self.current = pending_current
+        if pending_current is not None:
+            self._passage_queue = list(pending_passage_queue)
+            self._active_passage = pending_passage
+            self._active_passage_plan = pending_passage_plan
+            self._active_passage_total_strokes = 1 + len(self._passage_queue) if self._passage_queue else 0
+            self._active_passage_completed_strokes = 0
+            self._hold_pose = None
         return False
+
+    def _start_next_passage_stroke(self, sim: ArmPainterSim) -> None:
+        if not self._passage_queue:
+            return
+        action = self._passage_queue.pop(0)
+        self.current = StrokeExecution(
+            action=action,
+            efe=self.last_components if self.last_components is not None else EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            posterior=1.0,
+            initial_state=self._planner_state(sim),
+            controller=ContactAwareStrokeController(),
+        )
+        self._hold_pose = None
 
     def _execute_current(self, sim: ArmPainterSim, dt: float) -> None:
         assert self.current is not None
@@ -431,12 +521,35 @@ class ArmActiveInferenceDriver:
             self.stroke_count += 1
             self.last_execution_forecast = ex.forecast
             self.current = None
-            self._post_stroke_retract_remaining = max(0.0, self.config.post_stroke_retract_seconds)
-            self._hold_retracted(sim, dt)
             after = self._planner_state(sim)
+            passage_continues = bool(self._passage_queue)
+            if self._active_passage_total_strokes > 0:
+                self._active_passage_completed_strokes += 1
             if ex.initial_state is not None:
-                with self._planner_lock:
-                    self._transition_to_learn = (ex.initial_state, ex.action, ex.motor_primitive, after)
+                if passage_continues:
+                    self._add_transition_to_agent(ex.initial_state, ex.action, after, ex.motor_primitive)
+                    self.trained_transitions += 1
+                    self._update_agent_belief(ex.action, after, ex.motor_primitive)
+                    self.belief = self.agent.belief
+                else:
+                    with self._planner_lock:
+                        self._transition_to_learn = (ex.initial_state, ex.action, ex.motor_primitive, after)
+            if passage_continues:
+                self._post_stroke_retract_remaining = max(0.0, self.config.passage_local_retract_seconds)
+                self._hold_retracted(sim, dt, scope="passage")
+            else:
+                had_active_passage = self._active_passage_total_strokes > 0
+                self._active_passage = None
+                self._active_passage_plan = None
+                self._active_passage_total_strokes = 0
+                self._active_passage_completed_strokes = 0
+                retract_seconds = (
+                    self.config.passage_center_retract_seconds
+                    if had_active_passage
+                    else self.config.post_stroke_retract_seconds
+                )
+                self._post_stroke_retract_remaining = max(0.0, retract_seconds)
+                self._hold_retracted(sim, dt, scope="global")
 
     def _yield_to_runtime(self) -> None:
         delay = max(0.0, float(self.config.background_planner_yield_seconds))
@@ -802,6 +915,13 @@ class ArmActiveInferenceDriver:
             "plannerError": self._pending_error,
             "lastPlanningSeconds": self.last_planning_seconds,
             "postStrokeRetractRemaining": self._post_stroke_retract_remaining,
+            "planningScope": self._planning_scope(),
+            "holdScope": self._hold_scope,
+            "passageQueueLength": len(self._passage_queue),
+            "activePassage": asdict(self._active_passage) if self._active_passage is not None else None,
+            "activePassagePlan": asdict(self._active_passage_plan) if self._active_passage_plan is not None else None,
+            "activePassageTotalStrokes": self._active_passage_total_strokes,
+            "activePassageCompletedStrokes": self._active_passage_completed_strokes,
             "minimumStopCoverage": self.config.minimum_stop_coverage,
             "lastStopBlocked": self.last_stop_blocked,
             "motorRejections": self.last_motor_rejections,
@@ -937,8 +1057,17 @@ class ArmActiveInferenceDriver:
         if self.stopped:
             return "stop"
         if self._post_stroke_retract_remaining > 0.0:
-            return "retract"
-        return "planning"
+            return "local_passage_hold" if self._passage_queue else "return_center"
+        if self._passage_queue:
+            return "local_passage_hold"
+        return "global_planning"
+
+    def _planning_scope(self) -> str:
+        if self.current is not None:
+            return "stroke_execution"
+        if self._passage_queue or self._active_passage_total_strokes > 0:
+            return "passage_local"
+        return "global"
 
 
 def canvas_summary_state(sim: ArmPainterSim) -> np.ndarray:

@@ -206,7 +206,7 @@ def test_web_runtime_state_consumes_stopped_episode_before_reporting() -> None:
 
     assert state["paintingCount"] == 1
     assert state["agent"]["stopped"] is False
-    assert state["agent"]["phase"] == "planning"
+    assert state["agent"]["phase"] == "global_planning"
     assert state["canvas"]["coverage"] == 0.0
 
 
@@ -270,7 +270,7 @@ def test_web_runtime_driver_stop_callback_immediately_restarts_episode() -> None
     assert runtime.painting_count == 1
     assert runtime.agent_driver.stopped is False
     assert runtime.sim.canvas.material_coverage() == 0.0
-    assert runtime.agent_driver.diagnostics()["phase"] == "planning"
+    assert runtime.agent_driver.diagnostics()["phase"] == "global_planning"
 
 
 def test_web_runtime_max_speed_releases_state_lock_between_physics_steps() -> None:

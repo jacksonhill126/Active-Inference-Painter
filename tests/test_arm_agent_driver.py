@@ -17,7 +17,7 @@ from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
 from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
 from active_painter.spatial_state import SpatialCanvasState
-from active_painter.stroke_execution import ExecutionForecast, adaptive_stroke_timing
+from active_painter.stroke_execution import ExecutionForecast, StrokeTiming, adaptive_stroke_timing
 
 
 def make_driver() -> ArmActiveInferenceDriver:
@@ -385,7 +385,7 @@ def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_c
     driver.step(sim, 1.0 / 120.0)
 
     assert driver.current is None
-    assert driver.phase_label() == "retract"
+    assert driver.phase_label() == "return_center"
     assert not sim.paint_enabled
     assert sim.intended_contact_pressure == 0.0
 
@@ -396,7 +396,55 @@ def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_c
     driver.step(sim, 1.0 / 120.0)
 
     assert driver.current is None
-    assert driver.phase_label() == "retract"
+    assert driver.phase_label() == "return_center"
+
+
+def test_passage_queue_uses_local_hold_then_returns_center_after_final_mark() -> None:
+    cfg = PainterConfig(
+        canvas_size=48,
+        passage_local_retract_seconds=0.02,
+        passage_center_retract_seconds=0.2,
+    )
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    first = StrokeAction(0.22, 0.30, 0.36, 0.34, 0.08, 0.55, 1.0)
+    second = StrokeAction(0.25, 0.35, 0.39, 0.39, 0.08, 0.55, 1.0)
+    passage = PassageLatent("chain", 0.30, 0.35, 0.0, 0.2, 0.08, 2, 0.08, 0.55, 1.0)
+    efe = EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    ex = StrokeExecution(action=first, efe=efe, posterior=1.0, initial_state=canvas_summary_state(sim))
+    ex.timing = StrokeTiming(approach=0.01, press=0.01, paint=0.01, lift=0.01)
+    ex.controller.reset(sim, ex.action, ex.timing)
+    ex.initialized = True
+    ex.t = ex.total
+    driver.current = ex
+    driver._passage_queue = [second]
+    driver._active_passage = passage
+    driver._active_passage_total_strokes = 2
+
+    driver.step(sim, 1.0 / 120.0)
+
+    assert driver.current is None
+    assert driver.phase_label() == "local_passage_hold"
+    assert driver.diagnostics()["passageQueueLength"] == 1
+    local_target = sim.target_pose
+
+    for _ in range(8):
+        driver.step(sim, 1.0 / 120.0)
+        sim.step(1.0 / 120.0)
+
+    assert driver.current is not None
+    assert driver.current.action == second
+    assert sim.target_pose != local_target
+
+    driver.current.timing = StrokeTiming(approach=0.01, press=0.01, paint=0.01, lift=0.01)
+    driver.current.controller.reset(sim, driver.current.action, driver.current.timing)
+    driver.current.initialized = True
+    driver.current.t = driver.current.total
+    driver.step(sim, 1.0 / 120.0)
+
+    assert driver.current is None
+    assert driver.phase_label() == "return_center"
+    assert driver.diagnostics()["activePassage"] is None
 
 
 def test_active_inference_planning_does_not_block_body_step() -> None:

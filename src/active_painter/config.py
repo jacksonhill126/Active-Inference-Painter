@@ -85,6 +85,10 @@ class PainterConfig:
     motor_proprioceptive_ambiguity_precision: float = 0.25
     motor_limit_margin_degrees: float = 12.0
     post_stroke_retract_seconds: float = 0.35
+    passage_local_retract_seconds: float = 0.12
+    passage_center_retract_seconds: float = 0.65
+    global_planning_retract_depth: float = 1.8
+    local_passage_retract_depth: float = 1.0
     background_planner_yield_seconds: float = 0.0005
     stroke_tone_prior: float | None = None
     inference_steps: int = 24

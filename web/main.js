@@ -278,6 +278,17 @@ async function pollState() {
     row("Passage posterior mass", pct(state.agent?.passagePosteriorMass)),
     row("Passage-plan candidates", String(state.agent?.passagePlanCandidateCount ?? 0)),
     row("Passage-plan posterior mass", pct(state.agent?.passagePlanPosteriorMass)),
+    row("Planning scope", state.agent?.planningScope || "-"),
+    row("Hold scope", state.agent?.holdScope || "-"),
+    row(
+      "Active passage",
+      state.agent?.activePassage
+        ? `${state.agent.activePassage.kind} ${state.agent.activePassageCompletedStrokes}/${state.agent.activePassageTotalStrokes}`
+        : state.agent?.activePassagePlan
+          ? `${state.agent.activePassagePlan.kind} ${state.agent.activePassageCompletedStrokes}/${state.agent.activePassageTotalStrokes}`
+          : "-"
+    ),
+    row("Queued passage marks", String(state.agent?.passageQueueLength ?? 0)),
     row("EFE total", num(efe.total)),
     row("Terminal risk", num(efe.terminal_risk)),
     row("Terminal entropy", num(efe.terminal_entropy)),
@@ -337,7 +348,17 @@ function pct(value) {
 function agentPhaseLabel(agent) {
   if (!agent) return "unknown";
   if (agent.planning) return "planning/training";
-  return agent.phase || "unknown";
+  const labels = {
+    global_planning: "global planning",
+    local_passage_hold: "local passage hold",
+    return_center: "returning center",
+    approach: "approach",
+    press: "press",
+    paint: "paint",
+    lift: "lift",
+    stop: "stop",
+  };
+  return labels[agent.phase] || agent.phase || "unknown";
 }
 
 function resize() {
