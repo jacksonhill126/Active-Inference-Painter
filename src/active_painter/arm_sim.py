@@ -418,11 +418,33 @@ class VerticalCanvas:
         distance = np.sqrt((xx - u) ** 2 + (yy - v) ** 2)
         ramp = np.clip((radius + edge - distance) / edge, 0.0, 1.0)
         footprint = (ramp * ramp * (3.0 - 2.0 * ramp)).astype(np.float32)
-        deposited = float(dt) * (0.055 + 0.22 * pressure) * footprint
+        deposition_rate = (
+            float(self.config.paint_deposition_base_rate)
+            + float(self.config.paint_deposition_pressure_rate) * pressure
+        )
+        deposited = float(dt) * max(0.0, deposition_rate) * footprint
+        region = np.s_[row0:row1, col0:col1]
+        previous_thickness = self.thickness[region]
+        previous_black = self.black_mass[region]
+        previous_tone = np.clip(previous_black / np.maximum(previous_thickness, 1e-6), 0.0, 1.0)
+        incoming_tone = float(tone >= 0.5)
+        surface_alpha = 1.0 - np.exp(
+            -deposited / max(1e-8, float(self.config.oil_surface_opacity_thickness))
+        )
+        wet_pickup = np.clip(
+            float(self.config.oil_wet_pickup_fraction)
+            * self.wetness[region]
+            / np.maximum(self.wetness[region] + deposited, 1e-6),
+            0.0,
+            0.75,
+        )
+        loaded_tone = (1.0 - wet_pickup) * incoming_tone + wet_pickup * previous_tone
+        new_thickness = previous_thickness + deposited
+        new_tone = (1.0 - surface_alpha) * previous_tone + surface_alpha * loaded_tone
         self.wetness *= self.config.wetness_decay
-        self.thickness[row0:row1, col0:col1] += deposited
-        self.wetness[row0:row1, col0:col1] += 0.8 * deposited
-        self.black_mass[row0:row1, col0:col1] += deposited * float(tone >= 0.5)
+        self.thickness[region] = new_thickness
+        self.wetness[region] += 0.8 * deposited
+        self.black_mass[region] = np.clip(new_tone, 0.0, 1.0) * new_thickness
 
 
 @dataclass(slots=True)

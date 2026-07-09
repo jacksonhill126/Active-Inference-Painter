@@ -54,6 +54,78 @@ def test_vertical_canvas_observed_tone_composites_paint_against_gray_ground() ->
     assert after_black.max() > 0.34
 
 
+def test_vertical_canvas_default_paint_deposition_is_more_opaque_than_old_rate() -> None:
+    old_cfg = PainterConfig(
+        canvas_size=32,
+        paint_deposition_base_rate=0.055,
+        paint_deposition_pressure_rate=0.22,
+    )
+    opaque_cfg = PainterConfig(canvas_size=32)
+    old_canvas = VerticalCanvas(old_cfg)
+    opaque_canvas = VerticalCanvas(opaque_cfg)
+    point = np.asarray([0.0, opaque_canvas.distance, 0.0])
+
+    old_canvas.paint_at(point, pressure=0.55, tone=1.0, dt=1.0 / 240.0)
+    opaque_canvas.paint_at(point, pressure=0.55, tone=1.0, dt=1.0 / 240.0)
+
+    assert opaque_canvas.material_coverage() > old_canvas.material_coverage() * 2.0
+    assert opaque_canvas.thickness.max() > old_canvas.thickness.max() * 2.0
+
+
+def test_vertical_canvas_paint_deposition_rates_are_configurable() -> None:
+    low = VerticalCanvas(PainterConfig(canvas_size=32, paint_deposition_base_rate=0.02, paint_deposition_pressure_rate=0.04))
+    high = VerticalCanvas(PainterConfig(canvas_size=32, paint_deposition_base_rate=0.20, paint_deposition_pressure_rate=0.80))
+    point = np.asarray([0.0, high.distance, 0.0])
+
+    low.paint_at(point, pressure=0.5, tone=1.0, dt=1.0 / 240.0)
+    high.paint_at(point, pressure=0.5, tone=1.0, dt=1.0 / 240.0)
+
+    assert high.thickness.max() > low.thickness.max() * 8.0
+
+
+def test_oil_white_over_wet_black_is_surface_opaque_with_some_pickup() -> None:
+    canvas = VerticalCanvas(PainterConfig(canvas_size=48))
+    point = np.asarray([0.0, canvas.distance, 0.0])
+
+    canvas.paint_at(point, pressure=0.8, tone=1.0, dt=1.0 / 120.0)
+    after_black_tone = canvas.visible_tone().copy()
+    canvas.paint_at(point, pressure=0.8, tone=0.0, dt=1.0 / 120.0)
+    after_white_tone = canvas.visible_tone()
+    u, v = canvas.world_to_pixel(0.0, 0.0)
+    row = int(round(v))
+    col = int(round(u))
+
+    assert after_black_tone[row, col] > 0.7
+    assert 0.02 < after_white_tone[row, col] < 0.35
+
+
+def test_oil_surface_opacity_controls_white_over_black_dominance() -> None:
+    point = np.asarray([0.0, 17.0, 0.0])
+    transparent = VerticalCanvas(
+        PainterConfig(
+            canvas_size=48,
+            oil_surface_opacity_thickness=0.02,
+            oil_wet_pickup_fraction=0.18,
+        )
+    )
+    opaque = VerticalCanvas(
+        PainterConfig(
+            canvas_size=48,
+            oil_surface_opacity_thickness=0.001,
+            oil_wet_pickup_fraction=0.18,
+        )
+    )
+
+    for canvas in (transparent, opaque):
+        canvas.paint_at(point, pressure=0.8, tone=1.0, dt=1.0 / 120.0)
+        canvas.paint_at(point, pressure=0.8, tone=0.0, dt=1.0 / 120.0)
+    u, v = opaque.world_to_pixel(0.0, 0.0)
+    row = int(round(v))
+    col = int(round(u))
+
+    assert opaque.visible_tone()[row, col] < transparent.visible_tone()[row, col]
+
+
 def test_joint_plant_moves_actual_pose_toward_target_without_selecting_policy() -> None:
     sim = ArmPainterSim(PainterConfig())
     sim.set_target(ArmPose(yaw=35.0, pitch=-20.0, roll=10.0, elbow=70.0))

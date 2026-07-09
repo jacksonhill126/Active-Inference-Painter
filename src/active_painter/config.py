@@ -9,6 +9,10 @@ class PainterConfig:
     thickness_scale: float = 0.005
     wetness_decay: float = 0.985
     canvas_ground_tone: float = 0.34
+    paint_deposition_base_rate: float = 0.16
+    paint_deposition_pressure_rate: float = 0.64
+    oil_surface_opacity_thickness: float = 0.002
+    oil_wet_pickup_fraction: float = 0.18
     base_observation_std: float = 0.008
     smear_observation_std: float = 0.02
 
