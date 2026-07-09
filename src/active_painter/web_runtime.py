@@ -31,6 +31,8 @@ class WebSimRuntime:
     telemetry_sample_period: float = 1.0 / 15.0
     driver_bootstrap_transitions: int = 96
     driver_bootstrap_train_steps: int = 180
+    checkpoint_path: Path | str | None = None
+    checkpoint_save_every_transitions: int = 1
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)
@@ -72,6 +74,8 @@ class WebSimRuntime:
             config=driver_config,
             bootstrap_transitions=self.driver_bootstrap_transitions,
             bootstrap_train_steps=self.driver_bootstrap_train_steps,
+            checkpoint_path=self.checkpoint_path,
+            checkpoint_save_every_transitions=self.checkpoint_save_every_transitions,
             on_stop=self._complete_stopped_painting,
         )
         self.telemetry_log = ArmTelemetryLog(max_samples=self.telemetry_max_samples)

@@ -1,8 +1,11 @@
 import json
+from pathlib import Path
+import shutil
 import time
 
 import numpy as np
 import pytest
+import torch
 
 from active_painter.arm_control import ik_pose_for_canvas_point
 from active_painter.arm_agent_driver import (
@@ -205,6 +208,126 @@ def test_summary_driver_replay_stores_selected_motor_realization_condition() -> 
     stored_action = driver.agent.replay.data[-1][1]
     assert stored_action.shape == (cfg.action_dim,)
     assert np.allclose(stored_action[7:], [0.0, 0.0, 1.0])
+
+
+def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
+    cfg = PainterConfig(batch_size=1, hidden_dim=16, ensemble_size=2)
+    root = Path("runs/test_driver_checkpoint_summary")
+    shutil.rmtree(root, ignore_errors=True)
+    path = root / "summary_weights.pt"
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+        checkpoint_path=path,
+    )
+    before = np.zeros(cfg.state_dim, dtype=np.float32)
+    after = np.ones(cfg.state_dim, dtype=np.float32) * 0.05
+    action = StrokeAction(0.2, 0.3, 0.7, 0.4, 0.08, 0.6, 1.0)
+    driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+    driver.trained_transitions = 1
+    with torch.no_grad():
+        for parameter in driver.agent.dynamics.parameters():
+            parameter.add_(0.123)
+    expected = [parameter.detach().clone() for parameter in driver.agent.dynamics.parameters()]
+
+    try:
+        driver._save_checkpoint_if_due(force=True)
+        restored = ArmActiveInferenceDriver(
+            config=cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+        )
+
+        assert restored.checkpoint_loaded is True
+        assert restored.checkpoint_status == "loaded"
+        assert restored.trained_transitions == 1
+        assert len(restored.agent.replay) == 1
+        for expected_parameter, restored_parameter in zip(expected, restored.agent.dynamics.parameters()):
+            assert torch.allclose(expected_parameter, restored_parameter)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_driver_checkpoint_rejects_architectural_mismatch() -> None:
+    root = Path("runs/test_driver_checkpoint_mismatch")
+    shutil.rmtree(root, ignore_errors=True)
+    path = root / "mismatch.pt"
+    saved_cfg = PainterConfig(hidden_dim=16, ensemble_size=2)
+    changed_cfg = PainterConfig(hidden_dim=24, ensemble_size=2)
+    driver = ArmActiveInferenceDriver(
+        config=saved_cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+        checkpoint_path=path,
+    )
+    try:
+        driver._save_checkpoint_if_due(force=True)
+        restored = ArmActiveInferenceDriver(
+            config=changed_cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+        )
+
+        assert restored.checkpoint_loaded is False
+        assert restored.checkpoint_status == "incompatible"
+        assert "hidden_dim" in (restored.checkpoint_last_error or "")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        planner_state_kind="spatial_material",
+        spatial_grid_size=8,
+        spatial_hidden_channels=4,
+        spatial_residual_blocks=1,
+        spatial_ensemble_size=2,
+        composition_hidden_channels=4,
+        composition_latent_dim=4,
+        batch_size=1,
+    )
+    root = Path("runs/test_driver_checkpoint_spatial")
+    shutil.rmtree(root, ignore_errors=True)
+    path = root / "spatial_weights.pt"
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+        checkpoint_path=path,
+    )
+    action = StrokeAction(0.2, 0.3, 0.7, 0.5, 0.08, 0.7, 1.0)
+    before = driver._planner_state(sim)
+    execute_stroke_action(sim, action, dt=1.0 / 120.0)
+    after = driver._planner_state(sim)
+    driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+    driver.trained_transitions = 1
+    with torch.no_grad():
+        for parameter in driver.agent.dynamics.parameters():
+            parameter.add_(0.05)
+    expected = [parameter.detach().clone() for parameter in driver.agent.dynamics.parameters()]
+
+    try:
+        driver._save_checkpoint_if_due(force=True)
+        restored = ArmActiveInferenceDriver(
+            config=cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+        )
+
+        assert restored.checkpoint_loaded is True
+        assert restored.trained_transitions == 1
+        assert len(restored.agent.replay) == 1
+        assert len(restored.agent.composition_replay) == 1
+        for expected_parameter, restored_parameter in zip(expected, restored.agent.dynamics.parameters()):
+            assert torch.allclose(expected_parameter, restored_parameter)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_spatial_material_driver_can_use_dense_grid_transition_mode() -> None:

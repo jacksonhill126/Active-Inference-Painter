@@ -263,6 +263,9 @@ async function pollState() {
       "Planner status",
       state.agent?.planning ? `running ${num(state.agent?.currentPlanningSeconds)} s` : (state.agent?.plannerError || "idle")
     ),
+    row("Checkpoint", checkpointLabel(state.agent?.checkpoint)),
+    row("Checkpoint save", state.agent?.checkpoint?.lastSaved || "-"),
+    row("Checkpoint issue", state.agent?.checkpoint?.lastError || "-"),
     row("Telemetry samples", `${telemetryLog.sampleCount ?? 0} / ${telemetryLog.maxSamples ?? "-"}`),
     row("Telemetry window", `${num(telemetryLog.windowSeconds)} s`),
     row("Telemetry rate", `${num(telemetryLog.estimatedSampleHz)} Hz`),
@@ -357,6 +360,12 @@ function num(value) {
 
 function pct(value) {
   return Number.isFinite(value) ? `${(100 * value).toFixed(1)}%` : "—";
+}
+
+function checkpointLabel(checkpoint) {
+  if (!checkpoint || !checkpoint.path) return "disabled";
+  const loaded = checkpoint.loaded ? "loaded" : "cold";
+  return `${checkpoint.status || "unknown"} (${loaded}, every ${checkpoint.saveEveryTransitions ?? 1})`;
 }
 
 function agentPhaseLabel(agent) {

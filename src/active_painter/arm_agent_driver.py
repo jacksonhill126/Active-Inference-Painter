@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
 import threading
 import time
 from typing import Any, Callable
@@ -85,6 +86,8 @@ class ArmActiveInferenceDriver:
     )
     bootstrap_transitions: int = 96
     bootstrap_train_steps: int = 180
+    checkpoint_path: Path | str | None = None
+    checkpoint_save_every_transitions: int = 1
     enabled: bool = True
     on_stop: Callable[[], None] | None = None
     agent: ActiveInferencePainter | SpatialActiveInferencePainter = field(init=False)
@@ -97,6 +100,11 @@ class ArmActiveInferenceDriver:
     trained_transitions: int = field(default=0, init=False)
     last_training_loss: float | None = field(default=None, init=False)
     last_training_seconds: float = field(default=0.0, init=False)
+    checkpoint_status: str = field(default="disabled", init=False)
+    checkpoint_loaded: bool = field(default=False, init=False)
+    checkpoint_last_saved: str | None = field(default=None, init=False)
+    checkpoint_last_error: str | None = field(default=None, init=False)
+    checkpoint_architecture: dict[str, object] = field(default_factory=dict, init=False)
     last_stop_blocked: bool = field(default=False, init=False)
     last_execution_forecast: ExecutionForecast | None = field(default=None, init=False)
     last_motor_rejections: int = field(default=0, init=False)
@@ -142,8 +150,11 @@ class ArmActiveInferenceDriver:
         else:
             self.agent = ActiveInferencePainter(self.config, seed=17, device="cpu")
         self.belief = self.agent.belief
-        if self.bootstrap_transitions > 0:
+        self.checkpoint_architecture = self._checkpoint_architecture_metadata()
+        loaded = self._load_checkpoint_if_available()
+        if self.bootstrap_transitions > 0 and not loaded:
             self.bootstrap_dynamics()
+            self._save_checkpoint_if_due(force=True)
 
     def bootstrap_dynamics(self) -> None:
         sim = ArmPainterSim(replace(self.config))
@@ -162,6 +173,164 @@ class ArmActiveInferenceDriver:
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
         if len(self.agent.replay) >= self.config.batch_size:
             self.last_training_loss = self.agent.train_dynamics(gradient_steps=self.bootstrap_train_steps)
+
+    def _checkpoint_architecture_metadata(self) -> dict[str, object]:
+        cfg = self.config
+        return {
+            "schema_version": 1,
+            "agent_kind": "spatial_material" if self._uses_spatial_planner() else "summary",
+            "state_dim": cfg.state_dim,
+            "action_dim": cfg.action_dim,
+            "planner_state_kind": cfg.planner_state_kind,
+            "spatial_grid_size": cfg.spatial_grid_size,
+            "material_pyramid_levels": tuple(cfg.material_pyramid_levels),
+            "spatial_material_channels": cfg.spatial_material_channels,
+            "spatial_action_channels": cfg.spatial_action_channels,
+            "spatial_transition_mode": cfg.spatial_transition_mode,
+            "spatial_hidden_channels": cfg.spatial_hidden_channels,
+            "spatial_residual_blocks": cfg.spatial_residual_blocks,
+            "spatial_ensemble_size": cfg.spatial_ensemble_size,
+            "ensemble_size": cfg.ensemble_size,
+            "hidden_dim": cfg.hidden_dim,
+            "composition_enabled": bool(
+                self._uses_spatial_planner() and cfg.composition_gap_precision > 0.0
+            ),
+            "composition_latent_dim": cfg.composition_latent_dim,
+            "composition_hidden_channels": cfg.composition_hidden_channels,
+            "motor_realization_kinds": tuple(cfg.motor_realization_kinds),
+            "thickness_scale": cfg.thickness_scale,
+            "canvas_ground_tone": cfg.canvas_ground_tone,
+        }
+
+    def _checkpoint_file(self) -> Path | None:
+        if self.checkpoint_path is None:
+            self.checkpoint_status = "disabled"
+            return None
+        return Path(self.checkpoint_path)
+
+    def _load_checkpoint_if_available(self) -> bool:
+        path = self._checkpoint_file()
+        if path is None:
+            return False
+        if not path.is_file():
+            self.checkpoint_status = "not_found"
+            return False
+        try:
+            try:
+                payload = torch.load(path, map_location=self.agent.device, weights_only=False)
+            except TypeError:
+                payload = torch.load(path, map_location=self.agent.device)
+            if not isinstance(payload, dict):
+                raise ValueError("checkpoint payload is not a dictionary")
+            expected = self._checkpoint_architecture_metadata()
+            found = payload.get("architecture")
+            if found != expected:
+                self.checkpoint_status = "incompatible"
+                self.checkpoint_last_error = self._checkpoint_mismatch_summary(found, expected)
+                return False
+            self.agent.dynamics.load_state_dict(payload["dynamics_state"])
+            if "optimizer_state" in payload:
+                self.agent.optimizer.load_state_dict(payload["optimizer_state"])
+            self._restore_replay(self.agent.replay, payload.get("replay"))
+            if (
+                isinstance(self.agent, SpatialActiveInferencePainter)
+                and self.agent.composition is not None
+                and payload.get("composition_state") is not None
+            ):
+                self.agent.composition.load_state_dict(payload["composition_state"])
+                if (
+                    self.agent.composition_optimizer is not None
+                    and payload.get("composition_optimizer_state") is not None
+                ):
+                    self.agent.composition_optimizer.load_state_dict(payload["composition_optimizer_state"])
+                self.agent.last_composition_loss = payload.get("last_composition_loss")
+            if isinstance(self.agent, SpatialActiveInferencePainter):
+                self._restore_replay(self.agent.composition_replay, payload.get("composition_replay"))
+            self.trained_transitions = int(payload.get("trained_transitions", 0))
+            self.last_training_loss = payload.get("last_training_loss")
+            self.checkpoint_loaded = True
+            self.checkpoint_status = "loaded"
+            self.checkpoint_last_error = None
+            return True
+        except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
+            self.checkpoint_status = "load_failed"
+            self.checkpoint_last_error = repr(exc)
+            return False
+
+    def _save_checkpoint_if_due(self, *, force: bool = False) -> None:
+        path = self._checkpoint_file()
+        if path is None:
+            return
+        if self.checkpoint_status in {"incompatible", "load_failed"} and not self.checkpoint_loaded:
+            return
+        interval = max(1, int(self.checkpoint_save_every_transitions))
+        if not force and self.trained_transitions % interval != 0:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload: dict[str, object] = {
+                "schema_version": 1,
+                "architecture": self._checkpoint_architecture_metadata(),
+                "config": asdict(self.config),
+                "trained_transitions": self.trained_transitions,
+                "last_training_loss": self.last_training_loss,
+                "dynamics_state": self.agent.dynamics.state_dict(),
+                "optimizer_state": self.agent.optimizer.state_dict(),
+                "replay": self._replay_snapshot(self.agent.replay),
+            }
+            if isinstance(self.agent, SpatialActiveInferencePainter):
+                payload["composition_replay"] = self._replay_snapshot(self.agent.composition_replay)
+                payload["last_composition_loss"] = self.agent.last_composition_loss
+                if self.agent.composition is not None:
+                    payload["composition_state"] = self.agent.composition.state_dict()
+                if self.agent.composition_optimizer is not None:
+                    payload["composition_optimizer_state"] = self.agent.composition_optimizer.state_dict()
+            temp_path = path.with_name(f"{path.name}.tmp")
+            torch.save(payload, temp_path)
+            temp_path.replace(path)
+            self.checkpoint_status = "saved"
+            self.checkpoint_last_saved = str(path)
+            self.checkpoint_last_error = None
+        except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
+            self.checkpoint_status = "save_failed"
+            self.checkpoint_last_error = repr(exc)
+
+    @staticmethod
+    def _replay_snapshot(replay: object) -> dict[str, object] | None:
+        data = getattr(replay, "data", None)
+        if data is None:
+            return None
+        return {
+            "data": list(data),
+            "maxlen": getattr(data, "maxlen", None),
+        }
+
+    @staticmethod
+    def _restore_replay(replay: object, snapshot: object) -> None:
+        if not isinstance(snapshot, dict) or not hasattr(replay, "data"):
+            return
+        data = getattr(replay, "data")
+        maxlen = getattr(data, "maxlen", None)
+        restored = list(snapshot.get("data", []))
+        data.clear()
+        if maxlen is not None:
+            restored = restored[-int(maxlen):]
+        data.extend(restored)
+
+    @staticmethod
+    def _checkpoint_mismatch_summary(found: object, expected: dict[str, object]) -> str:
+        if not isinstance(found, dict):
+            return "checkpoint has no architecture metadata"
+        changed = [
+            f"{key}: checkpoint={found.get(key)!r}, current={value!r}"
+            for key, value in expected.items()
+            if found.get(key) != value
+        ]
+        extra = [f"{key}: checkpoint={value!r}, current=<missing>" for key, value in found.items() if key not in expected]
+        details = changed + extra
+        if not details:
+            return "architecture metadata differs"
+        return "; ".join(details[:6])
 
     def reset(self, sim: ArmPainterSim) -> None:
         with self._planner_lock:
@@ -570,6 +739,7 @@ class ArmActiveInferenceDriver:
                 train_started = time.perf_counter()
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
                 self.last_training_seconds = time.perf_counter() - train_started
+                self._save_checkpoint_if_due()
                 with self._planner_lock:
                     self.last_planning_profile = {
                         **self.last_planning_profile,
@@ -1147,6 +1317,15 @@ class ArmActiveInferenceDriver:
             "currentPlanningSeconds": self._current_planning_seconds(),
             "planningProfile": dict(self.last_planning_profile),
             "lastTrainingSeconds": self.last_training_seconds,
+            "checkpoint": {
+                "path": str(self.checkpoint_path) if self.checkpoint_path is not None else None,
+                "status": self.checkpoint_status,
+                "loaded": self.checkpoint_loaded,
+                "lastSaved": self.checkpoint_last_saved,
+                "lastError": self.checkpoint_last_error,
+                "saveEveryTransitions": self.checkpoint_save_every_transitions,
+                "architecture": dict(self.checkpoint_architecture),
+            },
             "postStrokeRetractRemaining": self._post_stroke_retract_remaining,
             "planningScope": self._planning_scope(),
             "holdScope": self._hold_scope,

@@ -155,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--telemetry-sample-hz", type=float, default=15.0)
     parser.add_argument("--driver-bootstrap-transitions", type=int, default=None)
     parser.add_argument("--driver-bootstrap-train-steps", type=int, default=None)
+    parser.add_argument("--checkpoint-path", default=None)
+    parser.add_argument("--checkpoint-save-every-transitions", type=int, default=1)
     return parser
 
 
@@ -197,6 +199,8 @@ def main() -> None:
         telemetry_sample_period=1.0 / args.telemetry_sample_hz if args.telemetry_sample_hz > 0 else 0.0,
         driver_bootstrap_transitions=bootstrap_transitions,
         driver_bootstrap_train_steps=bootstrap_train_steps,
+        checkpoint_path=args.checkpoint_path,
+        checkpoint_save_every_transitions=args.checkpoint_save_every_transitions,
     )
     server = bind_server(args.host, args.port, PainterRequestHandler)
     server.runtime = runtime

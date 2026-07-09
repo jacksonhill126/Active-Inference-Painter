@@ -106,6 +106,42 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert summary.port == 8017
     assert summary.telemetry_max_samples == 54_000
     assert summary.telemetry_sample_hz == 15.0
+    assert summary.checkpoint_path is None
+    assert summary.checkpoint_save_every_transitions == 1
+
+
+def test_web_server_exposes_checkpoint_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--checkpoint-path",
+            "runs/web/checkpoints/latest.pt",
+            "--checkpoint-save-every-transitions",
+            "5",
+        ]
+    )
+
+    assert args.checkpoint_path == "runs/web/checkpoints/latest.pt"
+    assert args.checkpoint_save_every_transitions == 5
+
+
+def test_web_runtime_wires_checkpoint_path() -> None:
+    root = Path("runs/test_web_runtime_checkpoint")
+    shutil.rmtree(root, ignore_errors=True)
+    path = root / "viewer_weights.pt"
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        checkpoint_path=path,
+        checkpoint_save_every_transitions=3,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    checkpoint = runtime.state()["agent"]["checkpoint"]
+
+    assert checkpoint["path"] == str(path)
+    assert checkpoint["status"] == "not_found"
+    assert checkpoint["saveEveryTransitions"] == 3
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def test_web_server_falls_back_when_requested_port_is_busy() -> None:
@@ -256,6 +292,7 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "currentPlanningSeconds" in main_js
     assert "planningProfile" in main_js
     assert "Plan base EFE" in main_js
+    assert "Checkpoint" in main_js
     assert "retentionPolicy" in main_js
 
 
