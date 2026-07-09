@@ -92,10 +92,11 @@ class PainterConfig:
     passage_local_retract_seconds: float = 0.12
     passage_center_retract_seconds: float = 0.65
     global_planning_retract_depth: float = 4.0
-    global_planning_park_x_fraction: float = -0.62
+    global_planning_park_x_fraction: float = 0.0
     local_passage_retract_depth: float = 1.0
-    hold_damping_multiplier: float = 2.5
-    hold_target_joint_speed_deg_s: float = 180.0
+    hold_damping_multiplier: float = 3.5
+    hold_target_joint_speed_deg_s: float = 60.0
+    hold_target_joint_accel_deg_s2: float = 140.0
     contact_release_pressure_threshold: float = 0.05
     contact_release_joint_speed_deg_s: float = 720.0
     background_planner_yield_seconds: float = 0.0005

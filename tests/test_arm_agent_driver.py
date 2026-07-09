@@ -354,7 +354,7 @@ def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
     driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
     driver.planning = True
 
-    for _ in range(160):
+    for _ in range(240):
         driver.step(sim, 1.0 / 240.0)
         sim.step(1.0 / 240.0)
     held_target = sim.target_pose
@@ -378,7 +378,7 @@ def test_global_hold_escapes_canvas_contact_before_center_translation() -> None:
     sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 0.0)
 
     initial_pressure = sim.contact.pressure
-    for _ in range(80):
+    for _ in range(160):
         driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
         sim.step(1.0 / 240.0)
 
@@ -392,7 +392,7 @@ def test_global_hold_targets_visible_planning_clearance() -> None:
     sim = ArmPainterSim(cfg)
     driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
-    for _ in range(80):
+    for _ in range(160):
         driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
         sim.step(1.0 / 240.0)
     target_tip = sim.kinematics.tip(sim.target_pose)
@@ -400,7 +400,8 @@ def test_global_hold_targets_visible_planning_clearance() -> None:
 
     assert float(target_tip[1]) <= sim.canvas.distance - 3.5
     assert float(actual_tip[1]) <= sim.canvas.distance - 1.5
-    assert not sim.canvas.contains(float(target_tip[0]), float(target_tip[2]))
+    assert abs(float(target_tip[0])) < 0.1
+    assert abs(float(target_tip[2])) < 0.1
 
 
 def test_driver_reports_current_background_planning_elapsed_time() -> None:
@@ -452,6 +453,39 @@ def test_hold_contact_release_immediately_reduces_pressed_canvas_state() -> None
     assert sim.contact.pressure < initial_pressure
     assert float(sim.kinematics.tip(sim.actual_pose)[1]) < initial_tip_y
     assert driver.diagnostics()["contactReleaseCount"] == 1
+
+
+def test_contact_release_does_not_jump_target_to_final_rest_pose() -> None:
+    cfg = PainterConfig(canvas_size=48)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    sim.actual_pose = ArmPose(yaw=12.264818812595841, pitch=-51.50472268128021, roll=0.0, elbow=92.52234156319845)
+    sim.target_pose = sim.actual_pose
+    sim.plant.reset_state(sim.actual_pose)
+    sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 0.0)
+    final_rest = driver._global_hold_pose(sim)
+
+    driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+
+    assert sim.target_pose != final_rest
+    assert abs(sim.target_pose.pitch - sim.actual_pose.pitch) < 0.01
+    assert abs(sim.target_pose.elbow - sim.actual_pose.elbow) < 0.01
+
+
+def test_hold_rest_target_is_acceleration_limited() -> None:
+    cfg = PainterConfig(canvas_size=48, hold_target_joint_speed_deg_s=80.0, hold_target_joint_accel_deg_s2=220.0)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    initial_target = sim.target_pose
+
+    driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+    first_target = sim.target_pose
+    driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+    second_target = sim.target_pose
+
+    assert abs(first_target.pitch - initial_target.pitch) < 0.01
+    assert abs(second_target.pitch - first_target.pitch) < 0.02
+    assert abs(second_target.elbow - first_target.elbow) < 0.02
 
 
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:

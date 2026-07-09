@@ -12,7 +12,7 @@ import torch
 from .action_encoding import encoded_action_vector
 from .agent import ActiveInferencePainter
 from .arm_control import ik_pose_for_canvas_point
-from .arm_sim import ArmPainterSim, ArmPose
+from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES
 from .config import PainterConfig
 from .efe import EFEComponents
 from .env import StrokeAction
@@ -121,6 +121,8 @@ class ArmActiveInferenceDriver:
     ] | None = field(default=None, init=False)
     _post_stroke_retract_remaining: float = field(default=0.0, init=False)
     _hold_pose: ArmPose | None = field(default=None, init=False)
+    _hold_command_pose: ArmPose | None = field(default=None, init=False)
+    _hold_command_velocity: dict[str, float] = field(default_factory=dict, init=False)
     _hold_scope: str = field(default="global", init=False)
     _passage_queue: list[StrokeAction] = field(default_factory=list, init=False)
     _active_passage: PassageLatent | None = field(default=None, init=False)
@@ -182,6 +184,8 @@ class ArmActiveInferenceDriver:
             self._transition_to_learn = None
             self._post_stroke_retract_remaining = 0.0
             self._hold_pose = None
+            self._hold_command_pose = None
+            self._hold_command_velocity = {}
             self._hold_scope = "global"
             self._passage_queue = []
             self._active_passage = None
@@ -291,10 +295,43 @@ class ArmActiveInferenceDriver:
             if self._hold_pose is None or self._hold_scope != scope:
                 self._hold_scope = scope
                 self._hold_pose = self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
+                self._hold_command_pose = sim.target_pose
+                self._hold_command_velocity = dict.fromkeys(JOINT_NAMES, 0.0)
             desired = self._hold_pose
         self._apply_contact_release(sim, desired, dt)
-        max_delta = max(82.0, float(self.config.hold_target_joint_speed_deg_s)) * max(float(dt), 1.0 / 240.0)
-        sim.set_target(rate_limit_pose(desired, sim.target_pose, max_delta=max_delta))
+        sim.set_target(self._shaped_hold_target(sim, desired, dt))
+
+    def _shaped_hold_target(self, sim: ArmPainterSim, desired: ArmPose, dt: float) -> ArmPose:
+        if self._hold_command_pose is None:
+            self._hold_command_pose = sim.target_pose
+            self._hold_command_velocity = dict.fromkeys(JOINT_NAMES, 0.0)
+        dt_eff = max(float(dt), 1.0 / 240.0)
+        max_speed = max(1.0, float(self.config.hold_target_joint_speed_deg_s))
+        max_accel = max(1.0, float(self.config.hold_target_joint_accel_deg_s2))
+        values: dict[str, float] = {}
+        for name in JOINT_NAMES:
+            current = float(getattr(self._hold_command_pose, name))
+            target = float(getattr(desired, name))
+            error = target - current
+            old_velocity = float(self._hold_command_velocity.get(name, 0.0))
+            if abs(error) < 1e-6:
+                velocity = 0.0
+                value = target
+            else:
+                braking_speed = float(np.sqrt(max(0.0, 2.0 * max_accel * abs(error))))
+                desired_velocity = float(np.sign(error) * min(max_speed, braking_speed))
+                velocity_delta = float(np.clip(desired_velocity - old_velocity, -max_accel * dt_eff, max_accel * dt_eff))
+                velocity = float(np.clip(old_velocity + velocity_delta, -max_speed, max_speed))
+                step = velocity * dt_eff
+                if abs(step) >= abs(error):
+                    value = target
+                    velocity = 0.0
+                else:
+                    value = current + step
+            values[name] = value
+            self._hold_command_velocity[name] = velocity
+        self._hold_command_pose = ArmPose(**values).clipped()
+        return self._hold_command_pose
 
     def _apply_contact_release(self, sim: ArmPainterSim, desired: ArmPose, dt: float) -> None:
         threshold = max(0.0, float(self.config.contact_release_pressure_threshold))
@@ -309,7 +346,9 @@ class ArmActiveInferenceDriver:
         if release_overtravel > current_overtravel and float(release_tip[1]) >= float(tip[1]):
             return
         sim.actual_pose = release_pose
-        sim.target_pose = desired.clipped()
+        sim.target_pose = release_pose
+        self._hold_command_pose = release_pose
+        self._hold_command_velocity = dict.fromkeys(JOINT_NAMES, 0.0)
         sim.plant.reset_state(sim.actual_pose)
         sim.intended_contact_pressure = 0.0
         sim.paint_enabled = False
@@ -549,6 +588,8 @@ class ArmActiveInferenceDriver:
             self._active_passage_total_strokes = 1 + len(self._passage_queue) if self._passage_queue else 0
             self._active_passage_completed_strokes = 0
             self._hold_pose = None
+            self._hold_command_pose = None
+            self._hold_command_velocity = {}
         return False
 
     def _start_next_passage_stroke(self, sim: ArmPainterSim) -> None:
@@ -563,10 +604,14 @@ class ArmActiveInferenceDriver:
             controller=ContactAwareStrokeController(),
         )
         self._hold_pose = None
+        self._hold_command_pose = None
+        self._hold_command_velocity = {}
 
     def _execute_current(self, sim: ArmPainterSim, dt: float) -> None:
         assert self.current is not None
         ex = self.current
+        self._hold_command_pose = None
+        self._hold_command_velocity = {}
         if not ex.initialized:
             ex.timing = adaptive_stroke_timing(sim, ex.action)
             ex.controller.reset(sim, ex.action, ex.timing)
