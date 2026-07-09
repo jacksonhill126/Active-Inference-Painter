@@ -305,7 +305,12 @@ class ArmActiveInferenceDriver:
         if not np.isfinite(x) or not np.isfinite(z):
             x, z = self._active_passage_world_center(sim) if scope == "passage" else (0.0, 0.0)
         depth = self.config.local_passage_retract_depth if scope == "passage" else self.config.global_planning_retract_depth
-        return ik_pose_for_canvas_point(x, z, sim.canvas.distance - depth)
+        pose = ik_pose_for_canvas_point(x, z, sim.canvas.distance - depth)
+        tip = sim.kinematics.tip(pose)
+        min_clearance = max(0.35, 0.5 * depth)
+        if not np.all(np.isfinite(tip)) or float(tip[1]) > sim.canvas.distance - min_clearance:
+            return self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
+        return pose
 
     def _global_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
         return ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance - self.config.global_planning_retract_depth)

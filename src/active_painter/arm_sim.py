@@ -386,6 +386,11 @@ class VerticalCanvas:
     def too_deep(self, tip: np.ndarray) -> bool:
         return self.contains(float(tip[0]), float(tip[2])) and float(tip[1] - self.distance) > self.bushing_travel
 
+    def overtravel_depth(self, tip: np.ndarray) -> float:
+        if not self.contains(float(tip[0]), float(tip[2])):
+            return 0.0
+        return max(0.0, float(tip[1] - self.distance) - self.bushing_travel)
+
     def paint_at(self, brush_world: np.ndarray, pressure: float, tone: float, dt: float) -> None:
         if pressure <= 0.001 or not self.contains(float(brush_world[0]), float(brush_world[2])):
             return
@@ -448,12 +453,15 @@ class ArmPainterSim:
     def step(self, dt: float) -> None:
         previous_pose = self.actual_pose
         previous_plant_state = self.plant.state_snapshot()
+        target_pose = self.target_pose
         self.actual_pose = self.plant.step(self.actual_pose, self.target_pose, dt, contact_force=self.contact.force)
         tip = self.kinematics.tip(self.actual_pose)
-        if self.canvas.too_deep(tip):
+        previous_tip = self.kinematics.tip(previous_pose)
+        if self.canvas.too_deep(tip) and self.canvas.overtravel_depth(tip) >= self.canvas.overtravel_depth(previous_tip):
             self.actual_pose = previous_pose
-            self.target_pose = self.actual_pose
             self.plant.restore_state(previous_plant_state)
+            if self.canvas.too_deep(self.kinematics.tip(target_pose)):
+                self.target_pose = self.actual_pose
             tip = self.kinematics.tip(self.actual_pose)
         self.contact = self.canvas.contact_from_tip(tip, self.intended_contact_pressure)
         if self.paint_enabled:

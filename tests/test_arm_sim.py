@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 
+from active_painter.arm_control import ik_pose_for_canvas_point
 from active_painter.arm_sim import ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, safe_home_pose
 from active_painter.config import PainterConfig
 
@@ -128,6 +129,35 @@ def test_arm_safety_rolls_back_canvas_overtravel() -> None:
         tip = sim.kinematics.tip(sim.actual_pose)
         if sim.canvas.contains(float(tip[0]), float(tip[2])):
             assert tip[1] <= sim.canvas.distance + sim.canvas.bushing_travel + 1e-6
+
+
+def test_arm_safety_preserves_safe_retract_target_after_overtravel_rollback() -> None:
+    sim = ArmPainterSim(PainterConfig())
+    unsafe_target = ArmPose()
+    sim.set_target(unsafe_target)
+    sim.step(1.0 / 120.0)
+
+    safe_target = ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance - 4.0)
+    sim.set_target(safe_target)
+    sim.step(1.0 / 120.0)
+
+    assert sim.target_pose == safe_target
+
+
+def test_arm_safety_allows_already_overtravel_pose_to_escape_outward() -> None:
+    sim = ArmPainterSim(PainterConfig())
+    sim.actual_pose = ArmPose()
+    sim.plant.reset_state(sim.actual_pose)
+    sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 0.0)
+    safe_target = ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance - 4.0)
+    sim.set_target(safe_target)
+    initial_y = float(sim.kinematics.tip(sim.actual_pose)[1])
+
+    for _ in range(80):
+        sim.step(1.0 / 240.0)
+
+    assert sim.target_pose == safe_target
+    assert float(sim.kinematics.tip(sim.actual_pose)[1]) < initial_y
 
 
 def test_render_points_clamp_contact_tip_to_canvas_face() -> None:
