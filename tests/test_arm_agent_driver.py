@@ -354,7 +354,7 @@ def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
     driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
     driver.planning = True
 
-    for _ in range(80):
+    for _ in range(160):
         driver.step(sim, 1.0 / 240.0)
         sim.step(1.0 / 240.0)
     held_target = sim.target_pose
@@ -400,6 +400,7 @@ def test_global_hold_targets_visible_planning_clearance() -> None:
 
     assert float(target_tip[1]) <= sim.canvas.distance - 3.5
     assert float(actual_tip[1]) <= sim.canvas.distance - 1.5
+    assert not sim.canvas.contains(float(target_tip[0]), float(target_tip[2]))
 
 
 def test_driver_reports_current_background_planning_elapsed_time() -> None:
@@ -432,6 +433,25 @@ def test_hold_uses_extra_damping_and_stroke_execution_clears_it() -> None:
     driver.step(sim, 1.0 / 240.0)
 
     assert sim.control_damping_multiplier == pytest.approx(1.0)
+
+
+def test_hold_contact_release_immediately_reduces_pressed_canvas_state() -> None:
+    cfg = PainterConfig(canvas_size=48)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    sim.actual_pose = ArmPose(yaw=12.264818812595841, pitch=-51.50472268128021, roll=0.0, elbow=92.52234156319845)
+    sim.target_pose = sim.actual_pose
+    sim.plant.reset_state(sim.actual_pose)
+    sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 0.0)
+    initial_pressure = sim.contact.pressure
+    initial_tip_y = float(sim.kinematics.tip(sim.actual_pose)[1])
+
+    driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+
+    assert initial_pressure > 0.9
+    assert sim.contact.pressure < initial_pressure
+    assert float(sim.kinematics.tip(sim.actual_pose)[1]) < initial_tip_y
+    assert driver.diagnostics()["contactReleaseCount"] == 1
 
 
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:

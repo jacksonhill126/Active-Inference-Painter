@@ -222,6 +222,8 @@ class WebSimRuntime:
                 "renderTip": render_points[-1].astype(float).tolist(),
                 "contact": {
                     "onCanvas": contact.on_canvas,
+                    "projectedOnCanvas": contact.on_canvas,
+                    "touching": bool(contact.pressure > 0.001 or contact.force > 0.001),
                     "deflection": contact.deflection,
                     "force": contact.force,
                     "pressure": contact.pressure,

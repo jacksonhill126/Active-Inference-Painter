@@ -29,6 +29,8 @@ def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
     assert state["canvas"]["distance"] == 17.0
     assert len(state["points"]) == 3
     assert "pressure" in state["contact"]
+    assert state["contact"]["touching"] is False
+    assert state["contact"]["projectedOnCanvas"] == state["contact"]["onCanvas"]
     assert "yaw" in state["pose"]
     assert state["telemetryLog"]["sampleCount"] >= 1
     assert state["telemetryLog"]["csvEndpoint"] == "/api/telemetry.csv"

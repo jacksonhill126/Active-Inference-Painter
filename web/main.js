@@ -317,6 +317,7 @@ async function pollState() {
     ...policyRows,
     row("Coverage observation", state.canvas.coverage.toFixed(4)),
     row("Contact pressure summary", state.contact.pressure.toFixed(3)),
+    row("Contact status", state.contact.touching ? "touching" : "clear"),
     row("Force", `${state.contact.force.toFixed(2)} N`),
     row("Brush width", `${state.contact.brushWidthPx.toFixed(2)} px`),
     row("Tone", state.brushTone),

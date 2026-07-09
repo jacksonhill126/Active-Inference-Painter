@@ -127,6 +127,7 @@ class ArmActiveInferenceDriver:
     _active_passage_plan: PassagePlanLatent | None = field(default=None, init=False)
     _active_passage_total_strokes: int = field(default=0, init=False)
     _active_passage_completed_strokes: int = field(default=0, init=False)
+    _contact_release_count: int = field(default=0, init=False)
     _cached_belief_gap: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -187,6 +188,7 @@ class ArmActiveInferenceDriver:
             self._active_passage_plan = None
             self._active_passage_total_strokes = 0
             self._active_passage_completed_strokes = 0
+            self._contact_release_count = 0
         self._observe(sim)
 
     def _observe(self, sim: ArmPainterSim) -> GaussianBelief | SpatialCanvasState:
@@ -290,8 +292,29 @@ class ArmActiveInferenceDriver:
                 self._hold_scope = scope
                 self._hold_pose = self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
             desired = self._hold_pose
-        max_delta = 82.0 * max(float(dt), 1.0 / 240.0)
+        self._apply_contact_release(sim, desired, dt)
+        max_delta = max(82.0, float(self.config.hold_target_joint_speed_deg_s)) * max(float(dt), 1.0 / 240.0)
         sim.set_target(rate_limit_pose(desired, sim.target_pose, max_delta=max_delta))
+
+    def _apply_contact_release(self, sim: ArmPainterSim, desired: ArmPose, dt: float) -> None:
+        threshold = max(0.0, float(self.config.contact_release_pressure_threshold))
+        if sim.contact.pressure <= threshold:
+            return
+        tip = sim.kinematics.tip(sim.actual_pose)
+        current_overtravel = sim.canvas.overtravel_depth(tip)
+        max_delta = max(82.0, float(self.config.contact_release_joint_speed_deg_s)) * max(float(dt), 1.0 / 240.0)
+        release_pose = rate_limit_pose(desired, sim.actual_pose, max_delta=max_delta).clipped()
+        release_tip = sim.kinematics.tip(release_pose)
+        release_overtravel = sim.canvas.overtravel_depth(release_tip)
+        if release_overtravel > current_overtravel and float(release_tip[1]) >= float(tip[1]):
+            return
+        sim.actual_pose = release_pose
+        sim.target_pose = desired.clipped()
+        sim.plant.reset_state(sim.actual_pose)
+        sim.intended_contact_pressure = 0.0
+        sim.paint_enabled = False
+        sim.contact = sim.canvas.contact_from_tip(release_tip, sim.intended_contact_pressure)
+        self._contact_release_count += 1
 
     def _contact_escape_pose(self, sim: ArmPainterSim, scope: str) -> ArmPose | None:
         tip = sim.kinematics.tip(sim.actual_pose)
@@ -314,7 +337,9 @@ class ArmActiveInferenceDriver:
         return pose
 
     def _global_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
-        return ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance - self.config.global_planning_retract_depth)
+        x = float(self.config.global_planning_park_x_fraction) * sim.canvas.width
+        z = 0.0
+        return ik_pose_for_canvas_point(x, z, sim.canvas.distance - self.config.global_planning_retract_depth)
 
     def _passage_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
         x, z = self._active_passage_world_center(sim)
@@ -954,6 +979,7 @@ class ArmActiveInferenceDriver:
             "postStrokeRetractRemaining": self._post_stroke_retract_remaining,
             "planningScope": self._planning_scope(),
             "holdScope": self._hold_scope,
+            "contactReleaseCount": self._contact_release_count,
             "passageQueueLength": len(self._passage_queue),
             "activePassage": asdict(self._active_passage) if self._active_passage is not None else None,
             "activePassagePlan": asdict(self._active_passage_plan) if self._active_passage_plan is not None else None,
