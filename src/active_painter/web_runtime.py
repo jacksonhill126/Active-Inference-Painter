@@ -126,6 +126,7 @@ class WebSimRuntime:
                 return
         else:
             self.sim.paint_enabled = True
+            self.sim.control_damping_multiplier = 1.0
             self.sim.set_target(scripted_pose(self.sim_time))
             self.sim.intended_contact_pressure = scripted_contact_pressure(self.sim_time)
         self.sim.step(fixed_dt)

@@ -2,6 +2,7 @@ import json
 import time
 
 import numpy as np
+import pytest
 
 from active_painter.arm_control import ik_pose_for_canvas_point
 from active_painter.arm_agent_driver import (
@@ -410,6 +411,27 @@ def test_driver_reports_current_background_planning_elapsed_time() -> None:
     diagnostics = driver.diagnostics()
 
     assert diagnostics["currentPlanningSeconds"] >= 1.0
+
+
+def test_hold_uses_extra_damping_and_stroke_execution_clears_it() -> None:
+    cfg = PainterConfig(canvas_size=48, hold_damping_multiplier=2.5)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+
+    driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+    assert sim.control_damping_multiplier == pytest.approx(2.5)
+
+    action = StrokeAction(0.2, 0.3, 0.8, 0.7, 0.08, 0.7, 1.0)
+    efe = EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    ex = StrokeExecution(action=action, efe=efe, posterior=1.0, initial_state=canvas_summary_state(sim))
+    ex.timing = adaptive_stroke_timing(sim, action)
+    ex.controller.reset(sim, action, ex.timing)
+    ex.initialized = True
+    driver.current = ex
+
+    driver.step(sim, 1.0 / 240.0)
+
+    assert sim.control_damping_multiplier == pytest.approx(1.0)
 
 
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:

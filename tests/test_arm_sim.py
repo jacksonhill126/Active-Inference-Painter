@@ -92,6 +92,33 @@ def test_encoded_servo_hold_brakes_residual_velocity_without_drifting() -> None:
     assert plant.telemetry.encoder_angle_deg["yaw"] == pytest.approx(pose.yaw)
 
 
+def test_joint_plant_damping_multiplier_reduces_hold_ringing() -> None:
+    actual = safe_home_pose()
+    target = ArmPose(
+        yaw=actual.yaw + 20.0,
+        pitch=actual.pitch - 10.0,
+        roll=actual.roll,
+        elbow=actual.elbow - 15.0,
+    )
+    low = JointPlant()
+    high = JointPlant()
+    low.reset_state(actual)
+    high.reset_state(actual)
+    for plant in (low, high):
+        plant.velocity["yaw"] = 1.5
+        plant.velocity["pitch"] = -1.0
+        plant.velocity["elbow"] = 1.2
+    low_pose = actual
+    high_pose = actual
+
+    for _ in range(40):
+        low_pose = low.step(low_pose, target, 1.0 / 240.0, damping_multiplier=1.0)
+        high_pose = high.step(high_pose, target, 1.0 / 240.0, damping_multiplier=2.5)
+
+    assert abs(high_pose.yaw - target.yaw) < abs(low_pose.yaw - target.yaw)
+    assert abs(high.velocity["yaw"]) < abs(low.velocity["yaw"])
+
+
 def test_joint_plant_contact_load_increases_encoder_uncertainty_and_load_torque() -> None:
     unloaded = JointPlant()
     loaded = JointPlant()

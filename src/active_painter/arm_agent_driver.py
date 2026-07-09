@@ -280,6 +280,7 @@ class ArmActiveInferenceDriver:
     def _hold_retracted(self, sim: ArmPainterSim, dt: float, *, scope: str) -> None:
         sim.paint_enabled = False
         sim.intended_contact_pressure = 0.0
+        sim.control_damping_multiplier = max(1.0, float(self.config.hold_damping_multiplier))
         contact_escape = self._contact_escape_pose(sim, scope)
         if contact_escape is not None:
             self._hold_scope = scope
@@ -547,6 +548,7 @@ class ArmActiveInferenceDriver:
             ex.initialized = True
         ex.t += dt
         command = ex.controller.command(sim, ex.action, ex.t, dt, ex.timing)
+        sim.control_damping_multiplier = 1.0
         sim.set_target(command.pose)
         sim.paint_enabled = command.brush_down
         sim.intended_contact_pressure = command.intended_pressure
@@ -1136,6 +1138,7 @@ def execute_stroke_action(sim: ArmPainterSim, action: StrokeAction, dt: float = 
     while ex.t < ex.total:
         ex.t += dt
         command = ex.controller.command(sim, ex.action, ex.t, dt, ex.timing)
+        sim.control_damping_multiplier = 1.0
         sim.set_target(command.pose)
         sim.paint_enabled = command.brush_down
         sim.intended_contact_pressure = command.intended_pressure

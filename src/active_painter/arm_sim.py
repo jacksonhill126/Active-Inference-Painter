@@ -214,12 +214,20 @@ class JointPlant:
         direction = float(np.sign(link_velocity if abs(link_velocity) >= 0.015 else drive))
         return float(coulomb * direction + viscous * link_velocity)
 
-    def step(self, actual: ArmPose, target: ArmPose, dt: float, contact_force: float = 0.0) -> ArmPose:
+    def step(
+        self,
+        actual: ArmPose,
+        target: ArmPose,
+        dt: float,
+        contact_force: float = 0.0,
+        damping_multiplier: float = 1.0,
+    ) -> ArmPose:
         values: dict[str, float] = {}
         actual = actual.clipped()
         target = target.clipped()
         self._ensure_state(actual)
         contact_force = max(0.0, float(contact_force))
+        effective_damping = self.damping * max(0.0, float(damping_multiplier))
         for name in JOINT_NAMES:
             q = np.deg2rad(getattr(actual, name))
             q_target = np.deg2rad(getattr(target, name))
@@ -233,7 +241,7 @@ class JointPlant:
             command_error = q_target - measured_q
             _, backlash_deflection = self._compliance_deflection(command_error, deadband)
             voltage = np.clip(
-                self.supply_voltage * self.servo_stiffness * command_error - self.damping * measured_w,
+                self.supply_voltage * self.servo_stiffness * command_error - effective_damping * measured_w,
                 -self.supply_voltage,
                 self.supply_voltage,
             )
@@ -428,6 +436,7 @@ class ArmPainterSim:
     paint_enabled: bool = field(init=False)
     brush_tone: float = field(init=False)
     intended_contact_pressure: float = field(init=False)
+    control_damping_multiplier: float = field(init=False)
     contact: ContactState = field(init=False)
 
     def __post_init__(self) -> None:
@@ -438,6 +447,7 @@ class ArmPainterSim:
         self.paint_enabled = False
         self.brush_tone = 1.0
         self.intended_contact_pressure = 0.0
+        self.control_damping_multiplier = 1.0
         self.contact = self.canvas.contact_from_tip(self.kinematics.tip(self.actual_pose), self.intended_contact_pressure)
 
     def reset_pose(self) -> None:
@@ -446,6 +456,7 @@ class ArmPainterSim:
         self.plant.reset_state(self.actual_pose)
         self.paint_enabled = False
         self.intended_contact_pressure = 0.0
+        self.control_damping_multiplier = 1.0
 
     def set_target(self, pose: ArmPose) -> None:
         self.target_pose = pose.clipped()
@@ -454,7 +465,13 @@ class ArmPainterSim:
         previous_pose = self.actual_pose
         previous_plant_state = self.plant.state_snapshot()
         target_pose = self.target_pose
-        self.actual_pose = self.plant.step(self.actual_pose, self.target_pose, dt, contact_force=self.contact.force)
+        self.actual_pose = self.plant.step(
+            self.actual_pose,
+            self.target_pose,
+            dt,
+            contact_force=self.contact.force,
+            damping_multiplier=self.control_damping_multiplier,
+        )
         tip = self.kinematics.tip(self.actual_pose)
         previous_tip = self.kinematics.tip(previous_pose)
         if self.canvas.too_deep(tip) and self.canvas.overtravel_depth(tip) >= self.canvas.overtravel_depth(previous_tip):

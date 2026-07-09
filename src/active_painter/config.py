@@ -89,6 +89,7 @@ class PainterConfig:
     passage_center_retract_seconds: float = 0.65
     global_planning_retract_depth: float = 4.0
     local_passage_retract_depth: float = 1.0
+    hold_damping_multiplier: float = 2.5
     background_planner_yield_seconds: float = 0.0005
     stroke_tone_prior: float | None = None
     inference_steps: int = 24
