@@ -278,12 +278,32 @@ class ArmActiveInferenceDriver:
     def _hold_retracted(self, sim: ArmPainterSim, dt: float, *, scope: str) -> None:
         sim.paint_enabled = False
         sim.intended_contact_pressure = 0.0
-        if self._hold_pose is None or self._hold_scope != scope:
+        contact_escape = self._contact_escape_pose(sim, scope)
+        if contact_escape is not None:
             self._hold_scope = scope
-            self._hold_pose = self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
-        desired = self._hold_pose
+            desired = contact_escape
+        else:
+            if self._hold_pose is None or self._hold_scope != scope:
+                self._hold_scope = scope
+                self._hold_pose = self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
+            desired = self._hold_pose
         max_delta = 82.0 * max(float(dt), 1.0 / 240.0)
         sim.set_target(rate_limit_pose(desired, sim.target_pose, max_delta=max_delta))
+
+    def _contact_escape_pose(self, sim: ArmPainterSim, scope: str) -> ArmPose | None:
+        tip = sim.kinematics.tip(sim.actual_pose)
+        near_or_on_canvas = sim.contact.on_canvas and (
+            sim.contact.pressure > 0.01 or float(tip[1]) > sim.canvas.distance - 0.08
+        )
+        if not near_or_on_canvas:
+            return None
+        lateral_limit = 0.46 * min(sim.canvas.width, sim.canvas.height)
+        x = float(np.clip(tip[0], -lateral_limit, lateral_limit))
+        z = float(np.clip(tip[2], -lateral_limit, lateral_limit))
+        if not np.isfinite(x) or not np.isfinite(z):
+            x, z = self._active_passage_world_center(sim) if scope == "passage" else (0.0, 0.0)
+        depth = self.config.local_passage_retract_depth if scope == "passage" else self.config.global_planning_retract_depth
+        return ik_pose_for_canvas_point(x, z, sim.canvas.distance - depth)
 
     def _global_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
         return ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance - self.config.global_planning_retract_depth)

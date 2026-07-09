@@ -67,6 +67,20 @@ def test_web_runtime_can_enable_spatial_material_planner() -> None:
     assert state["agent"]["markEvents"]["activeCount"] >= 0
 
 
+def test_web_runtime_uses_bounded_passage_planning_budget() -> None:
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        planner_state_kind="spatial_material",
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+
+    assert runtime.agent_driver.config.planning_horizon == 5
+    assert runtime.agent_driver.config.candidate_policies == 48
+    assert runtime.agent_driver.config.motor_forecast_candidates == 3
+    assert runtime.agent_driver.config.passage_proposal_mix == 0.45
+
+
 def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     parser = build_parser()
 

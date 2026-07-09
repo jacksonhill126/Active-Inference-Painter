@@ -369,6 +369,23 @@ def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
     assert sim.target_pose == held_target
 
 
+def test_global_hold_escapes_canvas_contact_before_center_translation() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=48))
+    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    sim.actual_pose = ArmPose(yaw=-16.37, pitch=-12.56, roll=0.0, elbow=77.38)
+    sim.target_pose = sim.actual_pose
+    sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 0.0)
+
+    initial_pressure = sim.contact.pressure
+    for _ in range(80):
+        driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
+        sim.step(1.0 / 240.0)
+
+    assert initial_pressure > 0.9
+    assert sim.contact.pressure == 0.0
+    assert float(sim.kinematics.tip(sim.actual_pose)[1]) < sim.canvas.distance - 0.1
+
+
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:
     cfg = PainterConfig(canvas_size=48, post_stroke_retract_seconds=0.2)
     sim = ArmPainterSim(cfg)
