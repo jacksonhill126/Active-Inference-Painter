@@ -64,6 +64,7 @@ class LocalPatchBatch:
     action: torch.Tensor
     next_material: torch.Tensor
     mask: torch.Tensor
+    sample_indices: tuple[int, ...] = ()
 
 
 class LocalPatchReplayBuffer:
@@ -94,14 +95,52 @@ class LocalPatchReplayBuffer:
     def sample(self, batch_size: int, device: torch.device) -> LocalPatchBatch:
         indices = self.rng.integers(0, len(self.data), size=batch_size)
         transitions = [self.data[int(index)] for index in indices]
-        max_h = max(transition.bounds.height for transition in transitions)
-        max_w = max(transition.bounds.width for transition in transitions)
+        return self._make_batch(
+            list(enumerate(transitions)),
+            device,
+            max(transition.bounds.height for transition in transitions),
+            max(transition.bounds.width for transition in transitions),
+        )
+
+    def sample_buckets(
+        self,
+        batch_size: int,
+        device: torch.device,
+        bucket_cells: int,
+        sequential_cell_limit: int,
+    ) -> list[LocalPatchBatch]:
+        indices = self.rng.integers(0, len(self.data), size=batch_size)
+        sampled = [(position, self.data[int(index)]) for position, index in enumerate(indices)]
+        quantum = max(1, int(bucket_cells))
+        cell_limit = max(1, int(sequential_cell_limit))
+        buckets: dict[tuple[int, int, int], list[tuple[int, LocalPatchTransition]]] = {}
+        for position, transition in sampled:
+            bounds = transition.bounds
+            sequential = bounds.area > cell_limit
+            bucket_h = bounds.height if sequential else min(bounds.grid_size, _round_up(bounds.height, quantum))
+            bucket_w = bounds.width if sequential else min(bounds.grid_size, _round_up(bounds.width, quantum))
+            bucket_id = position + 1 if sequential else 0
+            buckets.setdefault((bucket_h, bucket_w, bucket_id), []).append((position, transition))
+        return [
+            self._make_batch(transitions, device, bucket_h, bucket_w)
+            for (bucket_h, bucket_w, _), transitions in buckets.items()
+        ]
+
+    @staticmethod
+    def _make_batch(
+        indexed_transitions: list[tuple[int, LocalPatchTransition]],
+        device: torch.device,
+        padded_height: int,
+        padded_width: int,
+    ) -> LocalPatchBatch:
+        transitions = [transition for _, transition in indexed_transitions]
+        batch_size = len(transitions)
         channels = transitions[0].material.shape[0]
         action_channels = transitions[0].action.shape[0]
-        material = np.zeros((batch_size, channels, max_h, max_w), dtype=np.float32)
-        action = np.zeros((batch_size, action_channels, max_h, max_w), dtype=np.float32)
+        material = np.zeros((batch_size, channels, padded_height, padded_width), dtype=np.float32)
+        action = np.zeros((batch_size, action_channels, padded_height, padded_width), dtype=np.float32)
         next_material = np.zeros_like(material)
-        mask = np.zeros((batch_size, 1, max_h, max_w), dtype=np.float32)
+        mask = np.zeros((batch_size, 1, padded_height, padded_width), dtype=np.float32)
         for row, transition in enumerate(transitions):
             h, w = transition.bounds.height, transition.bounds.width
             material[row, :, :h, :w] = transition.material
@@ -113,6 +152,7 @@ class LocalPatchReplayBuffer:
             action=torch.tensor(action, device=device),
             next_material=torch.tensor(next_material, device=device),
             mask=torch.tensor(mask, device=device),
+            sample_indices=tuple(position for position, _ in indexed_transitions),
         )
 
 
@@ -214,3 +254,7 @@ def _expand_interval_to_minimum(start: int, end: int, limit: int, minimum: int) 
             start = max(0, limit - minimum)
             end = limit
     return start, end
+
+
+def _round_up(value: int, quantum: int) -> int:
+    return ((int(value) + int(quantum) - 1) // int(quantum)) * int(quantum)

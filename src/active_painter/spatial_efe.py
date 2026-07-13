@@ -30,6 +30,19 @@ SpatialFirstTransition = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _ConditionedSpatialTransition:
+    transition: SpatialFirstTransition
+    execution_uncertainty: float = 0.0
+    contact_loss_probability: float = 0.0
+    motor_overshoot: float = 0.0
+    motor_feasible: bool = True
+    motor_risk: float = 0.0
+    motor_ambiguity: float = 0.0
+    motor_epistemic_value: float = 0.0
+    motor_efe_approximation: str = ""
+
+
 class SpatialTransitionModel(Protocol):
     def predictive_moments(
         self,
@@ -214,6 +227,73 @@ class SpatialExpectedFreeEnergy:
             motor_efe_approximation=motor_efe_approximation,
         )
 
+    @torch.no_grad()
+    def evaluate_batch_with_first_transitions(
+        self,
+        belief: SpatialCanvasState,
+        policies: Sequence[Policy],
+        first_transitions: Sequence[SpatialFirstTransition],
+        *,
+        execution_uncertainties: Sequence[float],
+        contact_loss_probabilities: Sequence[float],
+        motor_overshoots: Sequence[float],
+        motor_feasibilities: Sequence[bool],
+        motor_risks: Sequence[float],
+        motor_ambiguities: Sequence[float],
+        motor_epistemic_values: Sequence[float],
+        motor_efe_approximations: Sequence[str],
+    ) -> list[SpatialEFEComponents]:
+        policies = list(policies)
+        values: tuple[Sequence[object], ...] = (
+            first_transitions,
+            execution_uncertainties,
+            contact_loss_probabilities,
+            motor_overshoots,
+            motor_feasibilities,
+            motor_risks,
+            motor_ambiguities,
+            motor_epistemic_values,
+            motor_efe_approximations,
+        )
+        if any(len(sequence) != len(policies) for sequence in values):
+            raise ValueError("Conditioned transition inputs must align with candidate policies.")
+        contexts = [
+            _ConditionedSpatialTransition(
+                transition=first_transitions[index],
+                execution_uncertainty=float(execution_uncertainties[index]),
+                contact_loss_probability=float(contact_loss_probabilities[index]),
+                motor_overshoot=float(motor_overshoots[index]),
+                motor_feasible=bool(motor_feasibilities[index]),
+                motor_risk=float(motor_risks[index]),
+                motor_ambiguity=float(motor_ambiguities[index]),
+                motor_epistemic_value=float(motor_epistemic_values[index]),
+                motor_efe_approximation=str(motor_efe_approximations[index]),
+            )
+            for index in range(len(policies))
+        ]
+        if self._uses_local_patch_rollout(belief) and isinstance(self.dynamics, SpatialDynamicsEnsemble):
+            return self._evaluate_local_ensemble_batch(
+                belief,
+                policies,
+                transition_contexts=contexts,
+            )
+        return [
+            self._evaluate(
+                belief,
+                policy,
+                first_transition=context.transition,
+                execution_uncertainty=context.execution_uncertainty,
+                contact_loss_probability=context.contact_loss_probability,
+                motor_overshoot=context.motor_overshoot,
+                motor_feasible=context.motor_feasible,
+                motor_risk=context.motor_risk,
+                motor_ambiguity=context.motor_ambiguity,
+                motor_epistemic_value=context.motor_epistemic_value,
+                motor_efe_approximation=context.motor_efe_approximation,
+            )
+            for policy, context in zip(policies, contexts)
+        ]
+
     def _evaluate(
         self,
         belief: SpatialCanvasState,
@@ -304,9 +384,31 @@ class SpatialExpectedFreeEnergy:
         motor_ambiguity: float = 0.0,
         motor_epistemic_value: float = 0.0,
         motor_efe_approximation: str = "",
+        transition_contexts: Sequence[_ConditionedSpatialTransition | None] | None = None,
     ) -> list[SpatialEFEComponents]:
+        if first_transition is not None and transition_contexts is not None:
+            raise ValueError("Use either a single first transition or aligned transition contexts.")
         if first_transition is not None and len(policies) != 1:
             raise ValueError("An execution-forecast first transition applies to a single policy.")
+        if transition_contexts is not None and len(transition_contexts) != len(policies):
+            raise ValueError("Conditioned transition contexts must align with candidate policies.")
+        if transition_contexts is None:
+            transition_contexts = [
+                _ConditionedSpatialTransition(
+                    transition=first_transition,
+                    execution_uncertainty=execution_uncertainty,
+                    contact_loss_probability=contact_loss_probability,
+                    motor_overshoot=motor_overshoot,
+                    motor_feasible=motor_feasible,
+                    motor_risk=motor_risk,
+                    motor_ambiguity=motor_ambiguity,
+                    motor_epistemic_value=motor_epistemic_value,
+                    motor_efe_approximation=motor_efe_approximation,
+                )
+                if first_transition is not None
+                else None
+            ] + [None] * max(0, len(policies) - 1)
+        transition_contexts = list(transition_contexts)
 
         device = self.device
         policy_count = len(policies)
@@ -329,44 +431,50 @@ class SpatialExpectedFreeEnergy:
         local_steps = [0 for _ in policies]
         sequential_steps = [0 for _ in policies]
         depths = [len(policy.actions) - 1 for policy in policies]
-        first_transition_used = first_transition is not None and not policies[0].actions[0].stop
-        forecast_mean: torch.Tensor | None = None
-        forecast_variance: torch.Tensor | None = None
-        forecast_delta: torch.Tensor | None = None
-        if first_transition_used:
-            forecast_mean, forecast_variance = self._transition_to_rollout_grid(
-                first_transition,
-                channels,
-                height,
-                width,
-            )
-            if len(first_transition) == 3:
-                forecast_delta = self._field_to_grid(first_transition[2], channels, height, width)
+        first_transition_used = [
+            context is not None and not policy.actions[0].stop
+            for policy, context in zip(policies, transition_contexts)
+        ]
 
         for step in range(max(depths, default=0)):
-            if first_transition_used and step == 0:
-                policy = policies[0]
-                action = policy.actions[0]
-                raster = rasterize_stroke_action(
-                    action,
-                    width,
-                    motor_primitive=policy.motor_primitive,
-                    config=self.cfg,
-                )
-                assert forecast_mean is not None and forecast_variance is not None
-                changed_source = forecast_delta if forecast_delta is not None else forecast_mean - material
-                changed = changed_source.abs().sum(dim=0) > 1e-8
-                support_raster = raster.copy()
-                support_raster[0] = np.maximum(
-                    support_raster[0],
-                    changed.detach().cpu().numpy().astype(support_raster.dtype),
-                )
-                bounds = local_patch_bounds_for_raster(support_raster, width, self.cfg)
-                if bounds is not None:
+            if step == 0:
+                for policy_index, used in enumerate(first_transition_used):
+                    if not used:
+                        continue
+                    context = transition_contexts[policy_index]
+                    assert context is not None
+                    forecast_mean, forecast_variance = self._transition_to_rollout_grid(
+                        context.transition,
+                        channels,
+                        height,
+                        width,
+                    )
+                    forecast_delta = (
+                        self._field_to_grid(context.transition[2], channels, height, width)
+                        if len(context.transition) == 3
+                        else None
+                    )
+                    policy = policies[policy_index]
+                    raster = rasterize_stroke_action(
+                        policy.actions[0],
+                        width,
+                        motor_primitive=policy.motor_primitive,
+                        config=self.cfg,
+                    )
+                    changed_source = forecast_delta if forecast_delta is not None else forecast_mean - material
+                    changed = changed_source.abs().sum(dim=0) > 1e-8
+                    support_raster = raster.copy()
+                    support_raster[0] = np.maximum(
+                        support_raster[0],
+                        changed.detach().cpu().numpy().astype(support_raster.dtype),
+                    )
+                    bounds = local_patch_bounds_for_raster(support_raster, width, self.cfg)
+                    if bounds is None:
+                        continue
                     if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
-                        sequential_steps[0] += 1
+                        sequential_steps[policy_index] += 1
                     row_slice, col_slice = bounds.slices()
-                    current_patch, _ = sparse_states[0].extract(bounds)
+                    current_patch, _ = sparse_states[policy_index].extract(bounds)
                     proposed_patch = forecast_mean[:, row_slice, col_slice].unsqueeze(0).expand_as(current_patch)
                     next_patch = project_material_support(
                         current_patch,
@@ -384,24 +492,25 @@ class SpatialExpectedFreeEnergy:
                     epistemic_variance = next_patch.var(dim=0, unbiased=False)
                     marginal_entropy = self._scaled_normal_entropy(aleatoric + epistemic_variance, full_area)
                     conditional_entropy = self._scaled_normal_entropy(selected_within, full_area).mean()
-                    transition_risk[0] = transition_risk[0] - marginal_entropy
-                    transition_ambiguity[0] = transition_ambiguity[0] + conditional_entropy
-                    epistemic_value[0] = epistemic_value[0] + torch.clamp(
+                    transition_risk[policy_index] = transition_risk[policy_index] - marginal_entropy
+                    transition_ambiguity[policy_index] = transition_ambiguity[policy_index] + conditional_entropy
+                    epistemic_value[policy_index] = epistemic_value[policy_index] + torch.clamp(
                         marginal_entropy - conditional_entropy,
                         min=0.0,
                     )
-                    sparse_states[0].append(bounds, next_patch, selected_within)
-                    touched[0, row_slice, col_slice] = True
-                    local_steps[0] += 1
-                    ambiguity[0] = ambiguity[0] + self._observation_ambiguity_scaled(
+                    sparse_states[policy_index].append(bounds, next_patch, selected_within)
+                    touched[policy_index, row_slice, col_slice] = True
+                    local_steps[policy_index] += 1
+                    ambiguity[policy_index] = ambiguity[policy_index] + self._observation_ambiguity_scaled(
                         next_patch,
                         full_area,
                     ).mean()
-                continue
 
             specs: list[tuple[int, object, torch.Tensor]] = []
             for policy_index, policy in enumerate(policies):
                 if depths[policy_index] <= step:
+                    continue
+                if step == 0 and first_transition_used[policy_index]:
                     continue
                 action = policy.actions[step]
                 raster = rasterize_stroke_action(
@@ -422,11 +531,14 @@ class SpatialExpectedFreeEnergy:
                 continue
 
             buckets: dict[tuple[int, int, int], list[tuple[int, LocalPatchBounds, torch.Tensor]]] = {}
+            bucket_cells = max(1, int(self.cfg.local_patch_batch_bucket_cells))
             for spec in specs:
                 policy_index, bounds, _ = spec
                 sequential = bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit)
                 bucket_id = policy_index + 1 if sequential else 0
-                buckets.setdefault((bounds.height, bounds.width, bucket_id), []).append(spec)
+                bucket_h = bounds.height if sequential else min(height, self._round_up(bounds.height, bucket_cells))
+                bucket_w = bounds.width if sequential else min(width, self._round_up(bounds.width, bucket_cells))
+                buckets.setdefault((bucket_h, bucket_w, bucket_id), []).append(spec)
 
             for (bucket_h, bucket_w, _), bucket_specs in buckets.items():
                 patch_count = len(bucket_specs)
@@ -441,25 +553,54 @@ class SpatialExpectedFreeEnergy:
                     device=device,
                     dtype=material.dtype,
                 )
+                mask_batch = torch.zeros(
+                    (member_count, patch_count, 1, bucket_h, bucket_w),
+                    device=device,
+                    dtype=material.dtype,
+                )
                 for spec_index, (policy_index, bounds, action_raster) in enumerate(bucket_specs):
                     patch_mean, _ = sparse_states[policy_index].extract(bounds)
-                    state_batch[:, spec_index] = patch_mean
-                    action_batch[:, spec_index] = action_raster.unsqueeze(0).expand(member_count, -1, -1, -1)
+                    patch_rows = slice(0, bounds.height)
+                    patch_cols = slice(0, bounds.width)
+                    state_batch[:, spec_index, :, patch_rows, patch_cols] = patch_mean
+                    action_batch[:, spec_index, :, patch_rows, patch_cols] = action_raster.unsqueeze(0).expand(
+                        member_count,
+                        -1,
+                        -1,
+                        -1,
+                    )
+                    mask_batch[:, spec_index, :, patch_rows, patch_cols] = 1.0
 
                 means_by_member: list[torch.Tensor] = []
                 logvars_by_member: list[torch.Tensor] = []
                 for member_index, member in enumerate(self.dynamics.members):
-                    means, logvars = member(state_batch[member_index], action_batch[member_index])
+                    if hasattr(member, "forward_masked"):
+                        means, logvars = member.forward_masked(
+                            state_batch[member_index],
+                            action_batch[member_index],
+                            mask_batch[member_index],
+                        )
+                    else:
+                        means, logvars = member(
+                            state_batch[member_index] * mask_batch[member_index],
+                            action_batch[member_index] * mask_batch[member_index],
+                        )
                     means_by_member.append(means)
                     logvars_by_member.append(logvars)
 
                 for spec_index, (policy_index, bounds, _) in enumerate(bucket_specs):
                     next_patch = torch.stack(
-                        [means_by_member[member_index][spec_index] for member_index in range(member_count)],
+                        [
+                            means_by_member[member_index][spec_index, :, : bounds.height, : bounds.width]
+                            for member_index in range(member_count)
+                        ],
                         dim=0,
                     )
                     selected_within = torch.stack(
-                        [logvars_by_member[member_index][spec_index].exp() for member_index in range(member_count)],
+                        [
+                            logvars_by_member[member_index][spec_index, :, : bounds.height, : bounds.width].exp()
+                            for member_index in range(member_count)
+                        ],
                         dim=0,
                     ).clamp(min=1e-8)
 
@@ -504,20 +645,29 @@ class SpatialExpectedFreeEnergy:
         transition_risk = self.cfg.transition_precision * transition_risk
         transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
         epistemic_value = self.cfg.transition_precision * epistemic_value
-        motor_risk_t = torch.full(
-            (policy_count,),
-            float(motor_risk if first_transition_used else 0.0),
+        motor_risk_t = torch.tensor(
+            [
+                context.motor_risk if used and context is not None else 0.0
+                for context, used in zip(transition_contexts, first_transition_used)
+            ],
             device=device,
+            dtype=material.dtype,
         )
-        motor_ambiguity_t = torch.full(
-            (policy_count,),
-            float(motor_ambiguity if first_transition_used else 0.0),
+        motor_ambiguity_t = torch.tensor(
+            [
+                context.motor_ambiguity if used and context is not None else 0.0
+                for context, used in zip(transition_contexts, first_transition_used)
+            ],
             device=device,
+            dtype=material.dtype,
         )
-        motor_epistemic_t = torch.full(
-            (policy_count,),
-            float(motor_epistemic_value if first_transition_used else 0.0),
+        motor_epistemic_t = torch.tensor(
+            [
+                context.motor_epistemic_value if used and context is not None else 0.0
+                for context, used in zip(transition_contexts, first_transition_used)
+            ],
             device=device,
+            dtype=material.dtype,
         )
         total = (
             terminal_risk
@@ -547,15 +697,35 @@ class SpatialExpectedFreeEnergy:
                 composition_risk=float(composition_risk[index].item()),
                 grid_size=belief.grid_size,
                 material_channels=channels,
-                execution_uncertainty=execution_uncertainty if first_transition_used else 0.0,
-                contact_loss_probability=contact_loss_probability if first_transition_used else 0.0,
-                motor_overshoot=motor_overshoot if first_transition_used else 0.0,
+                execution_uncertainty=(
+                    transition_contexts[index].execution_uncertainty
+                    if first_transition_used[index] and transition_contexts[index] is not None
+                    else 0.0
+                ),
+                contact_loss_probability=(
+                    transition_contexts[index].contact_loss_probability
+                    if first_transition_used[index] and transition_contexts[index] is not None
+                    else 0.0
+                ),
+                motor_overshoot=(
+                    transition_contexts[index].motor_overshoot
+                    if first_transition_used[index] and transition_contexts[index] is not None
+                    else 0.0
+                ),
                 motor_risk=float(motor_risk_t[index].item()),
                 motor_ambiguity=float(motor_ambiguity_t[index].item()),
                 motor_epistemic_value=float(motor_epistemic_t[index].item()),
-                motor_efe_approximation=motor_efe_approximation if first_transition_used else "",
-                motor_feasible=motor_feasible,
-                execution_forecast_used=first_transition_used,
+                motor_efe_approximation=(
+                    transition_contexts[index].motor_efe_approximation
+                    if first_transition_used[index] and transition_contexts[index] is not None
+                    else ""
+                ),
+                motor_feasible=(
+                    transition_contexts[index].motor_feasible
+                    if first_transition_used[index] and transition_contexts[index] is not None
+                    else True
+                ),
+                execution_forecast_used=first_transition_used[index],
                 rollout_mode="local_patch",
                 rollout_grid_size=width,
                 active_patch_area_fraction=float(patch_area[index].item()),
@@ -565,6 +735,10 @@ class SpatialExpectedFreeEnergy:
             )
             for index in range(policy_count)
         ]
+
+    @staticmethod
+    def _round_up(value: int, quantum: int) -> int:
+        return ((int(value) + int(quantum) - 1) // int(quantum)) * int(quantum)
 
     def _evaluate_local_ensemble_policy(
         self,

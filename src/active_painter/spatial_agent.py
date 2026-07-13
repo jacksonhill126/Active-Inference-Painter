@@ -135,10 +135,36 @@ class SpatialActiveInferencePainter:
             return None
         total = 0.0
         for _ in range(gradient_steps):
-            batch = self.replay.sample(self.cfg.batch_size, self.device)
             if isinstance(self.dynamics, LocalSpatialDynamicsEnsemble):
-                loss = self.dynamics.nll(batch.material, batch.action, batch.next_material, batch.mask)
+                assert isinstance(self.replay, LocalPatchReplayBuffer)
+                batches = self.replay.sample_buckets(
+                    self.cfg.batch_size,
+                    self.device,
+                    self.cfg.local_patch_batch_bucket_cells,
+                    self.cfg.local_patch_sequential_cell_limit,
+                )
+                bootstrap_mask = self.dynamics.sample_bootstrap_mask(
+                    self.cfg.batch_size,
+                    self.device,
+                    torch.float32,
+                )
+                normalizer = bootstrap_mask.sum().clamp(min=1.0)
+                self.optimizer.zero_grad()
+                step_loss = 0.0
+                for batch in batches:
+                    per_sample = self.dynamics.per_sample_nll(
+                        batch.material,
+                        batch.action,
+                        batch.next_material,
+                        batch.mask,
+                    )
+                    selected_mask = bootstrap_mask[:, list(batch.sample_indices)]
+                    bucket_loss = (per_sample * selected_mask).sum() / normalizer
+                    bucket_loss.backward()
+                    step_loss += float(bucket_loss.item())
+                loss_value = step_loss
             else:
+                batch = self.replay.sample(self.cfg.batch_size, self.device)
                 material = batch.state.reshape(
                     -1,
                     self.cfg.spatial_material_channels,
@@ -158,11 +184,12 @@ class SpatialActiveInferencePainter:
                     self.cfg.spatial_grid_size,
                 )
                 loss = self.dynamics.nll(material, action, next_material)
-            self.optimizer.zero_grad()
-            loss.backward()
+                self.optimizer.zero_grad()
+                loss.backward()
+                loss_value = float(loss.item())
             torch.nn.utils.clip_grad_norm_(self.dynamics.parameters(), 5.0)
             self.optimizer.step()
-            total += float(loss.item())
+            total += loss_value
         self._train_composition()
         return total / gradient_steps
 

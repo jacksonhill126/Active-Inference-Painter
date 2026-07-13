@@ -28,6 +28,7 @@ class PainterConfig:
     spatial_ensemble_size: int = 3
     local_patch_margin_cells: int = 8
     local_patch_min_cells: int = 16
+    local_patch_batch_bucket_cells: int = 16
     local_patch_sequential_cell_limit: int = 8192
     local_identity_logvar: float = -12.0
     mark_slot_count: int = 8

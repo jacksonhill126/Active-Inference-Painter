@@ -91,6 +91,13 @@ class SpatialResidualBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.net(x)
 
+    def forward_masked(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        residual = x * mask
+        hidden = self.net[0](residual) * mask
+        hidden = self.net[1](hidden) * mask
+        hidden = self.net[2](hidden) * mask
+        return (residual + hidden) * mask
+
 
 class SpatialTransitionMember(nn.Module):
     """CNN transition density for explicit spatial material fields."""
@@ -124,6 +131,29 @@ class SpatialTransitionMember(nn.Module):
 
     def forward(self, material: torch.Tensor, action_raster: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         raw = self.net(torch.cat([material, action_raster], dim=1))
+        return self._distribution_from_raw(material, raw)
+
+    def forward_masked(
+        self,
+        material: torch.Tensor,
+        action_raster: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mask = mask.to(device=material.device, dtype=material.dtype)
+        hidden = torch.cat([material * mask, action_raster * mask], dim=1)
+        for layer in self.net:
+            if isinstance(layer, SpatialResidualBlock):
+                hidden = layer.forward_masked(hidden, mask)
+            else:
+                hidden = layer(hidden) * mask
+        next_mean, logvar = self._distribution_from_raw(material * mask, hidden)
+        return next_mean * mask, logvar * mask
+
+    def _distribution_from_raw(
+        self,
+        material: torch.Tensor,
+        raw: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         delta_mean, raw_logvar = raw.chunk(2, dim=1)
         next_mean = self._project_material_support(material, material + delta_mean, self.thickness_scale, self.ground_tone)
         logvar = -11.0 + 6.0 * torch.sigmoid(raw_logvar)
@@ -170,6 +200,18 @@ class SpatialDynamicsEnsemble(nn.Module):
         means, logvars = zip(*(member(material, action_raster) for member in self.members))
         return torch.stack(means, dim=0), torch.stack(logvars, dim=0)
 
+    def forward_masked(
+        self,
+        material: torch.Tensor,
+        action_raster: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        action_raster = coerce_action_raster(action_raster, self.action_channels)
+        means, logvars = zip(
+            *(member.forward_masked(material, action_raster, mask) for member in self.members)
+        )
+        return torch.stack(means, dim=0), torch.stack(logvars, dim=0)
+
     def predictive_moments(
         self,
         material: torch.Tensor,
@@ -208,18 +250,45 @@ class LocalSpatialDynamicsEnsemble(SpatialDynamicsEnsemble):
         next_material: torch.Tensor,
         mask: torch.Tensor,
     ) -> torch.Tensor:
+        per_sample = self.per_sample_nll(material, action_raster, next_material, mask)
+        bootstrap_mask = self.sample_bootstrap_mask(
+            per_sample.shape[1],
+            per_sample.device,
+            per_sample.dtype,
+        )
+        return (per_sample * bootstrap_mask).sum() / bootstrap_mask.sum().clamp(min=1.0)
+
+    def per_sample_nll(
+        self,
+        material: torch.Tensor,
+        action_raster: torch.Tensor,
+        next_material: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
         material = material * mask
         action_raster = action_raster * mask
         next_material = next_material * mask
-        means, logvars = self(material, action_raster)
+        means, logvars = self.forward_masked(material, action_raster, mask)
         target = next_material.unsqueeze(0).expand_as(means)
         nll = 0.5 * (((target - means) ** 2) / logvars.exp() + logvars)
         valid = mask.to(nll.dtype).unsqueeze(0)
         if valid.ndim == 5 and valid.shape[2] == 1:
             valid = valid.expand(-1, -1, nll.shape[2], -1, -1)
         valid_count = valid.sum(dim=(2, 3, 4)).clamp(min=1.0)
-        per_sample = (nll * valid).sum(dim=(2, 3, 4)) / valid_count
-        return _bootstrap_masked_nll(per_sample, self.bootstrap_probability)
+        return (nll * valid).sum(dim=(2, 3, 4)) / valid_count
+
+    def sample_bootstrap_mask(
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        shape = (len(self.members), int(batch_size))
+        if self.bootstrap_probability >= 1.0:
+            return torch.ones(shape, device=device, dtype=dtype)
+        mask = torch.rand(shape, device=device) < self.bootstrap_probability
+        mask = mask | (mask.sum(dim=1, keepdim=True) == 0)
+        return mask.to(dtype)
 
 
 class ObservationModel(nn.Module):

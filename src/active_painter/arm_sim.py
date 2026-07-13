@@ -11,6 +11,15 @@ from .config import PainterConfig
 JOINT_NAMES = ("yaw", "pitch", "roll", "elbow")
 
 
+def clip_scalar(value: float, lower: float, upper: float) -> float:
+    value = float(value)
+    if value < lower:
+        return float(lower)
+    if value > upper:
+        return float(upper)
+    return value
+
+
 def safe_home_pose() -> "ArmPose":
     return ArmPose(yaw=0.0, pitch=-50.0, roll=0.0, elbow=100.0)
 
@@ -42,10 +51,10 @@ class ArmPose:
 
     def clipped(self) -> "ArmPose":
         return ArmPose(
-            yaw=float(np.clip(self.yaw, -90.0, 90.0)),
-            pitch=float(np.clip(self.pitch, -90.0, 90.0)),
-            roll=float(np.clip(self.roll, -180.0, 180.0)),
-            elbow=float(np.clip(self.elbow, 0.0, 150.0)),
+            yaw=clip_scalar(self.yaw, -90.0, 90.0),
+            pitch=clip_scalar(self.pitch, -90.0, 90.0),
+            roll=clip_scalar(self.roll, -180.0, 180.0),
+            elbow=clip_scalar(self.elbow, 0.0, 150.0),
         )
 
 
@@ -320,7 +329,7 @@ class JointPlant:
         q_target = np.asarray([np.deg2rad(getattr(target, name)) for name in JOINT_NAMES], dtype=np.float64)
         link_velocity = np.asarray([self.velocity[name] for name in JOINT_NAMES], dtype=np.float64)
         previous_motor_q = np.asarray([self.motor_angle[name] for name in JOINT_NAMES], dtype=np.float64)
-        temperatures = np.asarray([np.clip(self.temperature[name], 0.0, 1.0) for name in JOINT_NAMES])
+        temperatures = np.asarray([clip_scalar(self.temperature[name], 0.0, 1.0) for name in JOINT_NAMES])
         currents = np.zeros(len(JOINT_NAMES), dtype=np.float64)
         voltages = np.zeros(len(JOINT_NAMES), dtype=np.float64)
         motor_torques = np.zeros(len(JOINT_NAMES), dtype=np.float64)
@@ -355,12 +364,12 @@ class JointPlant:
             command_errors[index] = command_error
             _, backlash_deflection = self._compliance_deflection(command_error, deadband)
             backlash_deflections[index] = backlash_deflection
-            voltage = np.clip(
+            voltage = clip_scalar(
                 self.supply_voltage * self.servo_stiffness * command_error - effective_damping * measured_w,
                 -self.supply_voltage,
                 self.supply_voltage,
             )
-            current = np.clip(voltage / self.resistance, -current_limit, current_limit)
+            current = clip_scalar(voltage / self.resistance, -current_limit, current_limit)
             motor_torque = self.kt * current
             voltages[index] = voltage
             currents[index] = current
@@ -403,18 +412,16 @@ class JointPlant:
                 1e-5, self._joint_param(self.transmission_stiffness, name, 8.0)
             )
             motor_q = float(q[index] + backlash_deflections[index] + spring_deflection)
-            motor_w = float(
-                np.clip(
-                    (motor_q - previous_motor_q[index]) / max(1e-6, dt),
-                    -self.max_motor_velocity,
-                    self.max_motor_velocity,
-                )
+            motor_w = clip_scalar(
+                (motor_q - previous_motor_q[index]) / max(1e-6, dt),
+                -self.max_motor_velocity,
+                self.max_motor_velocity,
             )
             heat = (abs(currents[index]) / max(1e-6, self.current_limit)) ** 2 * dt / max(
                 1e-6, self.thermal_time_constant
             )
             cool = temperatures[index] * dt / max(1e-6, self.cooling_time_constant)
-            temperature = float(np.clip(temperatures[index] + heat - cool, 0.0, 1.0))
+            temperature = clip_scalar(temperatures[index] + heat - cool, 0.0, 1.0)
             encoder_stds[index] = self._encoder_std_deg(
                 name,
                 link_velocity[index],
@@ -526,7 +533,7 @@ class VerticalCanvas:
         # is canvas-resolution independent; pressure splays the bristles. The
         # patch has hard support: no paint deposits beyond it no matter how
         # long the brush dwells.
-        return 0.10 + 0.42 * float(np.clip(pressure, 0.0, 1.0))
+        return 0.10 + 0.42 * clip_scalar(pressure, 0.0, 1.0)
 
     def _pixels_per_unit(self) -> float:
         return (self.config.canvas_size - 1) / max(1e-6, self.width)
@@ -538,7 +545,7 @@ class VerticalCanvas:
         force = self.contact_stiffness * deflection
         geometric_pressure = deflection / max(1e-5, self.bushing_travel)
         near_surface = on_canvas and float(tip[1]) >= self.distance - 0.08
-        pressure = max(geometric_pressure, float(np.clip(intended_pressure, 0.0, 1.0)) if near_surface else 0.0)
+        pressure = max(geometric_pressure, clip_scalar(intended_pressure, 0.0, 1.0) if near_surface else 0.0)
         force = max(force, pressure * self.contact_stiffness * self.bushing_travel)
         brush_width_px = 2.0 * self.brush_radius_world(pressure) * self._pixels_per_unit()
         brush_world = tip.copy()

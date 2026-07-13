@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 
 from active_painter.arm_control import ik_pose_for_canvas_point
-from active_painter.arm_sim import ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, safe_home_pose
+from active_painter.arm_sim import ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, clip_scalar, safe_home_pose
 from active_painter.config import PainterConfig
 
 
@@ -10,6 +10,13 @@ def test_arm_kinematics_home_reaches_forward() -> None:
     sim = ArmPainterSim(PainterConfig())
     tip = sim.kinematics.tip(ArmPose())
     assert np.allclose(tip, np.asarray([0.0, 26.0, 0.0]))
+
+
+def test_scalar_clip_matches_bounded_semantics_and_preserves_nan() -> None:
+    assert clip_scalar(-2.0, -1.0, 1.0) == -1.0
+    assert clip_scalar(0.25, -1.0, 1.0) == 0.25
+    assert clip_scalar(2.0, -1.0, 1.0) == 1.0
+    assert np.isnan(clip_scalar(float("nan"), -1.0, 1.0))
 
 
 def test_sim_starts_bent_near_seventeen_inch_canvas_without_penetration() -> None:

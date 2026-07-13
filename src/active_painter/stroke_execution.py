@@ -7,7 +7,7 @@ from typing import Callable
 import numpy as np
 
 from .arm_control import ik_pose_for_canvas_point
-from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES
+from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES, clip_scalar
 from .env import StrokeAction
 from .policies import MotorPrimitiveLatent
 
@@ -145,8 +145,8 @@ def adaptive_stroke_timing(sim: ArmPainterSim, action: StrokeAction) -> StrokeTi
     tip = sim.kinematics.tip(sim.actual_pose)
     approach_distance = float(np.hypot(float(tip[0]) - x0, float(tip[2]) - z0))
     stroke_length = float(np.hypot(x1 - x0, z1 - z0))
-    approach = float(np.clip(0.5 + approach_distance / 9.0, 0.6, 2.4))
-    paint = float(np.clip(stroke_length / PAINT_SPEED_UNITS_PER_SECOND, 0.9, 3.6))
+    approach = clip_scalar(0.5 + approach_distance / 9.0, 0.6, 2.4)
+    paint = clip_scalar(stroke_length / PAINT_SPEED_UNITS_PER_SECOND, 0.9, 3.6)
     return StrokeTiming(approach=approach, paint=paint)
 
 
@@ -154,10 +154,10 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
     c = sim.canvas
     x0, z0, x1, z1 = stroke_world_endpoints(action, c)
     feasible = c.contains(x0, z0) and c.contains(x1, z1)
-    pressure_base = 0.08 + 0.62 * np.clip(action.amount, 0.0, 1.0)
+    pressure_base = 0.08 + 0.62 * clip_scalar(action.amount, 0.0, 1.0)
     curvature = float(np.hypot(x1 - x0, z1 - z0))
-    speed_factor = np.clip(curvature / max(0.2, timing.paint), 0.0, 12.0) / 12.0
-    t = float(np.clip(t, 0.0, timing.total))
+    speed_factor = clip_scalar(curvature / max(0.2, timing.paint), 0.0, 12.0) / 12.0
+    t = clip_scalar(t, 0.0, timing.total)
 
     if t < timing.approach:
         u = t / timing.approach
@@ -196,8 +196,8 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
         u = (t - timing.approach - timing.press) / timing.paint
         smooth = smootherstep(u)
         phase_pressure = pressure_base * (0.72 + 0.28 * np.sin(np.pi * u) ** 2)
-        width_pressure = 0.42 * np.clip(action.width / 0.30, 0.0, 1.0)
-        consequence_pressure = np.clip(phase_pressure + width_pressure - 0.12 * speed_factor, 0.04, 0.92)
+        width_pressure = 0.42 * clip_scalar(action.width / 0.30, 0.0, 1.0)
+        consequence_pressure = clip_scalar(phase_pressure + width_pressure - 0.12 * speed_factor, 0.04, 0.92)
         return StrokeReference(
             phase="paint",
             t=t,
@@ -289,7 +289,7 @@ class ContactAwareStrokeController:
         pullback_threshold = (
             self.paint_tracking_tolerance if current_reference.phase == "paint" else 0.35
         )
-        travel_pullback = float(np.clip(0.9 * (lateral_error - pullback_threshold), 0.0, 1.8))
+        travel_pullback = clip_scalar(0.9 * (lateral_error - pullback_threshold), 0.0, 1.8)
         target_x, target_z = preview_reference.x, preview_reference.z
         to_target_x = target_x - float(tip[0])
         to_target_z = target_z - float(tip[2])
@@ -393,7 +393,7 @@ class JointSpaceStrokeController:
         intended_end = reference.intended_end
         if reference.phase == "paint":
             u = (t - timing.approach - timing.press) / max(1e-6, timing.paint)
-            desired_pose = self._paint_pose(float(np.clip(u, 0.0, 1.0)))
+            desired_pose = self._paint_pose(clip_scalar(u, 0.0, 1.0))
             tip = sim.kinematics.tip(desired_pose)
             intended_start = self._intended_start
             intended_end = self._intended_end
@@ -838,12 +838,12 @@ def forecast_stroke_execution(
 
 
 def smootherstep(u: float) -> float:
-    u = float(np.clip(u, 0.0, 1.0))
+    u = clip_scalar(u, 0.0, 1.0)
     return u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
 
 
 def interpolate_pose(a: ArmPose, b: ArmPose, alpha: float) -> ArmPose:
-    alpha = float(np.clip(alpha, 0.0, 1.0))
+    alpha = clip_scalar(alpha, 0.0, 1.0)
     return ArmPose(
         **{
             name: float((1.0 - alpha) * getattr(a, name) + alpha * getattr(b, name))
@@ -857,7 +857,7 @@ def rate_limit_pose(target: ArmPose, previous: ArmPose, max_delta: float) -> Arm
         **{
             name: float(
                 getattr(previous, name)
-                + np.clip(getattr(target, name) - getattr(previous, name), -max_delta, max_delta)
+                + clip_scalar(getattr(target, name) - getattr(previous, name), -max_delta, max_delta)
             )
             for name in JOINT_NAMES
         }
@@ -905,5 +905,5 @@ def _joint_limit_proximity_vector(pose: ArmPose, margin_degrees: float) -> np.nd
     for name, (lo, hi) in limits.items():
         value = float(getattr(pose.clipped(), name))
         distance = min(value - lo, hi - value)
-        proximity.append(float(np.clip((margin - distance) / margin, 0.0, 1.0)))
+        proximity.append(clip_scalar((margin - distance) / margin, 0.0, 1.0))
     return np.asarray(proximity, dtype=np.float64)

@@ -1380,7 +1380,9 @@ class ArmActiveInferenceDriver:
             if first_action.stop:
                 return True
             alternatives: list[tuple[Policy, SpatialEFEComponents, bool]] = []
-            for motor_policy in motor_realization_policy_alternatives(policy, self.config):
+            motor_policies = motor_realization_policy_alternatives(policy, self.config)
+            forecasts: list[ExecutionForecast] = []
+            for motor_policy in motor_policies:
                 motor_primitive_candidates += 1
                 self._profile_increment("candidateMotorRealizations")
                 primitive = motor_policy.motor_primitive
@@ -1402,7 +1404,12 @@ class ArmActiveInferenceDriver:
                     self._yield_to_runtime()
                 else:
                     self._profile_increment("motorForecastCacheHits")
-                rescore_started = time.perf_counter()
+                forecasts.append(forecast)
+
+            rescore_started = time.perf_counter()
+            first_transitions = []
+            motor_terms_by_policy = []
+            for forecast in forecasts:
                 next_material = forecast.next_state_mean.reshape(material_shape)
                 mean = torch.tensor(next_material, device=agent.device, dtype=torch.float32)
                 material_delta = torch.tensor(
@@ -1416,22 +1423,24 @@ class ArmActiveInferenceDriver:
                     dtype=torch.float32,
                 )
                 motor_terms = motor_efe_terms(forecast, self.config)
-                comp = agent.efe.evaluate_with_first_transition(
-                    belief,
-                    motor_policy,
-                    mean,
-                    variance,
-                    next_material_delta=material_delta,
-                    execution_uncertainty=forecast.execution_uncertainty,
-                    contact_loss_probability=forecast.contact_loss_probability,
-                    motor_overshoot=forecast.overshoot,
-                    motor_feasible=forecast.feasible,
-                    motor_risk=motor_terms.risk,
-                    motor_ambiguity=motor_terms.ambiguity,
-                    motor_epistemic_value=motor_terms.epistemic_value,
-                    motor_efe_approximation=motor_terms.approximation,
-                )
-                self._profile_add_seconds("motorEFERescoreSeconds", time.perf_counter() - rescore_started)
+                first_transitions.append((mean, variance, material_delta))
+                motor_terms_by_policy.append(motor_terms)
+
+            rescored = agent.efe.evaluate_batch_with_first_transitions(
+                belief,
+                motor_policies,
+                first_transitions,
+                execution_uncertainties=[forecast.execution_uncertainty for forecast in forecasts],
+                contact_loss_probabilities=[forecast.contact_loss_probability for forecast in forecasts],
+                motor_overshoots=[forecast.overshoot for forecast in forecasts],
+                motor_feasibilities=[forecast.feasible for forecast in forecasts],
+                motor_risks=[terms.risk for terms in motor_terms_by_policy],
+                motor_ambiguities=[terms.ambiguity for terms in motor_terms_by_policy],
+                motor_epistemic_values=[terms.epistemic_value for terms in motor_terms_by_policy],
+                motor_efe_approximations=[terms.approximation for terms in motor_terms_by_policy],
+            )
+            self._profile_add_seconds("motorEFERescoreSeconds", time.perf_counter() - rescore_started)
+            for motor_policy, forecast, comp in zip(motor_policies, forecasts, rescored):
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
