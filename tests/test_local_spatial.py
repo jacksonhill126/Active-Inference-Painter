@@ -54,6 +54,16 @@ class DivergentPatchMember(nn.Module):
         return next_material, torch.full_like(next_material, -10.0)
 
 
+class RecordingPatchMember(DivergentPatchMember):
+    def __init__(self) -> None:
+        super().__init__(0.0)
+        self.batch_sizes: list[int] = []
+
+    def forward(self, material: torch.Tensor, action_raster: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        self.batch_sizes.append(int(material.shape[0]))
+        return super().forward(material, action_raster)
+
+
 def test_local_patch_bounds_cover_compact_action_support_and_clip_edges() -> None:
     cfg = PainterConfig(canvas_size=32, local_patch_margin_cells=2, local_patch_min_cells=8)
     action = StrokeAction(0.01, 0.02, 0.22, 0.08, 0.08, 0.5, 1.0)
@@ -251,6 +261,34 @@ def test_batched_local_ensemble_rollout_matches_single_policy_evaluation() -> No
         assert np.isclose(batch_component.active_patch_area_fraction, single_component.active_patch_area_fraction)
 
 
+def test_oversized_local_patches_use_sequential_policy_batches() -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        spatial_grid_size=8,
+        spatial_transition_mode="local_patch",
+        local_patch_sequential_cell_limit=1,
+        local_patch_margin_cells=1,
+        local_patch_min_cells=4,
+        spatial_ensemble_size=1,
+    )
+    policies = [
+        Policy((StrokeAction(0.2, 0.2, 0.7, 0.3, 0.08, 0.6, tone), StrokeAction.stop_action()))
+        for tone in (0.0, 1.0)
+    ]
+    belief = spatial_canvas_state(ArmPainterSim(cfg), cfg)
+    dynamics = LocalSpatialDynamicsEnsemble(cfg)
+    member = RecordingPatchMember()
+    dynamics.members = nn.ModuleList([member])
+
+    components = SpatialExpectedFreeEnergy(cfg, dynamics, TerminalCoveragePreference(cfg)).evaluate_batch(
+        belief,
+        policies,
+    )
+
+    assert member.batch_sizes == [1, 1]
+    assert [component.sequential_patch_steps for component in components] == [1, 1]
+
+
 def test_local_composition_risk_uses_coarse_grained_terminal_fields() -> None:
     class ShapeComposition:
         def __init__(self) -> None:
@@ -282,3 +320,91 @@ def test_local_composition_risk_uses_coarse_grained_terminal_fields() -> None:
     assert composition.shape is not None
     assert composition.shape[-2:] == (cfg.spatial_grid_size, cfg.spatial_grid_size)
     assert np.isclose(components.composition_risk, -cfg.composition_gap_precision)
+
+
+def test_conditioned_motor_transition_remains_sparse_and_keeps_efe_terms_separate() -> None:
+    cfg = PainterConfig(
+        canvas_size=32,
+        spatial_grid_size=8,
+        spatial_transition_mode="local_patch",
+        local_patch_margin_cells=2,
+        local_patch_min_cells=4,
+        spatial_ensemble_size=2,
+    )
+    belief = spatial_canvas_state(ArmPainterSim(cfg), cfg)
+    action = StrokeAction(0.25, 0.35, 0.55, 0.45, 0.06, 0.6, 1.0)
+    policy = Policy((action, StrokeAction.stop_action()))
+    material = torch.tensor(max(belief.pyramid, key=lambda level: level.grid_size).material)
+    raster = torch.tensor(rasterize_stroke_action(action, cfg.canvas_size, config=cfg))
+    support = raster[0] > 0.0
+    next_material = material.clone()
+    next_material[0, support] += 0.01
+    next_material[1, support] += 0.005
+    next_material[2, support] += 0.006
+    next_material = project_material_support(
+        material.unsqueeze(0),
+        next_material.unsqueeze(0),
+        cfg.thickness_scale,
+        cfg.canvas_ground_tone,
+    )[0]
+    material_delta = torch.zeros_like(next_material)
+    material_delta[:, support] = next_material[:, support] - material[:, support]
+    next_material[0, 0, 0] += 0.001
+    dynamics = LocalSpatialDynamicsEnsemble(cfg)
+    dynamics.members = nn.ModuleList([DivergentPatchMember(0.0), DivergentPatchMember(0.0)])
+    efe = SpatialExpectedFreeEnergy(cfg, dynamics, TerminalCoveragePreference(cfg))
+
+    components = efe.evaluate_with_first_transition(
+        belief,
+        policy,
+        next_material,
+        torch.full_like(next_material, 1e-5),
+        next_material_delta=material_delta,
+        execution_uncertainty=0.2,
+        contact_loss_probability=0.1,
+        motor_overshoot=0.05,
+        motor_feasible=True,
+        motor_risk=0.4,
+        motor_ambiguity=0.2,
+        motor_epistemic_value=0.1,
+        motor_efe_approximation="test motor likelihood",
+    )
+
+    expected_total = (
+        components.terminal_risk
+        + components.ambiguity
+        + components.transition_risk
+        + components.transition_ambiguity
+        + components.composition_risk
+        + components.motor_risk
+        + components.motor_ambiguity
+        - components.motor_epistemic_value
+    )
+    assert components.execution_forecast_used
+    assert components.rollout_mode == "local_patch"
+    assert components.local_transition_steps == 1
+    expected_bounds = local_patch_bounds_for_raster(raster.numpy(), cfg.canvas_size, cfg)
+    assert expected_bounds is not None
+    assert np.isclose(components.active_patch_area_fraction, expected_bounds.area_fraction)
+    assert np.isclose(components.motor_risk, 0.4)
+    assert np.isclose(components.motor_ambiguity, 0.2)
+    assert np.isclose(components.motor_epistemic_value, 0.1)
+    assert components.motor_efe_approximation == "test motor likelihood"
+    assert np.isclose(components.total, expected_total)
+
+    stopped = efe.evaluate_with_first_transition(
+        belief,
+        Policy((StrokeAction.stop_action(),)),
+        next_material,
+        torch.full_like(next_material, 1e-5),
+        execution_uncertainty=0.2,
+        contact_loss_probability=0.1,
+        motor_overshoot=0.05,
+        motor_feasible=True,
+        motor_risk=0.4,
+        motor_ambiguity=0.2,
+        motor_epistemic_value=0.1,
+    )
+    assert not stopped.execution_forecast_used
+    assert stopped.local_transition_steps == 0
+    assert stopped.motor_risk == 0.0

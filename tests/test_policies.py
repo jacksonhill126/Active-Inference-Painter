@@ -189,6 +189,12 @@ def test_policy_sampler_includes_hierarchical_passage_plan_candidates() -> None:
         len({action.tone for action in policy.actions[:-1]}) == 1
         for policy in plans
     )
+    for policy in plans:
+        assert policy.passage_boundaries[0][0] == 0
+        assert policy.passage_boundaries[-1][1] == len(policy.actions) - 1
+        assert [end - start for start, end in policy.passage_boundaries] == [
+            passage.stroke_count for passage in policy.passage_plan.passages
+        ]
 
 
 def test_random_tone_support_pairs_same_passage_plan_geometry_as_policy_alternatives() -> None:

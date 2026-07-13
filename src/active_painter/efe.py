@@ -267,7 +267,18 @@ class ExpectedFreeEnergy:
         epistemic_value = self.cfg.transition_precision * epistemic_value
         motor_risk_t = torch.full((policy_count,), float(motor_risk if first_transition_used else 0.0), device=device)
         motor_ambiguity_t = torch.full((policy_count,), float(motor_ambiguity if first_transition_used else 0.0), device=device)
-        total = terminal_risk + ambiguity + transition_risk + transition_ambiguity + motor_risk_t + motor_ambiguity_t
+        motor_epistemic_t = torch.full(
+            (policy_count,), float(motor_epistemic_value if first_transition_used else 0.0), device=device
+        )
+        total = (
+            terminal_risk
+            + ambiguity
+            + transition_risk
+            + transition_ambiguity
+            + motor_risk_t
+            + motor_ambiguity_t
+            - motor_epistemic_t
+        )
 
         return [
             EFEComponents(
@@ -373,7 +384,16 @@ class ExpectedFreeEnergy:
         epistemic_value = self.cfg.transition_precision * epistemic_value
         motor_risk_value = float(motor_risk if first_transition_used else 0.0)
         motor_ambiguity_value = float(motor_ambiguity if first_transition_used else 0.0)
-        total = terminal_risk + ambiguity + transition_risk + transition_ambiguity + motor_risk_value + motor_ambiguity_value
+        motor_epistemic_value_used = float(motor_epistemic_value if first_transition_used else 0.0)
+        total = (
+            terminal_risk
+            + ambiguity
+            + transition_risk
+            + transition_ambiguity
+            + motor_risk_value
+            + motor_ambiguity_value
+            - motor_epistemic_value_used
+        )
         return EFEComponents(
             total=float(total.item()),
             terminal_risk=float(terminal_risk.item()),

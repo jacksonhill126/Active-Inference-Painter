@@ -70,7 +70,7 @@ def infer_mark_event_belief(state: SpatialCanvasState, config: PainterConfig) ->
     active = coverage >= config.mark_activation_coverage
     components = _connected_components(active)
     slots = [
-        _slot_from_component(state, coverage, component)
+        _slot_from_component(state, coverage, component, config)
         for component in components
     ]
     slots.sort(key=lambda slot: slot.mass, reverse=True)
@@ -113,6 +113,7 @@ def _slot_from_component(
     state: SpatialCanvasState,
     coverage: np.ndarray,
     component: np.ndarray,
+    config: PainterConfig,
 ) -> MarkEventSlot:
     rows = component[:, 0]
     cols = component[:, 1]
@@ -130,7 +131,14 @@ def _slot_from_component(
     covariance_xx = float(np.dot(weights, dx * dx) / mass_sum)
     covariance_xy = float(np.dot(weights, dx * dy) / mass_sum)
     covariance_yy = float(np.dot(weights, dy * dy) / mass_sum)
-    observed_tone = state.material[3] if state.material.shape[0] > 3 else np.zeros_like(coverage)
+    if state.material.shape[0] > 3:
+        surface_tone = state.material[3]
+        observed_tone = (
+            (1.0 - coverage) * config.canvas_ground_tone
+            + coverage * surface_tone
+        )
+    else:
+        observed_tone = np.zeros_like(coverage)
     ground_contrast = state.material[4] if state.material.shape[0] > 4 else np.zeros_like(coverage)
     material_coverage = state.material[5] if state.material.shape[0] > 5 else coverage
     return MarkEventSlot(

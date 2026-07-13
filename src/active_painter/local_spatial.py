@@ -125,9 +125,11 @@ def pixel_material_from_state(state: SpatialCanvasState) -> np.ndarray:
 
 def pixel_logvar_from_state(state: SpatialCanvasState, config: PainterConfig) -> np.ndarray:
     material = pixel_material_from_state(state)
+    if state.pixel_logvar is not None and state.pixel_logvar.shape == material.shape:
+        return state.pixel_logvar.astype(np.float32)
     if state.logvar.shape == material.shape:
         return state.logvar.astype(np.float32)
-    value = float(np.clip(state.logvar.mean() if state.logvar.size else config.local_identity_logvar, -30.0, 20.0))
+    value = float(np.clip(config.local_identity_logvar, -30.0, 20.0))
     return np.full_like(material, value, dtype=np.float32)
 
 

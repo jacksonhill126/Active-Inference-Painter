@@ -12,6 +12,7 @@ dependencies = [
   "numpy>=1.26",
   "torch>=2.2",
   "matplotlib>=3.8",
+  "Pillow>=10",
 ]
 
 [project.optional-dependencies]
@@ -23,3 +24,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]

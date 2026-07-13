@@ -11,7 +11,7 @@ from .env import StrokeAction
 from .policies import MotorPrimitiveLatent
 
 
-MATERIAL_CHANNELS = ("thickness", "wetness", "black_mass", "observed_tone", "ground_contrast", "material_coverage")
+MATERIAL_CHANNELS = ("thickness", "wetness", "black_mass", "surface_tone", "ground_contrast", "material_coverage")
 ACTION_CHANNELS = (
     "footprint",
     "start",
@@ -46,13 +46,14 @@ class SpatialCanvasState:
     """Explicit spatial material belief substrate for the painting planner.
 
     The first implementation intentionally uses material fields, not learned
-    aesthetic variables: local thickness, wetness, and black pigment mass.
-    Coverage is derived from thickness.
+    aesthetic variables: local thickness, wetness, conserved black pigment
+    mass, and surface tone. Coverage and substrate contrast are derived.
     """
 
     material: np.ndarray
     logvar: np.ndarray
     pyramid: tuple[MaterialPyramidLevel, ...] = ()
+    pixel_logvar: np.ndarray | None = None
 
     @property
     def grid_size(self) -> int:
@@ -80,16 +81,28 @@ def spatial_canvas_state(
     logvar_value: float = -8.0,
 ) -> SpatialCanvasState:
     cfg = config or sim.config
-    material = material_grid_from_canvas(sim.canvas, cfg.spatial_grid_size, cfg.spatial_material_channels)
+    native_grid = int(sim.canvas.thickness.shape[0])
+    pixel_material = material_grid_from_canvas(sim.canvas, native_grid, cfg.spatial_material_channels)
+    material = downsample_material(pixel_material, cfg.spatial_grid_size)
     return SpatialCanvasState(
         material=material,
         logvar=np.full_like(material, logvar_value, dtype=np.float32),
-        pyramid=material_pyramid_from_canvas(sim.canvas, cfg),
+        pyramid=material_pyramid_from_material(pixel_material, cfg),
+        pixel_logvar=np.full_like(pixel_material, logvar_value, dtype=np.float32),
     )
 
 
 def material_pyramid_from_canvas(canvas: VerticalCanvas, config: PainterConfig) -> tuple[MaterialPyramidLevel, ...]:
     native_grid = int(canvas.thickness.shape[0])
+    pixel_material = material_grid_from_canvas(canvas, native_grid, config.spatial_material_channels)
+    return material_pyramid_from_material(pixel_material, config)
+
+
+def material_pyramid_from_material(
+    pixel_material: np.ndarray,
+    config: PainterConfig,
+) -> tuple[MaterialPyramidLevel, ...]:
+    native_grid = int(pixel_material.shape[-1])
     requested = (native_grid, *config.material_pyramid_levels, config.spatial_grid_size)
     grid_sizes = sorted({int(size) for size in requested if 0 < int(size) <= native_grid}, reverse=True)
     levels: list[MaterialPyramidLevel] = []
@@ -104,10 +117,61 @@ def material_pyramid_from_canvas(canvas: VerticalCanvas, config: PainterConfig) 
             MaterialPyramidLevel(
                 name=name,
                 grid_size=grid_size,
-                material=material_grid_from_canvas(canvas, grid_size, config.spatial_material_channels),
+                material=downsample_material(pixel_material, grid_size),
             )
         )
     return tuple(levels)
+
+
+def spatial_state_from_pixel_posterior(
+    pixel_material: np.ndarray,
+    pixel_variance: np.ndarray,
+    config: PainterConfig,
+) -> SpatialCanvasState:
+    material = project_material_fields(pixel_material, config)
+    variance = np.clip(pixel_variance.astype(np.float32), 1e-12, 1e6)
+    planner_material = downsample_material(material, config.spatial_grid_size)
+    planner_variance = downsample_variance_of_mean(variance, config.spatial_grid_size)
+    return SpatialCanvasState(
+        material=planner_material,
+        logvar=np.log(np.clip(planner_variance, 1e-12, 1e6)).astype(np.float32),
+        pyramid=material_pyramid_from_material(material, config),
+        pixel_logvar=np.log(variance).astype(np.float32),
+    )
+
+
+def downsample_material(material: np.ndarray, grid_size: int) -> np.ndarray:
+    return np.stack([downsample_mean(channel, grid_size) for channel in material], axis=0).astype(np.float32)
+
+
+def downsample_variance_of_mean(variance: np.ndarray, grid_size: int) -> np.ndarray:
+    channels, height, width = variance.shape
+    row_edges = np.linspace(0, height, grid_size + 1, dtype=np.int64)
+    col_edges = np.linspace(0, width, grid_size + 1, dtype=np.int64)
+    out = np.zeros((channels, grid_size, grid_size), dtype=np.float32)
+    for row in range(grid_size):
+        r0, r1 = int(row_edges[row]), int(row_edges[row + 1])
+        for col in range(grid_size):
+            c0, c1 = int(col_edges[col]), int(col_edges[col + 1])
+            patch = variance[:, r0:max(r0 + 1, r1), c0:max(c0 + 1, c1)]
+            count = max(1, patch.shape[-2] * patch.shape[-1])
+            out[:, row, col] = patch.sum(axis=(-2, -1)) / float(count * count)
+    return np.clip(out, 1e-12, 1e6)
+
+
+def project_material_fields(material: np.ndarray, config: PainterConfig) -> np.ndarray:
+    projected = np.clip(material.astype(np.float32, copy=True), 0.0, None)
+    if projected.shape[0] <= 3:
+        return projected
+    thickness = projected[0]
+    coverage = 1.0 - np.exp(-thickness / max(1e-8, config.thickness_scale))
+    projected[3] = np.clip(projected[3], 0.0, 1.0)
+    if projected.shape[0] > 4:
+        observed_tone = (1.0 - coverage) * config.canvas_ground_tone + coverage * projected[3]
+        projected[4] = np.abs(observed_tone - config.canvas_ground_tone)
+    if projected.shape[0] > 5:
+        projected[5] = coverage
+    return projected.astype(np.float32)
 
 
 def material_grid_from_canvas(canvas: VerticalCanvas, grid_size: int, channel_count: int | None = None) -> np.ndarray:
@@ -118,14 +182,14 @@ def material_grid_from_canvas(canvas: VerticalCanvas, grid_size: int, channel_co
     wetness = downsample_mean(canvas.wetness, grid_size)
     black_mass = downsample_mean(canvas.black_mass, grid_size)
     material_coverage = downsample_mean(canvas.coverage_field(), grid_size)
-    observed_tone = downsample_mean(canvas.observed_tone(), grid_size)
+    surface_tone = downsample_mean(canvas.surface_tone, grid_size)
     ground_contrast = downsample_mean(canvas.ground_contrast_field(), grid_size)
     return np.stack(
         [
             thickness,
             wetness,
             black_mass,
-            observed_tone,
+            surface_tone,
             ground_contrast,
             material_coverage,
         ],
@@ -232,7 +296,7 @@ def spatial_state_diagnostics(state: SpatialCanvasState, config: PainterConfig) 
         "meanThickness": float(state.material[0].mean()),
         "meanWetness": float(state.material[1].mean()),
         "meanBlackMass": float(state.material[2].mean()),
-        "meanObservedTone": float(state.material[3].mean()) if state.material.shape[0] > 3 else None,
+        "meanSurfaceTone": float(state.material[3].mean()) if state.material.shape[0] > 3 else None,
         "meanGroundContrast": float(state.material[4].mean()) if state.material.shape[0] > 4 else None,
         "meanMaterialCoverageField": float(state.material[5].mean()) if state.material.shape[0] > 5 else None,
         "coverageMean": float(coverage.mean()),
@@ -253,6 +317,7 @@ def material_pyramid_diagnostics(
             "meanThickness": float(level.material[0].mean()),
             "meanWetness": float(level.material[1].mean()),
             "meanBlackMass": float(level.material[2].mean()),
+            "meanSurfaceTone": float(level.material[3].mean()) if level.material.shape[0] > 3 else None,
             "coverageMean": float(level.coverage(config.thickness_scale).mean()),
         }
         for level in pyramid

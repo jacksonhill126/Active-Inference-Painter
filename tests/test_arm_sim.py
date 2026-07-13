@@ -89,6 +89,7 @@ def test_oil_white_over_wet_black_is_surface_opaque_with_some_pickup() -> None:
 
     canvas.paint_at(point, pressure=0.8, tone=1.0, dt=1.0 / 120.0)
     after_black_tone = canvas.visible_tone().copy()
+    black_mass_before_white = canvas.black_mass.copy()
     canvas.paint_at(point, pressure=0.8, tone=0.0, dt=1.0 / 120.0)
     after_white_tone = canvas.visible_tone()
     u, v = canvas.world_to_pixel(0.0, 0.0)
@@ -97,6 +98,7 @@ def test_oil_white_over_wet_black_is_surface_opaque_with_some_pickup() -> None:
 
     assert after_black_tone[row, col] > 0.7
     assert 0.02 < after_white_tone[row, col] < 0.35
+    assert np.array_equal(canvas.black_mass, black_mass_before_white)
 
 
 def test_oil_surface_opacity_controls_white_over_black_dominance() -> None:
@@ -126,6 +128,19 @@ def test_oil_surface_opacity_controls_white_over_black_dominance() -> None:
     assert opaque.visible_tone()[row, col] < transparent.visible_tone()[row, col]
 
 
+def test_oil_paint_wetness_persists_while_brush_is_lifted() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=48))
+    point = np.asarray([0.0, sim.canvas.distance, 0.0])
+    sim.canvas.paint_at(point, pressure=0.8, tone=1.0, dt=1.0 / 120.0)
+    wetness_after_paint = sim.canvas.wetness.copy()
+
+    sim.paint_enabled = False
+    for _ in range(480):
+        sim.step(1.0 / 240.0)
+
+    assert np.array_equal(sim.canvas.wetness, wetness_after_paint)
+
+
 def test_joint_plant_moves_actual_pose_toward_target_without_selecting_policy() -> None:
     sim = ArmPainterSim(PainterConfig())
     sim.set_target(ArmPose(yaw=35.0, pitch=-20.0, roll=10.0, elbow=70.0))
@@ -143,9 +158,39 @@ def test_joint_plant_backlash_deadband_delays_small_link_motion() -> None:
     after = plant.step(actual, target, 1.0 / 120.0)
 
     assert abs(after.yaw - actual.yaw) < 0.05
-    assert plant.telemetry.position_error_deg["yaw"] == pytest.approx(0.5)
+    assert abs(plant.telemetry.position_error_deg["yaw"] - 0.5) <= 3.0 * plant.telemetry.encoder_std_deg["yaw"]
     assert abs(plant.telemetry.current["yaw"]) > 0.0
     assert abs(plant.telemetry.backlash_deflection_deg["yaw"]) > 0.0
+
+
+def test_joint_plant_process_noise_is_seeded_and_changes_realized_trajectory() -> None:
+    plants = [JointPlant(rng_seed=seed) for seed in (11, 11, 12)]
+    poses = [safe_home_pose() for _ in plants]
+    target = ArmPose(yaw=18.0, pitch=-42.0, roll=7.0, elbow=92.0)
+
+    for _ in range(80):
+        poses = [plant.step(pose, target, 1.0 / 120.0) for plant, pose in zip(plants, poses)]
+
+    assert poses[0] == poses[1]
+    assert poses[0] != poses[2]
+
+
+def test_joint_plant_mass_matrix_couples_pitch_drive_into_elbow_motion() -> None:
+    common = {
+        "process_noise_enabled": False,
+        "encoder_noise_enabled": False,
+        "gravity_compensation_fraction": 1.0,
+    }
+    coupled = JointPlant(**common)
+    uncoupled = JointPlant(**common, pitch_elbow_coupling_inertia=0.0)
+    actual = safe_home_pose()
+    target = ArmPose(yaw=actual.yaw, pitch=actual.pitch + 15.0, roll=actual.roll, elbow=actual.elbow)
+
+    coupled_after = coupled.step(actual, target, 1.0 / 120.0)
+    uncoupled_after = uncoupled.step(actual, target, 1.0 / 120.0)
+
+    assert abs(coupled_after.elbow - actual.elbow) > abs(uncoupled_after.elbow - actual.elbow)
+    assert coupled.telemetry.gravity_torque["pitch"] == pytest.approx(0.0)
 
 
 def test_encoded_servo_hold_brakes_residual_velocity_without_drifting() -> None:
@@ -161,7 +206,7 @@ def test_encoded_servo_hold_brakes_residual_velocity_without_drifting() -> None:
 
     assert abs(pose.yaw - actual.yaw) < 0.5
     assert abs(plant.velocity["yaw"]) < 0.05
-    assert plant.telemetry.encoder_angle_deg["yaw"] == pytest.approx(pose.yaw)
+    assert abs(plant.telemetry.encoder_angle_deg["yaw"] - pose.yaw) <= 3.0 * plant.telemetry.encoder_std_deg["yaw"]
 
 
 def test_joint_plant_damping_multiplier_reduces_hold_ringing() -> None:

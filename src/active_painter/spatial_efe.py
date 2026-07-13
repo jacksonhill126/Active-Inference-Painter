@@ -13,6 +13,7 @@ from .config import PainterConfig
 from .efe_common import project_material_support, terminal_preference_terms
 from .inference import normal_entropy_from_variance
 from .local_spatial import (
+    LocalPatchBounds,
     local_patch_bounds_for_raster,
     pixel_logvar_from_state,
     pixel_material_from_state,
@@ -21,6 +22,12 @@ from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
 from .policies import Policy
 from .preferences import TerminalCoveragePreference
 from .spatial_state import SpatialCanvasState, rasterize_stroke_action
+
+
+SpatialFirstTransition = (
+    tuple[torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+)
 
 
 class SpatialTransitionModel(Protocol):
@@ -68,6 +75,45 @@ class SpatialEFEComponents:
     local_transition_steps: int = 0
     sequential_patch_steps: int = 0
     identity_transition_approximation: str = ""
+
+
+@dataclass(slots=True)
+class _SparsePatchOverlay:
+    bounds: LocalPatchBounds
+    mean: torch.Tensor
+    variance: torch.Tensor
+
+
+class _SparseMemberCanvas:
+    """Ordered local overlays on one shared immutable pixel canvas."""
+
+    def __init__(self, base_mean: torch.Tensor, base_variance: torch.Tensor, member_count: int) -> None:
+        self.base_mean = base_mean
+        self.base_variance = base_variance
+        self.member_count = member_count
+        self.overlays: list[_SparsePatchOverlay] = []
+
+    def extract(self, bounds: LocalPatchBounds) -> tuple[torch.Tensor, torch.Tensor]:
+        row_slice, col_slice = bounds.slices()
+        mean = self.base_mean[:, row_slice, col_slice].unsqueeze(0).expand(self.member_count, -1, -1, -1).clone()
+        variance = self.base_variance[:, row_slice, col_slice].unsqueeze(0).expand_as(mean).clone()
+        for overlay in self.overlays:
+            row0 = max(bounds.row0, overlay.bounds.row0)
+            row1 = min(bounds.row1, overlay.bounds.row1)
+            col0 = max(bounds.col0, overlay.bounds.col0)
+            col1 = min(bounds.col1, overlay.bounds.col1)
+            if row0 >= row1 or col0 >= col1:
+                continue
+            target_rows = slice(row0 - bounds.row0, row1 - bounds.row0)
+            target_cols = slice(col0 - bounds.col0, col1 - bounds.col0)
+            source_rows = slice(row0 - overlay.bounds.row0, row1 - overlay.bounds.row0)
+            source_cols = slice(col0 - overlay.bounds.col0, col1 - overlay.bounds.col0)
+            mean[:, :, target_rows, target_cols] = overlay.mean[:, :, source_rows, source_cols]
+            variance[:, :, target_rows, target_cols] = overlay.variance[:, :, source_rows, source_cols]
+        return mean, variance
+
+    def append(self, bounds: LocalPatchBounds, mean: torch.Tensor, variance: torch.Tensor) -> None:
+        self.overlays.append(_SparsePatchOverlay(bounds, mean, variance))
 
 
 class SpatialExpectedFreeEnergy:
@@ -141,6 +187,7 @@ class SpatialExpectedFreeEnergy:
         next_material_mean: torch.Tensor,
         next_material_variance: torch.Tensor,
         *,
+        next_material_delta: torch.Tensor | None = None,
         execution_uncertainty: float,
         contact_loss_probability: float,
         motor_overshoot: float,
@@ -150,10 +197,13 @@ class SpatialExpectedFreeEnergy:
         motor_epistemic_value: float = 0.0,
         motor_efe_approximation: str = "",
     ) -> SpatialEFEComponents:
+        first_transition: SpatialFirstTransition = (next_material_mean, next_material_variance)
+        if next_material_delta is not None:
+            first_transition = (next_material_mean, next_material_variance, next_material_delta)
         return self._evaluate(
             belief,
             policy,
-            first_transition=(next_material_mean, next_material_variance),
+            first_transition=first_transition,
             execution_uncertainty=execution_uncertainty,
             contact_loss_probability=contact_loss_probability,
             motor_overshoot=motor_overshoot,
@@ -168,7 +218,7 @@ class SpatialExpectedFreeEnergy:
         self,
         belief: SpatialCanvasState,
         policy: Policy,
-        first_transition: tuple[torch.Tensor, torch.Tensor] | None = None,
+        first_transition: SpatialFirstTransition | None = None,
         execution_uncertainty: float = 0.0,
         contact_loss_probability: float = 0.0,
         motor_overshoot: float = 0.0,
@@ -245,7 +295,7 @@ class SpatialExpectedFreeEnergy:
         self,
         belief: SpatialCanvasState,
         policies: list[Policy],
-        first_transition: tuple[torch.Tensor, torch.Tensor] | None = None,
+        first_transition: SpatialFirstTransition | None = None,
         execution_uncertainty: float = 0.0,
         contact_loss_probability: float = 0.0,
         motor_overshoot: float = 0.0,
@@ -257,33 +307,18 @@ class SpatialExpectedFreeEnergy:
     ) -> list[SpatialEFEComponents]:
         if first_transition is not None and len(policies) != 1:
             raise ValueError("An execution-forecast first transition applies to a single policy.")
-        if first_transition is not None:
-            return [
-                self._evaluate_local_ensemble_policy(
-                    belief,
-                    policy,
-                    first_transition=first_transition,
-                    execution_uncertainty=execution_uncertainty,
-                    contact_loss_probability=contact_loss_probability,
-                    motor_overshoot=motor_overshoot,
-                    motor_feasible=motor_feasible,
-                    motor_risk=motor_risk,
-                    motor_ambiguity=motor_ambiguity,
-                    motor_epistemic_value=motor_epistemic_value,
-                    motor_efe_approximation=motor_efe_approximation,
-                )
-                for policy in policies
-            ]
 
         device = self.device
         policy_count = len(policies)
         material = torch.tensor(pixel_material_from_state(belief), device=device, dtype=torch.float32)
         logvar = torch.tensor(pixel_logvar_from_state(belief, self.cfg), device=device, dtype=torch.float32)
         channels, height, width = material.shape
-        field_shape = (channels, height, width)
         member_count = len(self.dynamics.members)
-        member_states = material.view(1, 1, *field_shape).expand(policy_count, member_count, *field_shape).clone()
-        member_within = logvar.exp().view(1, 1, *field_shape).expand_as(member_states).clone()
+        base_variance = logvar.exp()
+        sparse_states = [
+            _SparseMemberCanvas(material, base_variance, member_count)
+            for _ in policies
+        ]
         full_area = float(height * width)
         touched = torch.zeros((policy_count, height, width), device=device, dtype=torch.bool)
 
@@ -294,8 +329,76 @@ class SpatialExpectedFreeEnergy:
         local_steps = [0 for _ in policies]
         sequential_steps = [0 for _ in policies]
         depths = [len(policy.actions) - 1 for policy in policies]
+        first_transition_used = first_transition is not None and not policies[0].actions[0].stop
+        forecast_mean: torch.Tensor | None = None
+        forecast_variance: torch.Tensor | None = None
+        forecast_delta: torch.Tensor | None = None
+        if first_transition_used:
+            forecast_mean, forecast_variance = self._transition_to_rollout_grid(
+                first_transition,
+                channels,
+                height,
+                width,
+            )
+            if len(first_transition) == 3:
+                forecast_delta = self._field_to_grid(first_transition[2], channels, height, width)
 
         for step in range(max(depths, default=0)):
+            if first_transition_used and step == 0:
+                policy = policies[0]
+                action = policy.actions[0]
+                raster = rasterize_stroke_action(
+                    action,
+                    width,
+                    motor_primitive=policy.motor_primitive,
+                    config=self.cfg,
+                )
+                assert forecast_mean is not None and forecast_variance is not None
+                changed_source = forecast_delta if forecast_delta is not None else forecast_mean - material
+                changed = changed_source.abs().sum(dim=0) > 1e-8
+                support_raster = raster.copy()
+                support_raster[0] = np.maximum(
+                    support_raster[0],
+                    changed.detach().cpu().numpy().astype(support_raster.dtype),
+                )
+                bounds = local_patch_bounds_for_raster(support_raster, width, self.cfg)
+                if bounds is not None:
+                    if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
+                        sequential_steps[0] += 1
+                    row_slice, col_slice = bounds.slices()
+                    current_patch, _ = sparse_states[0].extract(bounds)
+                    proposed_patch = forecast_mean[:, row_slice, col_slice].unsqueeze(0).expand_as(current_patch)
+                    next_patch = project_material_support(
+                        current_patch,
+                        proposed_patch,
+                        self.cfg.thickness_scale,
+                        self.cfg.canvas_ground_tone,
+                    )
+                    selected_within = (
+                        forecast_variance[:, row_slice, col_slice]
+                        .unsqueeze(0)
+                        .expand_as(current_patch)
+                        .clamp(min=1e-8)
+                    )
+                    aleatoric = selected_within.mean(dim=0)
+                    epistemic_variance = next_patch.var(dim=0, unbiased=False)
+                    marginal_entropy = self._scaled_normal_entropy(aleatoric + epistemic_variance, full_area)
+                    conditional_entropy = self._scaled_normal_entropy(selected_within, full_area).mean()
+                    transition_risk[0] = transition_risk[0] - marginal_entropy
+                    transition_ambiguity[0] = transition_ambiguity[0] + conditional_entropy
+                    epistemic_value[0] = epistemic_value[0] + torch.clamp(
+                        marginal_entropy - conditional_entropy,
+                        min=0.0,
+                    )
+                    sparse_states[0].append(bounds, next_patch, selected_within)
+                    touched[0, row_slice, col_slice] = True
+                    local_steps[0] += 1
+                    ambiguity[0] = ambiguity[0] + self._observation_ambiguity_scaled(
+                        next_patch,
+                        full_area,
+                    ).mean()
+                continue
+
             specs: list[tuple[int, object, torch.Tensor]] = []
             for policy_index, policy in enumerate(policies):
                 if depths[policy_index] <= step:
@@ -318,27 +421,29 @@ class SpatialExpectedFreeEnergy:
             if not specs:
                 continue
 
-            buckets: dict[tuple[int, int], list[tuple[int, object, torch.Tensor]]] = {}
+            buckets: dict[tuple[int, int, int], list[tuple[int, LocalPatchBounds, torch.Tensor]]] = {}
             for spec in specs:
-                _, bounds, _ = spec
-                buckets.setdefault((bounds.height, bounds.width), []).append(spec)
+                policy_index, bounds, _ = spec
+                sequential = bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit)
+                bucket_id = policy_index + 1 if sequential else 0
+                buckets.setdefault((bounds.height, bounds.width, bucket_id), []).append(spec)
 
-            for (bucket_h, bucket_w), bucket_specs in buckets.items():
+            for (bucket_h, bucket_w, _), bucket_specs in buckets.items():
                 patch_count = len(bucket_specs)
                 action_channels = bucket_specs[0][2].shape[0]
                 state_batch = torch.zeros(
                     (member_count, patch_count, channels, bucket_h, bucket_w),
                     device=device,
-                    dtype=member_states.dtype,
+                    dtype=material.dtype,
                 )
                 action_batch = torch.zeros(
                     (member_count, patch_count, action_channels, bucket_h, bucket_w),
                     device=device,
-                    dtype=member_states.dtype,
+                    dtype=material.dtype,
                 )
                 for spec_index, (policy_index, bounds, action_raster) in enumerate(bucket_specs):
-                    row_slice, col_slice = bounds.slices()
-                    state_batch[:, spec_index] = member_states[policy_index, :, :, row_slice, col_slice]
+                    patch_mean, _ = sparse_states[policy_index].extract(bounds)
+                    state_batch[:, spec_index] = patch_mean
                     action_batch[:, spec_index] = action_raster.unsqueeze(0).expand(member_count, -1, -1, -1)
 
                 means_by_member: list[torch.Tensor] = []
@@ -349,7 +454,6 @@ class SpatialExpectedFreeEnergy:
                     logvars_by_member.append(logvars)
 
                 for spec_index, (policy_index, bounds, _) in enumerate(bucket_specs):
-                    row_slice, col_slice = bounds.slices()
                     next_patch = torch.stack(
                         [means_by_member[member_index][spec_index] for member_index in range(member_count)],
                         dim=0,
@@ -370,8 +474,8 @@ class SpatialExpectedFreeEnergy:
                         min=0.0,
                     )
 
-                    member_states[policy_index, :, :, row_slice, col_slice] = next_patch
-                    member_within[policy_index, :, :, row_slice, col_slice] = selected_within
+                    sparse_states[policy_index].append(bounds, next_patch, selected_within)
+                    row_slice, col_slice = bounds.slices()
                     touched[policy_index, row_slice, col_slice] = True
                     local_steps[policy_index] += 1
                     ambiguity[policy_index] = ambiguity[policy_index] + self._observation_ambiguity_scaled(
@@ -379,16 +483,18 @@ class SpatialExpectedFreeEnergy:
                         full_area,
                     ).mean()
 
-        coverage_mean, coverage_variance = self._member_coverage_moments(member_states, member_within)
+        coverage_mean, coverage_variance, composition_fields = self._sparse_terminal_statistics(
+            material,
+            base_variance,
+            sparse_states,
+            self.cfg.spatial_grid_size,
+        )
         coverage_std = torch.sqrt(torch.clamp(coverage_variance, min=1e-8))
         terminal_risk, terminal_entropy, pragmatic_value = terminal_preference_terms(
             self.preference,
             coverage_mean,
             coverage_variance,
             precision=self.cfg.terminal_risk_precision,
-        )
-        composition_fields = self._composition_fields_from_terminal(
-            member_states.reshape(policy_count * member_count, *field_shape)
         )
         member_gap, member_composition_risk = self._composition_terms(composition_fields)
         composition_gap = member_gap.reshape(policy_count, member_count).mean(dim=1)
@@ -398,8 +504,21 @@ class SpatialExpectedFreeEnergy:
         transition_risk = self.cfg.transition_precision * transition_risk
         transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
         epistemic_value = self.cfg.transition_precision * epistemic_value
-        motor_risk_t = torch.zeros(policy_count, device=device)
-        motor_ambiguity_t = torch.zeros(policy_count, device=device)
+        motor_risk_t = torch.full(
+            (policy_count,),
+            float(motor_risk if first_transition_used else 0.0),
+            device=device,
+        )
+        motor_ambiguity_t = torch.full(
+            (policy_count,),
+            float(motor_ambiguity if first_transition_used else 0.0),
+            device=device,
+        )
+        motor_epistemic_t = torch.full(
+            (policy_count,),
+            float(motor_epistemic_value if first_transition_used else 0.0),
+            device=device,
+        )
         total = (
             terminal_risk
             + ambiguity
@@ -408,6 +527,7 @@ class SpatialExpectedFreeEnergy:
             + composition_risk
             + motor_risk_t
             + motor_ambiguity_t
+            - motor_epistemic_t
         )
         patch_area = touched.float().mean(dim=(1, 2))
 
@@ -427,15 +547,15 @@ class SpatialExpectedFreeEnergy:
                 composition_risk=float(composition_risk[index].item()),
                 grid_size=belief.grid_size,
                 material_channels=channels,
-                execution_uncertainty=execution_uncertainty,
-                contact_loss_probability=contact_loss_probability,
-                motor_overshoot=motor_overshoot,
+                execution_uncertainty=execution_uncertainty if first_transition_used else 0.0,
+                contact_loss_probability=contact_loss_probability if first_transition_used else 0.0,
+                motor_overshoot=motor_overshoot if first_transition_used else 0.0,
                 motor_risk=float(motor_risk_t[index].item()),
                 motor_ambiguity=float(motor_ambiguity_t[index].item()),
-                motor_epistemic_value=0.0,
-                motor_efe_approximation="",
+                motor_epistemic_value=float(motor_epistemic_t[index].item()),
+                motor_efe_approximation=motor_efe_approximation if first_transition_used else "",
                 motor_feasible=motor_feasible,
-                execution_forecast_used=False,
+                execution_forecast_used=first_transition_used,
                 rollout_mode="local_patch",
                 rollout_grid_size=width,
                 active_patch_area_fraction=float(patch_area[index].item()),
@@ -450,7 +570,7 @@ class SpatialExpectedFreeEnergy:
         self,
         belief: SpatialCanvasState,
         policy: Policy,
-        first_transition: tuple[torch.Tensor, torch.Tensor] | None = None,
+        first_transition: SpatialFirstTransition | None = None,
         execution_uncertainty: float = 0.0,
         contact_loss_probability: float = 0.0,
         motor_overshoot: float = 0.0,
@@ -460,153 +580,25 @@ class SpatialExpectedFreeEnergy:
         motor_epistemic_value: float = 0.0,
         motor_efe_approximation: str = "",
     ) -> SpatialEFEComponents:
-        device = self.device
-        material = torch.tensor(pixel_material_from_state(belief), device=device, dtype=torch.float32)
-        logvar = torch.tensor(pixel_logvar_from_state(belief, self.cfg), device=device, dtype=torch.float32)
-        channels, height, width = material.shape
-        member_count = len(self.dynamics.members)
-        member_states = material.unsqueeze(0).expand(member_count, channels, height, width).clone()
-        member_within = logvar.exp().unsqueeze(0).expand_as(member_states).clone()
-        full_area = float(height * width)
-        touched = torch.zeros((height, width), device=device, dtype=torch.bool)
-
-        ambiguity = torch.tensor(0.0, device=device)
-        transition_risk = torch.tensor(0.0, device=device)
-        transition_ambiguity = torch.tensor(0.0, device=device)
-        epistemic_value = torch.tensor(0.0, device=device)
-        local_steps = 0
-        sequential_steps = 0
-        first_transition_used = False
-
-        for step, action in enumerate(policy.actions):
-            if action.stop:
-                break
-            if first_transition is not None and not first_transition_used:
-                next_mean, next_variance = self._transition_to_rollout_grid(first_transition, channels, height, width)
-                current = member_states
-                projected = project_material_support(
-                    current,
-                    next_mean.unsqueeze(0).expand_as(current),
-                    self.cfg.thickness_scale,
-                    self.cfg.canvas_ground_tone,
-                )
-                member_states = projected
-                member_within = torch.clamp(next_variance.unsqueeze(0).expand_as(current), min=1e-8)
-                changed = (projected - current).abs().sum(dim=1) > 1e-8
-                touched = touched | changed.any(dim=0)
-                ambiguity = ambiguity + self._observation_ambiguity(member_states).mean()
-                first_transition_used = True
-                continue
-
-            raster = rasterize_stroke_action(
-                action,
-                width,
-                motor_primitive=policy.motor_primitive if step == 0 else None,
-                config=self.cfg,
-            )
-            bounds = local_patch_bounds_for_raster(raster, width, self.cfg)
-            if bounds is None:
-                continue
-            if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
-                sequential_steps += 1
-            row_slice, col_slice = bounds.slices()
-            action_raster = torch.tensor(raster, device=device, dtype=torch.float32)[:, row_slice, col_slice]
-            patch_states = member_states[:, :, row_slice, col_slice]
-            patch_actions = action_raster.unsqueeze(0).expand(member_count, -1, -1, -1)
-            selected_means: list[torch.Tensor] = []
-            selected_logvars: list[torch.Tensor] = []
-            for member_index, member in enumerate(self.dynamics.members):
-                mean, logvar_patch = member(
-                    patch_states[member_index : member_index + 1],
-                    patch_actions[member_index : member_index + 1],
-                )
-                selected_means.append(mean[0])
-                selected_logvars.append(logvar_patch[0])
-            next_patch = torch.stack(selected_means, dim=0)
-            selected_within = torch.stack(selected_logvars, dim=0).exp().clamp(min=1e-8)
-
-            aleatoric = selected_within.mean(dim=0)
-            epistemic_variance = next_patch.var(dim=0, unbiased=False)
-            marginal_entropy = self._scaled_normal_entropy(aleatoric + epistemic_variance, full_area)
-            conditional_entropy = self._scaled_normal_entropy(selected_within, full_area).mean()
-            transition_risk = transition_risk - marginal_entropy
-            transition_ambiguity = transition_ambiguity + conditional_entropy
-            epistemic_value = epistemic_value + torch.clamp(marginal_entropy - conditional_entropy, min=0.0)
-
-            member_states[:, :, row_slice, col_slice] = next_patch
-            member_within[:, :, row_slice, col_slice] = selected_within
-            touched[row_slice, col_slice] = True
-            local_steps += 1
-            ambiguity = ambiguity + self._observation_ambiguity_scaled(next_patch, full_area).mean()
-
-        coverage_mean, coverage_variance = self._member_coverage_moments(
-            member_states.unsqueeze(0),
-            member_within.unsqueeze(0),
-        )
-        coverage_std = torch.sqrt(torch.clamp(coverage_variance, min=1e-8))
-        terminal_risk, terminal_entropy, pragmatic_value = terminal_preference_terms(
-            self.preference,
-            coverage_mean,
-            coverage_variance,
-            precision=self.cfg.terminal_risk_precision,
-        )
-        composition_fields = self._composition_fields_from_terminal(member_states)
-        member_gap, member_composition_risk = self._composition_terms(composition_fields)
-        composition_gap = member_gap.mean()
-        composition_risk = member_composition_risk.mean()
-
-        ambiguity = self.cfg.ambiguity_precision * ambiguity
-        transition_risk = self.cfg.transition_precision * transition_risk
-        transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
-        epistemic_value = self.cfg.transition_precision * epistemic_value
-        motor_risk_value = float(motor_risk if first_transition_used else 0.0)
-        motor_ambiguity_value = float(motor_ambiguity if first_transition_used else 0.0)
-        total = (
-            terminal_risk[0]
-            + ambiguity
-            + transition_risk
-            + transition_ambiguity
-            + composition_risk
-            + motor_risk_value
-            + motor_ambiguity_value
-        )
-        return SpatialEFEComponents(
-            total=float(total.item()),
-            terminal_risk=float(terminal_risk[0].item()),
-            ambiguity=float(ambiguity.item()),
-            epistemic_value=float(epistemic_value.item()),
-            terminal_coverage_mean=float(coverage_mean[0].item()),
-            terminal_coverage_std=float(coverage_std[0].item()),
-            terminal_entropy=float(terminal_entropy[0].item()),
-            pragmatic_value=float(pragmatic_value[0].item()),
-            transition_risk=float(transition_risk.item()),
-            transition_ambiguity=float(transition_ambiguity.item()),
-            composition_gap=float(composition_gap.item()),
-            composition_risk=float(composition_risk.item()),
-            grid_size=belief.grid_size,
-            material_channels=channels,
-            execution_uncertainty=execution_uncertainty if first_transition_used else 0.0,
-            contact_loss_probability=contact_loss_probability if first_transition_used else 0.0,
-            motor_overshoot=motor_overshoot if first_transition_used else 0.0,
-            motor_risk=motor_risk_value,
-            motor_ambiguity=motor_ambiguity_value,
-            motor_epistemic_value=float(motor_epistemic_value if first_transition_used else 0.0),
-            motor_efe_approximation=motor_efe_approximation if first_transition_used else "",
+        return self._evaluate_local_ensemble_batch(
+            belief,
+            [policy],
+            first_transition=first_transition,
+            execution_uncertainty=execution_uncertainty,
+            contact_loss_probability=contact_loss_probability,
+            motor_overshoot=motor_overshoot,
             motor_feasible=motor_feasible,
-            execution_forecast_used=first_transition_used,
-            rollout_mode="local_patch",
-            rollout_grid_size=width,
-            active_patch_area_fraction=float(touched.float().mean().item()),
-            local_transition_steps=local_steps,
-            sequential_patch_steps=sequential_steps,
-            identity_transition_approximation=self._local_identity_approximation(local_steps),
-        )
+            motor_risk=motor_risk,
+            motor_ambiguity=motor_ambiguity,
+            motor_epistemic_value=motor_epistemic_value,
+            motor_efe_approximation=motor_efe_approximation,
+        )[0]
 
     def _evaluate_local_mixture(
         self,
         belief: SpatialCanvasState,
         policy: Policy,
-        first_transition: tuple[torch.Tensor, torch.Tensor] | None = None,
+        first_transition: SpatialFirstTransition | None = None,
         execution_uncertainty: float = 0.0,
         contact_loss_probability: float = 0.0,
         motor_overshoot: float = 0.0,
@@ -706,6 +698,7 @@ class SpatialExpectedFreeEnergy:
         epistemic_value = self.cfg.transition_precision * epistemic_value
         motor_risk_value = float(motor_risk if first_transition_used else 0.0)
         motor_ambiguity_value = float(motor_ambiguity if first_transition_used else 0.0)
+        motor_epistemic_value_used = float(motor_epistemic_value if first_transition_used else 0.0)
         total = (
             terminal_risk
             + ambiguity
@@ -714,6 +707,7 @@ class SpatialExpectedFreeEnergy:
             + composition_risk
             + motor_risk_value
             + motor_ambiguity_value
+            - motor_epistemic_value_used
         )
         return SpatialEFEComponents(
             total=float(total.item()),
@@ -749,12 +743,12 @@ class SpatialExpectedFreeEnergy:
 
     def _transition_to_rollout_grid(
         self,
-        first_transition: tuple[torch.Tensor, torch.Tensor],
+        first_transition: SpatialFirstTransition,
         channels: int,
         height: int,
         width: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        mean, variance = first_transition
+        mean, variance = first_transition[:2]
         mean = self._field_to_grid(mean, channels, height, width)
         variance = self._field_to_grid(variance, channels, height, width)
         return mean, torch.clamp(variance, min=1e-8)
@@ -811,7 +805,7 @@ class SpatialExpectedFreeEnergy:
         self,
         belief: SpatialCanvasState,
         policies: list[Policy],
-        first_transition: tuple[torch.Tensor, torch.Tensor] | None = None,
+        first_transition: SpatialFirstTransition | None = None,
         execution_uncertainty: float = 0.0,
         contact_loss_probability: float = 0.0,
         motor_overshoot: float = 0.0,
@@ -851,7 +845,7 @@ class SpatialExpectedFreeEnergy:
                 break
             active_t = torch.tensor(active, dtype=torch.long, device=device)
             if first_transition is not None and step == 0:
-                next_mean, next_variance = first_transition
+                next_mean, next_variance = first_transition[:2]
                 next_mean = next_mean.to(device, dtype=torch.float32).reshape(1, *field_shape)
                 next_variance = next_variance.to(device, dtype=torch.float32).reshape(1, *field_shape)
                 current_flat = member_states[active_t].reshape(len(active) * member_count, *field_shape)
@@ -937,6 +931,9 @@ class SpatialExpectedFreeEnergy:
         motor_ambiguity_t = torch.full(
             (policy_count,), float(motor_ambiguity if first_transition_used else 0.0), device=device
         )
+        motor_epistemic_t = torch.full(
+            (policy_count,), float(motor_epistemic_value if first_transition_used else 0.0), device=device
+        )
         total = (
             terminal_risk
             + ambiguity
@@ -945,6 +942,7 @@ class SpatialExpectedFreeEnergy:
             + composition_risk
             + motor_risk_t
             + motor_ambiguity_t
+            - motor_epistemic_t
         )
 
         return [
@@ -977,6 +975,131 @@ class SpatialExpectedFreeEnergy:
             )
             for index in range(policy_count)
         ]
+
+    def _sparse_terminal_statistics(
+        self,
+        base_mean: torch.Tensor,
+        base_variance: torch.Tensor,
+        sparse_states: list[_SparseMemberCanvas],
+        coarse_grid: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Coverage moments and deterministic coarse fields from local overlays."""
+
+        channels, height, width = base_mean.shape
+        full_area = float(height * width)
+        member_count = sparse_states[0].member_count if sparse_states else 1
+
+        def coverage_fields(mean: torch.Tensor, variance: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            if channels > 5:
+                return torch.clamp(mean[..., 5, :, :], 0.0, 1.0), torch.clamp(
+                    variance[..., 5, :, :], min=1e-8
+                )
+            scale = max(1e-8, self.cfg.thickness_scale)
+            thickness = torch.clamp(mean[..., 0, :, :], min=0.0)
+            coverage = 1.0 - torch.exp(-thickness / scale)
+            derivative = torch.exp(-thickness / scale) / scale
+            coverage_variance = derivative.square() * torch.clamp(variance[..., 0, :, :], min=1e-8)
+            return coverage, coverage_variance
+
+        base_coverage, base_coverage_variance = coverage_fields(base_mean, base_variance)
+        base_coverage_sum = base_coverage.sum()
+        base_variance_sum = base_coverage_variance.sum()
+        base_coarse = self._composition_fields_from_terminal(base_mean)[0]
+        divisible = height % coarse_grid == 0 and width % coarse_grid == 0
+        if divisible:
+            tile_height = height // coarse_grid
+            tile_width = width // coarse_grid
+            tile_counts = torch.full(
+                (coarse_grid * coarse_grid,),
+                float(tile_height * tile_width),
+                device=base_mean.device,
+                dtype=base_mean.dtype,
+            )
+
+        coverage_means: list[torch.Tensor] = []
+        coverage_variances: list[torch.Tensor] = []
+        coarse_fields: list[torch.Tensor] = []
+        for sparse in sparse_states:
+            member_coverage_sum = base_coverage_sum.expand(member_count).clone()
+            member_variance_sum = base_variance_sum.expand(member_count).clone()
+            claimed = torch.zeros((height, width), device=base_mean.device, dtype=torch.bool)
+            coarse_delta = torch.zeros(
+                (member_count, channels, coarse_grid * coarse_grid),
+                device=base_mean.device,
+                dtype=base_mean.dtype,
+            ) if divisible else None
+
+            for overlay in reversed(sparse.overlays):
+                row_slice, col_slice = overlay.bounds.slices()
+                available = ~claimed[row_slice, col_slice]
+                if not bool(available.any()):
+                    continue
+                base_patch_mean = base_mean[:, row_slice, col_slice]
+                base_patch_variance = base_variance[:, row_slice, col_slice]
+                overlay_coverage, overlay_coverage_variance = coverage_fields(overlay.mean, overlay.variance)
+                base_patch_coverage, base_patch_coverage_variance = coverage_fields(
+                    base_patch_mean,
+                    base_patch_variance,
+                )
+                mask = available.to(base_mean.dtype).unsqueeze(0)
+                member_coverage_sum += ((overlay_coverage - base_patch_coverage.unsqueeze(0)) * mask).sum(
+                    dim=(-2, -1)
+                )
+                member_variance_sum += (
+                    (overlay_coverage_variance - base_patch_coverage_variance.unsqueeze(0)) * mask
+                ).sum(dim=(-2, -1))
+
+                if coarse_delta is not None:
+                    rows = torch.arange(
+                        overlay.bounds.row0,
+                        overlay.bounds.row1,
+                        device=base_mean.device,
+                    ) // tile_height
+                    cols = torch.arange(
+                        overlay.bounds.col0,
+                        overlay.bounds.col1,
+                        device=base_mean.device,
+                    ) // tile_width
+                    tile_indices = (rows[:, None] * coarse_grid + cols[None, :]).reshape(-1)
+                    indices = tile_indices.view(1, 1, -1).expand(member_count, channels, -1)
+                    values = (
+                        (overlay.mean - base_patch_mean.unsqueeze(0))
+                        * available.to(base_mean.dtype).view(1, 1, overlay.bounds.height, overlay.bounds.width)
+                    ).reshape(member_count, channels, -1)
+                    coarse_delta.scatter_add_(2, indices, values)
+                claimed[row_slice, col_slice] = True
+
+            member_coverage = member_coverage_sum / full_area
+            within_aggregate = torch.clamp(member_variance_sum, min=0.0) / (full_area * full_area)
+            coverage_means.append(torch.clamp(member_coverage.mean(), 1e-4, 1.0 - 1e-4))
+            coverage_variances.append(
+                torch.clamp(
+                    member_coverage.var(unbiased=False) + within_aggregate.mean(),
+                    min=1e-8,
+                )
+            )
+
+            if coarse_delta is not None:
+                coarse = base_coarse.unsqueeze(0).expand(member_count, -1, -1, -1).clone()
+                coarse += (coarse_delta / tile_counts.view(1, 1, -1)).reshape(
+                    member_count,
+                    channels,
+                    coarse_grid,
+                    coarse_grid,
+                )
+            else:
+                terminal = base_mean.unsqueeze(0).expand(member_count, -1, -1, -1).clone()
+                for overlay in sparse.overlays:
+                    row_slice, col_slice = overlay.bounds.slices()
+                    terminal[:, :, row_slice, col_slice] = overlay.mean
+                coarse = self._composition_fields_from_terminal(terminal)
+            coarse_fields.append(coarse)
+
+        return (
+            torch.stack(coverage_means),
+            torch.stack(coverage_variances),
+            torch.cat(coarse_fields, dim=0),
+        )
 
     def _member_coverage_moments(
         self,
@@ -1014,7 +1137,7 @@ class SpatialExpectedFreeEnergy:
         self,
         belief: SpatialCanvasState,
         policy: Policy,
-        first_transition: tuple[torch.Tensor, torch.Tensor] | None = None,
+        first_transition: SpatialFirstTransition | None = None,
         execution_uncertainty: float = 0.0,
         contact_loss_probability: float = 0.0,
         motor_overshoot: float = 0.0,
@@ -1038,7 +1161,7 @@ class SpatialExpectedFreeEnergy:
             if action.stop:
                 break
             if first_transition is not None and not first_transition_used:
-                next_mean, next_variance = first_transition
+                next_mean, next_variance = first_transition[:2]
                 next_mean = next_mean.to(self.device, dtype=mean.dtype)
                 next_variance = next_variance.to(self.device, dtype=mean.dtype)
                 if next_mean.ndim == 1:
@@ -1102,6 +1225,7 @@ class SpatialExpectedFreeEnergy:
         epistemic_value = self.cfg.transition_precision * epistemic_value
         motor_risk_value = float(motor_risk if first_transition_used else 0.0)
         motor_ambiguity_value = float(motor_ambiguity if first_transition_used else 0.0)
+        motor_epistemic_value_used = float(motor_epistemic_value if first_transition_used else 0.0)
         total = (
             terminal_risk
             + ambiguity
@@ -1110,6 +1234,7 @@ class SpatialExpectedFreeEnergy:
             + composition_risk
             + motor_risk_value
             + motor_ambiguity_value
+            - motor_epistemic_value_used
         )
         return SpatialEFEComponents(
             total=float(total.item()),

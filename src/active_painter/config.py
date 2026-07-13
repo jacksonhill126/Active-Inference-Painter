@@ -7,7 +7,6 @@ from dataclasses import dataclass
 class PainterConfig:
     canvas_size: int = 48
     thickness_scale: float = 0.005
-    wetness_decay: float = 0.985
     canvas_ground_tone: float = 0.34
     paint_deposition_base_rate: float = 0.16
     paint_deposition_pressure_rate: float = 0.64
@@ -66,6 +65,13 @@ class PainterConfig:
     passage_plan_spacing: float = 0.20
     passage_plan_center_jitter: float = 0.08
     passage_plan_turn_jitter: float = 0.45
+    passage_local_candidate_policies: int = 6
+    passage_continuation_probability: float = 0.92
+    passage_belief_center_std: float = 0.08
+    passage_belief_direction_std: float = 0.35
+    passage_belief_geometry_std: float = 0.16
+    passage_belief_transition_std: float = 0.015
+    passage_belief_observation_std: float = 0.035
     # Declared structural prior over terminal canvases (spatial mode):
     # p*(s_T) ~ exp(precision * compression_gap(s_T)), where the gap is the
     # hierarchical code's explanatory advantage over a context-free flat code.
@@ -82,16 +88,27 @@ class PainterConfig:
     planning_horizon: int = 3
     candidate_policies: int = 96
     motor_forecast_candidates: int = 8
+    motor_forecast_samples: int = 3
     motor_planning_enabled: bool = True
     motor_realization_kinds: tuple[str, ...] = ("cartesian_ik", "joint_spline", "elbow_pivot")
     motor_realization_candidate_limit: int = 3
     motor_proprioceptive_risk_precision: float = 0.35
     motor_proprioceptive_ambiguity_precision: float = 0.25
+    motor_current_preference_std: float = 0.35
+    motor_torque_preference_std: float = 0.35
+    motor_velocity_preference_std: float = 0.40
+    motor_acceleration_preference_std: float = 0.45
+    motor_target_error_preference_std: float = 0.20
+    motor_limit_preference_std: float = 0.12
+    motor_contact_loss_preference_std: float = 0.12
+    motor_pressure_error_preference_std: float = 0.20
+    motor_path_error_preference_std: float = 0.12
     motor_limit_margin_degrees: float = 12.0
     post_stroke_retract_seconds: float = 0.35
     passage_local_retract_seconds: float = 0.12
     passage_center_retract_seconds: float = 0.65
     global_planning_retract_depth: float = 4.0
+    global_planning_clearance_fraction: float = 0.60
     global_planning_park_x_fraction: float = 0.0
     local_passage_retract_depth: float = 1.0
     hold_damping_multiplier: float = 3.5

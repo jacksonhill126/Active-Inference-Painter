@@ -62,6 +62,10 @@ def test_active_inference_driver_reports_efe_decomposition() -> None:
     assert "pragmatic_value" in diag["efe"]
     assert "transition_risk" in diag["efe"]
     assert "transition_ambiguity" in diag["efe"]
+    assert diag["vfe"] is not None
+    assert diag["vfe"]["total"] == pytest.approx(
+        diag["vfe"]["complexity"] + diag["vfe"]["negative_log_likelihood"]
+    )
     assert diag["transitionModel"].startswith("learned DynamicsEnsemble")
 
 
@@ -152,7 +156,7 @@ def test_spatial_material_driver_reports_spatial_planner_state() -> None:
         "thickness",
         "wetness",
         "black_mass",
-        "observed_tone",
+        "surface_tone",
         "ground_contrast",
         "material_coverage",
     ]
@@ -163,6 +167,7 @@ def test_spatial_material_driver_reports_spatial_planner_state() -> None:
     assert diagnostics["efe"]["execution_forecast_used"] is True
     assert diagnostics["efe"]["rollout_mode"] == "local_patch"
     assert diagnostics["efe"]["rollout_grid_size"] == cfg.canvas_size
+    assert diagnostics["vfe"]["units"] == "nats_per_cell_channel"
     assert diagnostics["topPolicies"][0]["motorFeasible"] is True
 
 
@@ -368,9 +373,9 @@ def test_spatial_execution_forecast_covariance_propagates_to_material_variance()
     next_material[1] = 0.5 * next_material[0]
     next_material[2] = 0.25 * next_material[0]
     coverage = 1.0 - np.exp(-np.clip(next_material[0], 0.0, None) / cfg.thickness_scale)
-    pigment_tone = np.clip(next_material[2] / np.maximum(next_material[0], 1e-6), 0.0, 1.0)
-    next_material[3] = np.clip((1.0 - coverage) * cfg.canvas_ground_tone + coverage * pigment_tone, 0.0, 1.0)
-    next_material[4] = np.abs(next_material[3] - cfg.canvas_ground_tone)
+    next_material[3] = 0.25
+    observed_tone = (1.0 - coverage) * cfg.canvas_ground_tone + coverage * next_material[3]
+    next_material[4] = np.abs(observed_tone - cfg.canvas_ground_tone)
     next_material[5] = coverage
     belief = SpatialCanvasState(material=material, logvar=np.full_like(material, -8.0))
     low = ExecutionForecast(
@@ -447,7 +452,11 @@ def test_active_inference_driver_diagnostics_with_execution_forecast_are_json_se
     diagnostics = driver.diagnostics()
 
     json.dumps(diagnostics)
-    assert isinstance(diagnostics["executionForecast"]["next_state_mean"], list)
+    forecast = diagnostics["executionForecast"]
+    assert "next_state_mean" not in forecast
+    assert forecast["state_vector_dim"] == 6
+    assert forecast["canvas_delta_abs_mean"] == 0.0
+    assert "retained for inference" in forecast["state_fields_omitted"]
 
 
 def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan() -> None:
@@ -678,6 +687,48 @@ def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_c
     assert driver.phase_label() == "return_center"
 
 
+def test_global_planning_waits_for_retraction_timer_and_physical_clearance(monkeypatch) -> None:
+    cfg = PainterConfig(canvas_size=48, post_stroke_retract_seconds=0.02)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    calls: list[float] = []
+
+    def record_start(self, working_sim):
+        calls.append(float(working_sim.kinematics.tip(working_sim.actual_pose)[1]))
+
+    monkeypatch.setattr(ArmActiveInferenceDriver, "_start_background_plan", record_start)
+    driver._post_stroke_retract_remaining = 0.02
+
+    driver.step(sim, 0.01)
+    driver.step(sim, 0.01)
+    driver.step(sim, 0.01)
+
+    assert calls == []
+    retracted = driver._global_hold_pose(sim)
+    sim.actual_pose = retracted
+    sim.target_pose = retracted
+    sim.plant.reset_state(retracted)
+    sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(retracted), 0.0)
+
+    driver.step(sim, 0.01)
+
+    assert len(calls) == 1
+
+
+def test_stale_planner_generation_cannot_publish_after_reset() -> None:
+    cfg = PainterConfig(candidate_policies=2, planning_horizon=1, motor_forecast_samples=1)
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    stale_generation = driver._planner_generation
+    driver.reset(sim)
+
+    driver._background_plan(canvas_summary_state(sim), None, None, stale_generation)
+
+    assert driver._pending_current is None
+    assert driver._pending_ranked is None
+    assert not driver.planning
+
+
 def test_passage_queue_uses_local_hold_then_returns_center_after_final_mark() -> None:
     cfg = PainterConfig(
         canvas_size=48,
@@ -733,6 +784,12 @@ def test_active_inference_planning_does_not_block_body_step() -> None:
     driver.step(sim, 1.0 / 240.0)
     elapsed = time.perf_counter() - started
     assert elapsed < 0.05
+    assert not driver.diagnostics()["planning"]
+    for _ in range(1200):
+        sim.step(1.0 / 240.0)
+        driver.step(sim, 1.0 / 240.0)
+        if driver.diagnostics()["planning"]:
+            break
     assert driver.diagnostics()["planning"]
     wait_for_driver(driver, sim)
 

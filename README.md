@@ -5,7 +5,9 @@ It implements one feature rigorously: **policies are inferred so that the eventu
 
 It deliberately separates:
 
-- **Generative process**: stochastic paint deposition on a canvas with independent thickness, wetness, visible tone, and material coverage.
+- **Generative process**: stochastic wet-into-wet oil deposition with persistent
+  wetness, conserved bulk pigment, an optically dominant surface tone, and
+  thickness-derived material coverage. There is intentionally no wetness decay.
 - **Generative model**: a learned ensemble transition density over latent canvas states plus an explicit observation likelihood.
 - **Posterior inference**: variational state estimation by minimizing variational free energy.
 - **Preferences**: a terminal Beta density over coverage, applied only when a policy terminates in `stop`.
@@ -32,6 +34,12 @@ For a policy ending in `stop`:
 Policy selection uses the risk-plus-ambiguity decomposition. The
 information-gain/pragmatic-value form is a diagnostic identity, not an extra
 score mixed into expected free energy.
+
+State inference logs variational free energy separately from policy expected
+free energy. In spatial mode, a local Gaussian transition prior and material
+observation likelihood are fused at the native pixel level; the posterior is
+then projected deterministically into the material pyramid. Coarse levels do
+not independently guess material that disagrees with the pixel posterior.
 
 The immediate `stop` policy is always available. Continuation policies are sampled as one or more strokes followed by `stop`, so the planner can anticipate coverage overshoot rather than merely checking a threshold afterward.
 
@@ -74,6 +82,9 @@ increase the hierarchy's explanatory advantage near the coverage band.
   evaluated on pixel-derived local patches around stroke support, while cells
   outside support use an explicit identity transition prior whose constant
   entropy is logged as an approximation and omitted from local EFE terms.
+  Motor-conditioned first-transition rescoring uses the same sparse overlay
+  path, with support expanded to include both the realized material delta and
+  the action raster.
   Set `spatial_transition_mode="dense_grid"` to use the older dense planner
   grid rollout for debugging.
 - **Declared stop prior.** The policy posterior is
@@ -99,16 +110,28 @@ increase the hierarchy's explanatory advantage near the coverage band.
   carries a slowly evolving center, direction, turn, tone, and material amount;
   its child passages generate the actual marks. The plan is still only a
   policy prior, and every candidate still terminates in immediate `stop`.
+- **Receding-horizon passage inference.** A global plan predicts several
+  passages but execution commits only to the first. Within that passage, each
+  observed mark updates a slow diagonal-Gaussian posterior over center,
+  direction, length, spacing, width, and amount, plus a beta-Bernoulli tone
+  factor. A small local policy set is then inferred before the next mark. The
+  arm performs the deeper global deliberation from a retracted pose only at a
+  passage boundary.
 - **Embodied motor realization priors.** During arm-driven planning, top
   canvas candidates are expanded into declared first-stroke
   `MotorPrimitiveLatent` alternatives (`cartesian_ik`, `joint_spline`,
   `elbow_pivot` by default). Each realization is forecast through the arm,
   contact, and canvas simulator before posterior policy selection. The chosen
-  primitive contributes separate proprioceptive EFE terms: motor risk is a
-  homeostatic prior over current, torque, acceleration, limit proximity, and
-  target-error observations; motor ambiguity is a likelihood-entropy proxy
-  from contact loss, pressure variance, path covariance, and tracking
-  uncertainty. The selected primitive is also encoded into replay transitions
+  primitive contributes separate proprioceptive EFE terms over 27 named
+  normalized outcomes: per-joint current, torque, velocity, acceleration,
+  target error, and joint-limit proximity, plus contact loss, pressure error,
+  and path error. Several stochastic coupled-arm rollouts estimate each
+  predictive density. Motor risk is expected negative log probability under
+  declared homeostatic outcome preferences; ambiguity is analytic likelihood
+  excess entropy; epistemic value is analytic diagonal-Gaussian mutual
+  information. Motor alternatives are marginalized under their declared
+  priors before the conditional realization is selected. The selected
+  primitive is also encoded into replay transitions
   and learned rollouts as motor-conditioned action channels, so the learned
   transition likelihood is `p(s_next | s, stroke, motor_realization)` rather
   than stroke-only. Hard joint/current/workspace limits remain external safety
@@ -148,11 +171,11 @@ coin flip.
 
 In that mode the driver evaluates policies over:
 
-- `SpatialCanvasState`: explicit `thickness`, `wetness`, `black_mass`,
-  observed-tone, ground-contrast, and material-coverage fields on a
-  low-resolution grid. Observed tone, contrast, and coverage are deterministic
-  fields derived from primary material quantities plus the canvas substrate
-  tone, not independent reward variables.
+- `SpatialCanvasState`: explicit `thickness`, persistent `wetness`, conserved
+  `black_mass`, surface-tone, ground-contrast, and material-coverage fields.
+  Surface tone represents the optically dominant wet top layer separately from
+  bulk pigment mass. Contrast and coverage are deterministic consequences of
+  surface tone, thickness, and the canvas substrate, not reward variables.
 - `MaterialPyramidLevel`: a coarse-grained material pyramid derived from the
   pixel canvas. The default live canvas exposes a native pixel level plus
   configured tile levels and the current planner grid. Coarse coverage fields
@@ -167,7 +190,8 @@ In that mode the driver evaluates policies over:
   for `p_theta(s_patch_next | s_patch, a_patch)` in the default sparse local
   mode. `SpatialDynamicsEnsemble` remains available for dense-grid rollouts.
 - `SpatialExpectedFreeEnergy`: a risk-plus-ambiguity evaluator whose terminal
-  coverage is derived from the spatial thickness field.
+  coverage comes from the explicit pixel material-coverage field, including
+  white paint on white ground.
 - `MarkEventBelief`: a connected-component posterior summary over spatial
   material coverage, exposing mark centers, covariances, material mass,
   wetness, observed tone, ground contrast, and coverage for higher-level diagnostics. It is
@@ -200,8 +224,10 @@ There is also a lightweight Python-native arm/canvas visualizer:
 python -m active_painter.arm_visualizer
 ```
 
-It shows a conventional 4-DOF arm plant, a vertical paint canvas, soft wrist
-contact, pressure-dependent brush width, motor telemetry, and material coverage.
+It shows a stochastic coupled 4-DOF arm plant with encoders, pose-dependent
+inertia, Coriolis coupling, residual gravity, motor/link inertia, friction and
+compliance; plus a vertical wet oil-paint canvas, soft wrist contact,
+pressure-dependent brush width, motor telemetry, and material coverage.
 This body simulation sits below the painting policy boundary; it does not select
 painting policies.
 
@@ -238,11 +264,17 @@ Those mechanisms realize an inferred Cartesian/contact policy; they do not selec
 
 ## Next integration steps
 
-1. Replace the 2-D brush executor with a MuJoCo arm/canvas generative process.
-2. Preserve the same `StrokeAction` and `stop` semantics at the painting level.
-3. Expand from explicit spatial material fields to learned spatial/material latents.
-4. Add a conditional stroke/contact decoder whose pressure trajectory depends on stroke phase, speed, curvature, brush state, and local canvas state.
-5. Increase planning depth with batched policy rollouts.
-6. Add slower global composition latents and infer them without hand-written aesthetic scores.
+1. Profile passage planning and batch motor realizations across candidate
+   policies without changing posterior semantics.
+2. Replace diagonal motor outcome covariance with structured joint/contact
+   covariance and calibrate it against representative hardware data.
+3. Learn a conditional brush/contact likelihood whose pressure trajectory
+   depends on stroke phase, speed, curvature, brush loading, and local wet paint.
+4. Stress-test long runs, checkpoint compatibility, and replay retention before
+   raising policy depth or candidate count.
+5. Add learned spatial/material latents only after pixel transition likelihoods
+   are calibrated; retain deterministic decoding to material fields.
+6. Replace the current deterministic composition ELBO approximation with an
+   uncertainty-integrated higher-level latent model.
 
 See `CODEX_TASK.md` for a concrete continuation brief.

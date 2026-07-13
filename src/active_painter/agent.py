@@ -36,6 +36,10 @@ class ActiveInferencePainter:
             torch.full((config.state_dim,), -4.5, device=self.device),
         )
 
+    @property
+    def last_vfe(self):
+        return self.estimator.last_vfe
+
     def reset_belief(self, observation: np.ndarray) -> None:
         o = torch.tensor(observation, device=self.device)
         prior = GaussianBelief(o.clone(), torch.full_like(o, -4.0))

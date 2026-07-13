@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields, replace
 from typing import Callable
 
 import numpy as np
@@ -75,9 +75,32 @@ class ExecutionForecast:
     joint_limit_proximity: float = 0.0
     joint_target_error_rms: float = 0.0
     proprioceptive_observation_dim: int = 0
+    proprioceptive_labels: tuple[str, ...] = ()
+    proprioceptive_mean: tuple[float, ...] = ()
+    proprioceptive_predictive_variance: tuple[float, ...] = ()
+    proprioceptive_likelihood_variance: tuple[float, ...] = ()
+    motor_rollout_samples: int = 1
+    feasibility_probability: float = 1.0
 
-    def diagnostics(self) -> dict[str, object]:
-        return {key: _json_ready(value) for key, value in asdict(self).items()}
+    def diagnostics(self, *, include_state_fields: bool = True) -> dict[str, object]:
+        omitted = {"next_state_mean", "next_state_variance", "canvas_delta_mean"}
+        payload = {
+            field.name: _json_ready(getattr(self, field.name))
+            for field in fields(self)
+            if include_state_fields or field.name not in omitted
+        }
+        if not include_state_fields:
+            payload.update(
+                {
+                    "state_vector_dim": int(self.next_state_mean.size),
+                    "canvas_delta_abs_mean": float(np.mean(np.abs(self.canvas_delta_mean))),
+                    "canvas_delta_abs_max": float(np.max(np.abs(self.canvas_delta_mean), initial=0.0)),
+                    "state_fields_omitted": (
+                        "dense material forecast arrays are retained for inference but omitted from runtime diagnostics"
+                    ),
+                }
+            )
+        return payload
 
 
 def _json_ready(value: object) -> object:
@@ -471,7 +494,7 @@ def controller_for_motor_primitive(
     return JointSpaceStrokeController(kind=kind)
 
 
-def forecast_stroke_execution(
+def _forecast_stroke_execution_once(
     sim: ArmPainterSim,
     action: StrokeAction,
     summary_fn: Callable[[ArmPainterSim], np.ndarray],
@@ -479,11 +502,13 @@ def forecast_stroke_execution(
     controller: ContactAwareStrokeController | DirectStrokeController | None = None,
     motor_primitive: MotorPrimitiveLatent | None = None,
     dt: float = 1.0 / 90.0,
+    noise_sample_index: int = 0,
 ) -> ExecutionForecast:
     timing = timing or adaptive_stroke_timing(sim, action)
     controller = controller or controller_for_motor_primitive(motor_primitive)
     motor_primitive_kind = "cartesian_ik" if motor_primitive is None else motor_primitive.kind
     working = copy.deepcopy(sim)
+    working.plant.select_forecast_noise_sample(noise_sample_index)
     before_state = summary_fn(working)
     controller.reset(working, action, timing)
 
@@ -497,7 +522,9 @@ def forecast_stroke_execution(
     torque_samples: list[np.ndarray] = []
     acceleration_samples: list[np.ndarray] = []
     target_error_samples: list[np.ndarray] = []
-    limit_proximity_samples: list[float] = []
+    limit_proximity_samples: list[np.ndarray] = []
+    encoder_std_samples: list[np.ndarray] = []
+    process_torque_samples: list[np.ndarray] = []
     contact_losses = 0
     paint_samples = 0
     feasible = True
@@ -522,7 +549,21 @@ def forecast_stroke_execution(
         current_samples.append(current_vec)
         torque_samples.append(torque_vec)
         target_error_samples.append(target_vec - pose_vec)
-        limit_proximity_samples.append(_joint_limit_proximity(working.actual_pose, working.config.motor_limit_margin_degrees))
+        limit_proximity_samples.append(
+            _joint_limit_proximity_vector(working.actual_pose, working.config.motor_limit_margin_degrees)
+        )
+        encoder_std_samples.append(
+            np.asarray(
+                [working.plant.telemetry.encoder_std_deg[name] for name in JOINT_NAMES],
+                dtype=np.float64,
+            )
+        )
+        process_torque_samples.append(
+            np.asarray(
+                [working.plant.telemetry.process_torque[name] for name in JOINT_NAMES],
+                dtype=np.float64,
+            )
+        )
         if previous_velocity is not None:
             acceleration_samples.append((velocity_vec - previous_velocity) / max(1e-6, dt))
         previous_velocity = velocity_vec
@@ -577,13 +618,94 @@ def forecast_stroke_execution(
     variance[0] += np.float32((0.015 * execution_uncertainty + 0.025 * contact_loss_probability) ** 2)
     variance[1:] += np.float32((0.01 * execution_uncertainty) ** 2)
 
+    current_by_joint = _sample_rms_by_joint(current_samples) / max(1e-6, working.plant.current_limit)
+    torque_by_joint = _sample_rms_by_joint(torque_samples) / max(
+        1e-6, working.plant.kt * working.plant.current_limit
+    )
+    velocity_by_joint = _sample_rms_by_joint(velocity_samples) / max(1e-6, working.plant.max_link_velocity)
+    joint_inertias = np.asarray(
+        [
+            working.plant._joint_param(working.plant.link_inertia, name, working.plant.inertia)
+            + working.plant._joint_param(working.plant.motor_inertia, name, 0.0)
+            for name in JOINT_NAMES
+        ],
+        dtype=np.float64,
+    )
+    acceleration_scales = working.plant.kt * working.plant.current_limit / np.maximum(joint_inertias, 1e-6)
+    acceleration_by_joint = _sample_rms_by_joint(acceleration_samples) / acceleration_scales
+    target_error_by_joint = _sample_rms_by_joint(target_error_samples) / 45.0
+    limit_by_joint = np.mean(np.stack(limit_proximity_samples), axis=0) if limit_proximity_samples else np.zeros(4)
     joint_current_rms = _sample_rms(current_samples) / max(1e-6, working.plant.current_limit)
     joint_torque_rms = _sample_rms(torque_samples) / max(1e-6, working.plant.kt * working.plant.current_limit)
     joint_velocity_rms = _sample_rms(velocity_samples)
     joint_acceleration_rms = _sample_rms(acceleration_samples)
     joint_target_error_rms = _sample_rms(target_error_samples)
     joint_path_length_deg = _joint_path_length(pose_samples)
-    joint_limit_proximity = float(np.mean(limit_proximity_samples)) if limit_proximity_samples else 0.0
+    joint_limit_proximity = float(limit_by_joint.mean())
+    encoder_std_by_joint = (
+        np.mean(np.stack(encoder_std_samples), axis=0)
+        if encoder_std_samples
+        else np.full(len(JOINT_NAMES), working.plant.encoder_base_noise_deg)
+    )
+    process_torque_std = np.asarray(
+        [working.plant._joint_param(working.plant.process_torque_noise_std, name, 0.0) for name in JOINT_NAMES],
+        dtype=np.float64,
+    )
+    current_sensor_variance = np.full(len(JOINT_NAMES), 0.02**2, dtype=np.float64)
+    torque_sensor_variance = np.full(len(JOINT_NAMES), 0.02**2, dtype=np.float64)
+    velocity_sensor_variance = np.full(
+        len(JOINT_NAMES),
+        (np.deg2rad(working.plant.encoder_velocity_noise_deg) / max(1e-6, working.plant.max_link_velocity)) ** 2,
+        dtype=np.float64,
+    )
+    acceleration_sensor_variance = (
+        process_torque_std / np.maximum(joint_inertias * acceleration_scales, 1e-6)
+    ) ** 2
+    target_sensor_variance = (encoder_std_by_joint / 45.0) ** 2
+    limit_sensor_variance = (
+        encoder_std_by_joint / max(1e-6, working.config.motor_limit_margin_degrees)
+    ) ** 2
+    contact_likelihood_variance = 0.02**2 + contact_loss_probability * (1.0 - contact_loss_probability) / max(
+        1, paint_samples
+    )
+    path_error_norm = path_rmse / max(1e-6, working.canvas.width)
+    pressure_error_norm = pressure_error
+    cartesian_encoder_std = (
+        np.deg2rad(float(encoder_std_by_joint.mean()))
+        * (working.kinematics.upper_arm + working.kinematics.lower_arm)
+        / max(1e-6, working.canvas.width)
+    )
+    labels = tuple(
+        [f"current_{name}" for name in JOINT_NAMES]
+        + [f"torque_{name}" for name in JOINT_NAMES]
+        + [f"velocity_{name}" for name in JOINT_NAMES]
+        + [f"acceleration_{name}" for name in JOINT_NAMES]
+        + [f"target_error_{name}" for name in JOINT_NAMES]
+        + [f"limit_proximity_{name}" for name in JOINT_NAMES]
+        + ["contact_loss", "pressure_error", "path_error"]
+    )
+    proprioceptive_mean = np.concatenate(
+        [
+            current_by_joint,
+            torque_by_joint,
+            velocity_by_joint,
+            acceleration_by_joint,
+            target_error_by_joint,
+            limit_by_joint,
+            np.asarray([contact_loss_probability, pressure_error_norm, path_error_norm]),
+        ]
+    )
+    likelihood_variance = np.concatenate(
+        [
+            current_sensor_variance,
+            torque_sensor_variance,
+            velocity_sensor_variance,
+            acceleration_sensor_variance,
+            target_sensor_variance,
+            limit_sensor_variance,
+            np.asarray([contact_likelihood_variance, 0.02**2, max(cartesian_encoder_std**2, 1e-8)]),
+        ]
+    )
 
     return ExecutionForecast(
         next_state_mean=after_state.astype(np.float32),
@@ -612,7 +734,106 @@ def forecast_stroke_execution(
         joint_path_length_deg=float(joint_path_length_deg),
         joint_limit_proximity=joint_limit_proximity,
         joint_target_error_rms=float(joint_target_error_rms),
-        proprioceptive_observation_dim=4 * len(JOINT_NAMES) + 4,
+        proprioceptive_observation_dim=len(labels),
+        proprioceptive_labels=labels,
+        proprioceptive_mean=tuple(float(value) for value in proprioceptive_mean),
+        proprioceptive_predictive_variance=tuple(0.0 for _ in labels),
+        proprioceptive_likelihood_variance=tuple(float(max(value, 1e-8)) for value in likelihood_variance),
+        motor_rollout_samples=1,
+        feasibility_probability=float(feasible),
+    )
+
+
+def forecast_stroke_execution(
+    sim: ArmPainterSim,
+    action: StrokeAction,
+    summary_fn: Callable[[ArmPainterSim], np.ndarray],
+    timing: StrokeTiming | None = None,
+    controller: ContactAwareStrokeController | DirectStrokeController | JointSpaceStrokeController | None = None,
+    motor_primitive: MotorPrimitiveLatent | None = None,
+    dt: float = 1.0 / 90.0,
+    rollout_samples: int | None = None,
+) -> ExecutionForecast:
+    """Monte Carlo predictive density over canvas and proprioceptive outcomes."""
+
+    sample_count = max(
+        1,
+        int(sim.config.motor_forecast_samples if rollout_samples is None else rollout_samples),
+    )
+    forecasts = [
+        _forecast_stroke_execution_once(
+            sim,
+            action,
+            summary_fn,
+            timing=timing,
+            controller=controller,
+            motor_primitive=motor_primitive,
+            dt=dt,
+            noise_sample_index=index,
+        )
+        for index in range(sample_count)
+    ]
+    if sample_count == 1:
+        return forecasts[0]
+
+    base = forecasts[0]
+    state_samples = np.stack([forecast.next_state_mean for forecast in forecasts]).astype(np.float64)
+    state_mean = state_samples.mean(axis=0)
+    state_within = np.stack([forecast.next_state_variance for forecast in forecasts]).astype(np.float64)
+    state_variance = np.mean(state_within + (state_samples - state_mean) ** 2, axis=0)
+    proprio_samples = np.asarray([forecast.proprioceptive_mean for forecast in forecasts], dtype=np.float64)
+    proprio_mean = proprio_samples.mean(axis=0)
+    proprio_variance = proprio_samples.var(axis=0)
+    likelihood_variance = np.asarray(
+        [forecast.proprioceptive_likelihood_variance for forecast in forecasts],
+        dtype=np.float64,
+    ).mean(axis=0)
+    realized_starts = np.asarray([forecast.realized_start for forecast in forecasts], dtype=np.float64)
+    realized_ends = np.asarray([forecast.realized_end for forecast in forecasts], dtype=np.float64)
+    within_path_covariance = np.asarray([forecast.path_covariance for forecast in forecasts], dtype=np.float64)
+    between_path_covariance = 0.5 * (realized_starts.var(axis=0) + realized_ends.var(axis=0))
+    path_covariance = within_path_covariance.mean(axis=0) + between_path_covariance
+    pressure_means = np.asarray([forecast.pressure_mean for forecast in forecasts], dtype=np.float64)
+    pressure_variance = float(
+        np.mean([forecast.pressure_variance for forecast in forecasts]) + pressure_means.var()
+    )
+    feasibility_probability = float(np.mean([forecast.feasible for forecast in forecasts]))
+
+    def mean_field(name: str) -> float:
+        return float(np.mean([float(getattr(forecast, name)) for forecast in forecasts]))
+
+    return replace(
+        base,
+        next_state_mean=state_mean.astype(np.float32),
+        next_state_variance=np.clip(state_variance, 1e-8, None).astype(np.float32),
+        canvas_delta_mean=np.mean(
+            np.stack([forecast.canvas_delta_mean for forecast in forecasts]),
+            axis=0,
+        ).astype(np.float32),
+        realized_start=tuple(float(value) for value in realized_starts.mean(axis=0)),
+        realized_end=tuple(float(value) for value in realized_ends.mean(axis=0)),
+        realized_path_span=mean_field("realized_path_span"),
+        paint_motion_fraction=mean_field("paint_motion_fraction"),
+        path_covariance=(float(path_covariance[0]), float(path_covariance[1])),
+        pressure_mean=float(pressure_means.mean()),
+        pressure_variance=pressure_variance,
+        target_pressure_mean=mean_field("target_pressure_mean"),
+        contact_loss_probability=mean_field("contact_loss_probability"),
+        overshoot=mean_field("overshoot"),
+        execution_uncertainty=mean_field("execution_uncertainty"),
+        feasible=feasibility_probability >= 0.5,
+        joint_current_rms=mean_field("joint_current_rms"),
+        joint_torque_rms=mean_field("joint_torque_rms"),
+        joint_velocity_rms=mean_field("joint_velocity_rms"),
+        joint_acceleration_rms=mean_field("joint_acceleration_rms"),
+        joint_path_length_deg=mean_field("joint_path_length_deg"),
+        joint_limit_proximity=mean_field("joint_limit_proximity"),
+        joint_target_error_rms=mean_field("joint_target_error_rms"),
+        proprioceptive_mean=tuple(float(value) for value in proprio_mean),
+        proprioceptive_predictive_variance=tuple(float(max(value, 0.0)) for value in proprio_variance),
+        proprioceptive_likelihood_variance=tuple(float(max(value, 1e-8)) for value in likelihood_variance),
+        motor_rollout_samples=sample_count,
+        feasibility_probability=feasibility_probability,
     )
 
 
@@ -654,6 +875,13 @@ def _sample_rms(samples: list[np.ndarray]) -> float:
     return float(np.sqrt(np.mean(values * values)))
 
 
+def _sample_rms_by_joint(samples: list[np.ndarray]) -> np.ndarray:
+    if not samples:
+        return np.zeros(len(JOINT_NAMES), dtype=np.float64)
+    values = np.stack(samples).astype(np.float64)
+    return np.sqrt(np.mean(values * values, axis=0))
+
+
 def _joint_path_length(samples: list[np.ndarray]) -> float:
     if len(samples) < 2:
         return 0.0
@@ -662,6 +890,10 @@ def _joint_path_length(samples: list[np.ndarray]) -> float:
 
 
 def _joint_limit_proximity(pose: ArmPose, margin_degrees: float) -> float:
+    return float(_joint_limit_proximity_vector(pose, margin_degrees).mean())
+
+
+def _joint_limit_proximity_vector(pose: ArmPose, margin_degrees: float) -> np.ndarray:
     margin = max(1e-6, float(margin_degrees))
     limits = {
         "yaw": (-90.0, 90.0),
@@ -674,4 +906,4 @@ def _joint_limit_proximity(pose: ArmPose, margin_degrees: float) -> float:
         value = float(getattr(pose.clipped(), name))
         distance = min(value - lo, hi - value)
         proximity.append(float(np.clip((margin - distance) / margin, 0.0, 1.0)))
-    return float(np.mean(proximity))
+    return np.asarray(proximity, dtype=np.float64)

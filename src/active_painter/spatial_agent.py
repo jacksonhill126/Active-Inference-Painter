@@ -14,6 +14,7 @@ from .policies import MotorPrimitiveLatent, Policy, PolicySampler, policy_stop_l
 from .preferences import TerminalCoveragePreference
 from .replay import ReplayBuffer
 from .spatial_efe import SpatialEFEComponents, SpatialExpectedFreeEnergy
+from .spatial_inference import SpatialVariationalStateEstimator
 from .spatial_state import SpatialCanvasState, rasterize_stroke_action
 
 
@@ -42,6 +43,7 @@ class SpatialActiveInferencePainter:
         self.efe = SpatialExpectedFreeEnergy(
             config, self.dynamics, self.preference, self.device, composition=self.composition
         )
+        self.estimator = SpatialVariationalStateEstimator(config, self.device)
         self.policy_sampler = PolicySampler(config, seed=seed)
         self.replay = (
             LocalPatchReplayBuffer(config.replay_capacity, seed=seed)
@@ -58,15 +60,25 @@ class SpatialActiveInferencePainter:
         self.belief = SpatialCanvasState(material=material, logvar=logvar)
 
     def reset_belief(self, observation: SpatialCanvasState) -> None:
-        self.belief = SpatialCanvasState(
-            material=observation.material.astype(np.float32),
-            logvar=np.full_like(observation.material, -8.0, dtype=np.float32),
-            pyramid=observation.pyramid,
-        )
+        self.belief = self.estimator.initialize(observation)
 
-    def update_belief(self, previous_action: StrokeAction, observation: SpatialCanvasState) -> None:
-        _ = previous_action
-        self.reset_belief(observation)
+    @property
+    def last_vfe(self):
+        return self.estimator.last_vfe
+
+    def update_belief(
+        self,
+        previous_action: StrokeAction,
+        observation: SpatialCanvasState,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+    ) -> None:
+        self.belief = self.estimator.infer(
+            self.belief,
+            previous_action,
+            observation,
+            self.dynamics,
+            motor_primitive,
+        )
 
     def add_transition(
         self,

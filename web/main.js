@@ -216,6 +216,7 @@ async function pollState() {
   document.getElementById("btnAgent").textContent = `Agent: ${state.agentEnabled ? "on" : "off"}`;
   document.getElementById("btnAgent").classList.toggle("active", state.agentEnabled);
   const efe = state.agent?.efe || {};
+  const vfe = state.agent?.vfe || {};
   const executionForecast = state.agent?.executionForecast || {};
   const motorPrimitive = state.agent?.executingMotorPrimitive || {};
   const belief = state.agent?.belief || {};
@@ -240,6 +241,7 @@ async function pollState() {
     `tip <b>${state.tip.map((x) => x.toFixed(2)).join(", ")}</b>`,
     `coverage mean <b>${state.canvas.coverage.toFixed(4)}</b> / pressure summary <b>${state.contact.pressure.toFixed(3)}</b>`,
     `agent <b>${state.agentEnabled ? agentPhaseLabel(state.agent) : "scripted fallback"}</b> / sim <b>${state.simTime.toFixed(1)}s</b>`,
+    `VFE F <b>${num(vfe.total)}</b> = complexity <b>${num(vfe.complexity)}</b> + negative log likelihood <b>${num(vfe.negative_log_likelihood)}</b>`,
     `EFE G <b>${num(efe.total)}</b> = terminal risk <b>${num(efe.terminal_risk)}</b> + ambiguity <b>${num(efe.ambiguity)}</b> + transition risk <b>${num(efe.transition_risk)}</b> + transition ambiguity <b>${num(efe.transition_ambiguity)}</b> + motor risk <b>${num(efe.motor_risk)}</b> + motor ambiguity <b>${num(efe.motor_ambiguity)}</b>`,
   ].join("<br>");
 
@@ -250,6 +252,8 @@ async function pollState() {
     row("Material pyramid", pyramidText),
     row("Spatial transition mode", state.agent?.spatialTransitionMode || "-"),
     row("Transition model", state.agent?.transitionModel || "-"),
+    row("VFE units", vfe.units || "-"),
+    row("VFE approximation", vfe.approximation || "-"),
     row("Agent phase", agentPhaseLabel(state.agent)),
     row("Current planner time", `${num(state.agent?.currentPlanningSeconds)} s`),
     row("Last planner time", `${num(state.agent?.lastPlanningSeconds)} s`),

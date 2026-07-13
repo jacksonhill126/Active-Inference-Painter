@@ -43,9 +43,9 @@ class StrokeAction:
 class PaintCanvasEnv:
     """Stochastic generative process for paint deposition.
 
-    The hidden physical canvas has independent thickness, wetness, and pigment
-    fields. Material coverage is derived from thickness and is therefore not the
-    same as visible black/white tone.
+    The hidden physical canvas separates thickness, persistent wetness,
+    conserved bulk pigment, and top-layer surface tone. Material coverage is
+    derived from thickness and is therefore not visible black/white tone.
     """
 
     STATE_NAMES: Final[tuple[str, ...]] = (
@@ -64,6 +64,7 @@ class PaintCanvasEnv:
         self.thickness = np.zeros((n, n), dtype=np.float32)
         self.wetness = np.zeros((n, n), dtype=np.float32)
         self.black_mass = np.zeros((n, n), dtype=np.float32)
+        self.surface_tone = np.zeros((n, n), dtype=np.float32)
         self.done = False
         yy, xx = np.mgrid[0:n, 0:n]
         self._xx = xx.astype(np.float32) / max(1, n - 1)
@@ -73,6 +74,7 @@ class PaintCanvasEnv:
         self.thickness.fill(0)
         self.wetness.fill(0)
         self.black_mass.fill(0)
+        self.surface_tone.fill(0.0)
         self.done = False
         return self.observe()
 
@@ -80,8 +82,7 @@ class PaintCanvasEnv:
         return 1.0 - np.exp(-self.thickness / self.cfg.thickness_scale)
 
     def visible_tone(self) -> np.ndarray:
-        denom = np.maximum(self.thickness, 1e-6)
-        return np.clip(self.black_mass / denom, 0.0, 1.0)
+        return np.clip(self.surface_tone, 0.0, 1.0)
 
     def observed_tone(self) -> np.ndarray:
         coverage = self.coverage_field()
@@ -152,9 +153,26 @@ class PaintCanvasEnv:
         field_noise = self.rng.normal(0.0, smear_scale, footprint.shape).astype(np.float32)
         deposited = action.amount * footprint * np.clip(1.0 + field_noise, 0.1, 2.2)
 
+        previous_tone = self.surface_tone.copy()
+        incoming_tone = float(action.tone >= 0.5)
+        surface_alpha = 1.0 - np.exp(
+            -deposited / max(1e-8, float(self.cfg.oil_surface_opacity_thickness))
+        )
+        wet_pickup = np.clip(
+            float(self.cfg.oil_wet_pickup_fraction)
+            * self.wetness
+            / np.maximum(self.wetness + deposited, 1e-6),
+            0.0,
+            0.75,
+        )
+        loaded_tone = (1.0 - wet_pickup) * incoming_tone + wet_pickup * previous_tone
+        self.surface_tone[:] = np.clip(
+            (1.0 - surface_alpha) * previous_tone + surface_alpha * loaded_tone,
+            0.0,
+            1.0,
+        )
         self.thickness += deposited
-        self.black_mass += deposited * float(action.tone >= 0.5)
-        self.wetness *= self.cfg.wetness_decay
+        self.black_mass += deposited * incoming_tone
         self.wetness += 0.8 * deposited
         self.wetness[:] = np.clip(self.wetness, 0.0, 3.0)
 

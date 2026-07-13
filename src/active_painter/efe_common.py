@@ -64,7 +64,7 @@ def project_summary_transition_support(current_mean: torch.Tensor, next_mean: to
     projected[..., 0] = torch.maximum(projected[..., 0], current_mean[..., 0]).clamp(0.0, 1.0)
     projected[..., 1] = torch.clamp(projected[..., 1], min=0.0)
     projected[..., 2] = torch.maximum(projected[..., 2], projected[..., 1]).clamp(min=0.0)
-    projected[..., 3] = torch.clamp(projected[..., 3], min=0.0)
+    projected[..., 3] = torch.maximum(projected[..., 3], current_mean[..., 3]).clamp(min=0.0)
     projected[..., 4] = torch.clamp(projected[..., 4], 0.0, 1.0)
     projected[..., 5] = torch.clamp(projected[..., 5], 0.0, 1.0)
     return projected
@@ -77,22 +77,23 @@ def project_material_support(
     ground_tone: float,
 ) -> torch.Tensor:
     # Structural support: material thickness and pigment mass have no
-    # erasing/clearing action inside a candidate painting policy; wetness
-    # can decay, so it is only constrained to remain non-negative. Derived
-    # observed-tone, ground-contrast, and coverage fields are recomputed
-    # from the primary material channels and substrate tone instead of
-    # treated as free predictions.
+    # erasing/clearing action inside a candidate painting policy. Wetness is
+    # persistent in the oil-paint process and therefore cannot spontaneously
+    # decrease. Derived
+    # ground-contrast and coverage fields are recomputed from surface tone,
+    # thickness, and substrate tone instead of treated as free predictions.
     base = proposed.clamp(min=0.0)
     channels = [base[:, index : index + 1] for index in range(base.shape[1])]
     channels[0] = torch.maximum(channels[0], current[:, 0:1])
+    channels[1] = torch.maximum(channels[1], current[:, 1:2])
     channels[2] = torch.maximum(channels[2], current[:, 2:3])
     scale = max(1e-8, float(thickness_scale))
     if len(channels) > 3:
-        pigment_tone = torch.clamp(channels[2] / torch.clamp(channels[0], min=1e-6), 0.0, 1.0)
         coverage = 1.0 - torch.exp(-torch.clamp(channels[0], min=0.0) / scale)
-        channels[3] = torch.clamp((1.0 - coverage) * float(ground_tone) + coverage * pigment_tone, 0.0, 1.0)
+        channels[3] = torch.clamp(channels[3], 0.0, 1.0)
     if len(channels) > 4:
-        channels[4] = torch.abs(channels[3] - float(ground_tone))
+        observed_tone = (1.0 - coverage) * float(ground_tone) + coverage * channels[3]
+        channels[4] = torch.abs(observed_tone - float(ground_tone))
     if len(channels) > 5:
         channels[5] = 1.0 - torch.exp(-torch.clamp(channels[0], min=0.0) / scale)
     return torch.cat(channels, dim=1)

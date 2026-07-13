@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -80,6 +81,9 @@ class MotorTelemetry:
     backlash_deflection_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     friction_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     load_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    gravity_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    coupling_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
+    process_torque: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     encoder_std_deg: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     thermal_fraction: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     torque_limit_fraction: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
@@ -87,7 +91,7 @@ class MotorTelemetry:
 
 @dataclass(slots=True)
 class JointPlant:
-    """Deterministic actuator/link approximation beneath painting inference.
+    """Probabilistic coupled actuator/link process beneath painting inference.
 
     The values are representative small-arm parameters, not vendor-specific
     motor measurements. The plant exposes prediction-error-relevant mechanics
@@ -97,7 +101,7 @@ class JointPlant:
     supply_voltage: float = 24.0
     current_limit: float = 7.0
     servo_stiffness: float = 1.0
-    damping: float = 0.48
+    damping: float = 0.80
     inertia: float = 0.065
     kt: float = 0.42
     resistance: float = 2.1
@@ -131,6 +135,17 @@ class JointPlant:
     contact_load_gain: dict[str, float] | float = field(
         default_factory=lambda: {"yaw": 0.0015, "pitch": 0.0050, "roll": 0.0010, "elbow": 0.0040}
     )
+    pitch_elbow_coupling_inertia: float = 0.018
+    yaw_roll_coupling_inertia: float = 0.003
+    upper_arm_mass_kg: float = 1.35
+    lower_arm_mass_kg: float = 0.85
+    brush_payload_mass_kg: float = 0.18
+    link_length_m: float = 0.3302
+    gravity_m_s2: float = 9.81
+    gravity_compensation_fraction: float = 0.985
+    process_torque_noise_std: dict[str, float] | float = field(
+        default_factory=lambda: {"yaw": 0.006, "pitch": 0.010, "roll": 0.005, "elbow": 0.008}
+    )
     max_motor_velocity: float = 7.0
     max_link_velocity: float = 5.0
     thermal_time_constant: float = 18.0
@@ -142,11 +157,18 @@ class JointPlant:
     encoder_contact_noise_deg: float = 0.003
     encoder_position_bias_deg: dict[str, float] | float = 0.0
     encoder_velocity_bias_rad_s: dict[str, float] | float = 0.0
+    process_noise_enabled: bool = True
+    encoder_noise_enabled: bool = True
+    rng_seed: int | None = 0
     velocity: dict[str, float] = field(default_factory=lambda: dict.fromkeys(JOINT_NAMES, 0.0))
     motor_angle: dict[str, float] = field(default_factory=dict)
     motor_velocity: dict[str, float] = field(default_factory=dict)
     temperature: dict[str, float] = field(default_factory=dict)
     telemetry: MotorTelemetry = field(default_factory=MotorTelemetry)
+    _rng: np.random.Generator = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._rng = np.random.default_rng(self.rng_seed)
 
     def reset_state(self, pose: ArmPose) -> None:
         q = pose.clipped().radians()
@@ -159,12 +181,19 @@ class JointPlant:
             self.telemetry.actuator_angle_deg[name] = float(getattr(pose.clipped(), name))
             self.telemetry.encoder_angle_deg[name] = float(getattr(pose.clipped(), name))
 
+    def select_forecast_noise_sample(self, sample_index: int) -> None:
+        """Choose a reproducible independent continuation for a rollout particle."""
+
+        if sample_index > 0:
+            self._rng.random(97 * int(sample_index))
+
     def state_snapshot(self) -> dict[str, object]:
         return {
             "velocity": dict(self.velocity),
             "motor_angle": dict(self.motor_angle),
             "motor_velocity": dict(self.motor_velocity),
             "temperature": dict(self.temperature),
+            "rng_state": copy.deepcopy(self._rng.bit_generator.state),
             "telemetry": {
                 field_name: dict(getattr(self.telemetry, field_name))
                 for field_name in MotorTelemetry.__dataclass_fields__
@@ -176,6 +205,9 @@ class JointPlant:
         self.motor_angle = dict(snapshot["motor_angle"])  # type: ignore[arg-type]
         self.motor_velocity = dict(snapshot["motor_velocity"])  # type: ignore[arg-type]
         self.temperature = dict(snapshot["temperature"])  # type: ignore[arg-type]
+        rng_state = snapshot.get("rng_state")
+        if isinstance(rng_state, dict):
+            self._rng.bit_generator.state = copy.deepcopy(rng_state)
         telemetry_values = snapshot["telemetry"]
         self.telemetry = MotorTelemetry()
         if isinstance(telemetry_values, dict):
@@ -214,6 +246,63 @@ class JointPlant:
         direction = float(np.sign(link_velocity if abs(link_velocity) >= 0.015 else drive))
         return float(coulomb * direction + viscous * link_velocity)
 
+    def _encoder_std_deg(self, name: str, velocity: float, current: float, contact_force: float) -> float:
+        _ = name
+        return float(
+            self.encoder_base_noise_deg
+            + self.encoder_velocity_noise_deg * abs(velocity)
+            + self.encoder_current_noise_deg * abs(current) / max(1e-6, self.current_limit)
+            + self.encoder_contact_noise_deg * contact_force
+        )
+
+    def _mass_matrix(self, q: np.ndarray) -> np.ndarray:
+        diagonal = np.asarray(
+            [
+                self._joint_param(self.link_inertia, name, self.inertia)
+                + self._joint_param(self.motor_inertia, name, 0.0)
+                for name in JOINT_NAMES
+            ],
+            dtype=np.float64,
+        )
+        matrix = np.diag(np.maximum(diagonal, 1e-5))
+        yaw, pitch, roll, elbow = q
+        _ = yaw
+        pitch_elbow = self.pitch_elbow_coupling_inertia * np.cos(elbow)
+        yaw_roll = self.yaw_roll_coupling_inertia * np.cos(pitch) * np.cos(roll)
+        matrix[1, 3] = matrix[3, 1] = pitch_elbow
+        matrix[0, 2] = matrix[2, 0] = yaw_roll
+        return matrix
+
+    def _coupled_loads(self, q: np.ndarray, velocity: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        _, pitch, roll, elbow = q
+        _, pitch_w, _, elbow_w = velocity
+        h = self.pitch_elbow_coupling_inertia * np.sin(elbow)
+        coriolis = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        coriolis[1] = -h * (2.0 * pitch_w * elbow_w + elbow_w * elbow_w)
+        coriolis[3] = h * pitch_w * pitch_w
+
+        residual = max(0.0, 1.0 - float(self.gravity_compensation_fraction))
+        length = self.link_length_m
+        lower_moment = (0.5 * self.lower_arm_mass_kg + self.brush_payload_mass_kg) * length
+        shoulder_moment = (
+            0.5 * self.upper_arm_mass_kg * length
+            + (self.lower_arm_mass_kg + self.brush_payload_mass_kg) * length
+        )
+        gravity = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        roll_projection = np.cos(roll)
+        gravity[1] = residual * self.gravity_m_s2 * roll_projection * (
+            shoulder_moment * np.cos(pitch)
+            + lower_moment * np.cos(pitch + elbow)
+        )
+        gravity[3] = (
+            residual
+            * self.gravity_m_s2
+            * roll_projection
+            * lower_moment
+            * np.cos(pitch + elbow)
+        )
+        return coriolis, gravity
+
     def step(
         self,
         actual: ArmPose,
@@ -222,24 +311,50 @@ class JointPlant:
         contact_force: float = 0.0,
         damping_multiplier: float = 1.0,
     ) -> ArmPose:
-        values: dict[str, float] = {}
         actual = actual.clipped()
         target = target.clipped()
         self._ensure_state(actual)
         contact_force = max(0.0, float(contact_force))
         effective_damping = self.damping * max(0.0, float(damping_multiplier))
-        for name in JOINT_NAMES:
-            q = np.deg2rad(getattr(actual, name))
-            q_target = np.deg2rad(getattr(target, name))
-            link_w = float(self.velocity[name])
-            previous_motor_q = float(self.motor_angle[name])
-            temperature = float(np.clip(self.temperature[name], 0.0, 1.0))
+        q = np.asarray([np.deg2rad(getattr(actual, name)) for name in JOINT_NAMES], dtype=np.float64)
+        q_target = np.asarray([np.deg2rad(getattr(target, name)) for name in JOINT_NAMES], dtype=np.float64)
+        link_velocity = np.asarray([self.velocity[name] for name in JOINT_NAMES], dtype=np.float64)
+        previous_motor_q = np.asarray([self.motor_angle[name] for name in JOINT_NAMES], dtype=np.float64)
+        temperatures = np.asarray([np.clip(self.temperature[name], 0.0, 1.0) for name in JOINT_NAMES])
+        currents = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        voltages = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        motor_torques = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        load_torques = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        friction_torques = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        command_errors = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        backlash_deflections = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        current_limits = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+        encoder_stds = np.zeros(len(JOINT_NAMES), dtype=np.float64)
+
+        for index, name in enumerate(JOINT_NAMES):
+            temperature = float(temperatures[index])
             current_limit = self.current_limit * max(0.25, 1.0 - self.thermal_current_derate * temperature)
+            current_limits[index] = current_limit
             deadband = np.deg2rad(self._joint_param(self.backlash_deadband_deg, name, 0.2))
-            measured_q = q + np.deg2rad(self._joint_param(self.encoder_position_bias_deg, name, 0.0))
-            measured_w = link_w + self._joint_param(self.encoder_velocity_bias_rad_s, name, 0.0)
-            command_error = q_target - measured_q
+            encoder_stds[index] = self._encoder_std_deg(name, link_velocity[index], 0.0, contact_force)
+            encoder_noise = self._rng.normal(0.0, encoder_stds[index]) if self.encoder_noise_enabled else 0.0
+            measured_q = q[index] + np.deg2rad(
+                self._joint_param(self.encoder_position_bias_deg, name, 0.0) + encoder_noise
+            )
+            velocity_noise = (
+                self._rng.normal(0.0, np.deg2rad(self.encoder_velocity_noise_deg))
+                if self.encoder_noise_enabled
+                else 0.0
+            )
+            measured_w = (
+                link_velocity[index]
+                + self._joint_param(self.encoder_velocity_bias_rad_s, name, 0.0)
+                + velocity_noise
+            )
+            command_error = q_target[index] - measured_q
+            command_errors[index] = command_error
             _, backlash_deflection = self._compliance_deflection(command_error, deadband)
+            backlash_deflections[index] = backlash_deflection
             voltage = np.clip(
                 self.supply_voltage * self.servo_stiffness * command_error - effective_damping * measured_w,
                 -self.supply_voltage,
@@ -247,60 +362,98 @@ class JointPlant:
             )
             current = np.clip(voltage / self.resistance, -current_limit, current_limit)
             motor_torque = self.kt * current
-
-            load_direction = float(np.sign(link_w if abs(link_w) >= 0.015 else motor_torque))
+            voltages[index] = voltage
+            currents[index] = current
+            motor_torques[index] = motor_torque
+            load_direction = float(
+                np.sign(link_velocity[index] if abs(link_velocity[index]) >= 0.015 else motor_torque)
+            )
             load_torque = contact_force * self._joint_param(self.contact_load_gain, name, 0.0) * load_direction
-            drive = motor_torque - load_torque
-            friction_torque = self._friction_torque(name, drive, link_w)
-            link_accel = (drive - friction_torque) / max(1e-5, self._joint_param(self.link_inertia, name, self.inertia))
-            link_w = float(np.clip(link_w + link_accel * dt, -self.max_link_velocity, self.max_link_velocity))
-            q = q + link_w * dt
-            spring_deflection = (drive - friction_torque) / max(
+            load_torques[index] = load_torque
+            motor_drag = self._joint_param(self.motor_viscous_friction, name, 0.0) * self.motor_velocity[name]
+            drive = motor_torque - motor_drag - load_torque
+            friction_torques[index] = self._friction_torque(name, drive, link_velocity[index])
+
+        coriolis_torque, gravity_torque = self._coupled_loads(q, link_velocity)
+        process_torque = np.asarray(
+            [
+                self._rng.normal(0.0, self._joint_param(self.process_torque_noise_std, name, 0.0))
+                if self.process_noise_enabled
+                else 0.0
+                for name in JOINT_NAMES
+            ],
+            dtype=np.float64,
+        )
+        generalized_drive = motor_torques - load_torques - friction_torques - coriolis_torque - gravity_torque + process_torque
+        link_acceleration = np.linalg.solve(self._mass_matrix(q), generalized_drive)
+        link_velocity = np.clip(
+            link_velocity + link_acceleration * dt,
+            -self.max_link_velocity,
+            self.max_link_velocity,
+        )
+        q = q + link_velocity * dt
+
+        values: dict[str, float] = {}
+        for index, name in enumerate(JOINT_NAMES):
+            spring_drive = motor_torques[index] - load_torques[index] - friction_torques[index]
+            spring_deflection = spring_drive / max(
                 1e-5, self._joint_param(self.transmission_stiffness, name, 8.0)
             )
-            spring_deflection += self._joint_param(self.transmission_damping, name, 0.35) * link_w / max(
+            spring_deflection += self._joint_param(self.transmission_damping, name, 0.35) * link_velocity[index] / max(
                 1e-5, self._joint_param(self.transmission_stiffness, name, 8.0)
             )
-            motor_q = float(q + backlash_deflection + spring_deflection)
+            motor_q = float(q[index] + backlash_deflections[index] + spring_deflection)
             motor_w = float(
                 np.clip(
-                    (motor_q - previous_motor_q) / max(1e-6, dt),
+                    (motor_q - previous_motor_q[index]) / max(1e-6, dt),
                     -self.max_motor_velocity,
                     self.max_motor_velocity,
                 )
             )
+            heat = (abs(currents[index]) / max(1e-6, self.current_limit)) ** 2 * dt / max(
+                1e-6, self.thermal_time_constant
+            )
+            cool = temperatures[index] * dt / max(1e-6, self.cooling_time_constant)
+            temperature = float(np.clip(temperatures[index] + heat - cool, 0.0, 1.0))
+            encoder_stds[index] = self._encoder_std_deg(
+                name,
+                link_velocity[index],
+                currents[index],
+                contact_force,
+            )
+            encoder_noise = self._rng.normal(0.0, encoder_stds[index]) if self.encoder_noise_enabled else 0.0
 
-            heat = (abs(current) / max(1e-6, self.current_limit)) ** 2 * dt / max(1e-6, self.thermal_time_constant)
-            cool = temperature * dt / max(1e-6, self.cooling_time_constant)
-            temperature = float(np.clip(temperature + heat - cool, 0.0, 1.0))
-
-            self.velocity[name] = float(link_w)
+            self.velocity[name] = float(link_velocity[index])
             self.motor_angle[name] = float(motor_q)
             self.motor_velocity[name] = float(motor_w)
             self.temperature[name] = temperature
-            self.telemetry.voltage[name] = float(voltage)
-            self.telemetry.current[name] = float(current)
-            self.telemetry.torque[name] = float(motor_torque)
+            self.telemetry.voltage[name] = float(voltages[index])
+            self.telemetry.current[name] = float(currents[index])
+            self.telemetry.torque[name] = float(motor_torques[index])
             self.telemetry.actuator_angle_deg[name] = float(np.rad2deg(motor_q))
             self.telemetry.actuator_velocity_rad_s[name] = float(motor_w)
-            encoder_q_after = q + np.deg2rad(self._joint_param(self.encoder_position_bias_deg, name, 0.0))
-            encoder_w_after = link_w + self._joint_param(self.encoder_velocity_bias_rad_s, name, 0.0)
+            encoder_q_after = q[index] + np.deg2rad(
+                self._joint_param(self.encoder_position_bias_deg, name, 0.0) + encoder_noise
+            )
+            encoder_w_after = link_velocity[index] + self._joint_param(
+                self.encoder_velocity_bias_rad_s, name, 0.0
+            )
             self.telemetry.encoder_angle_deg[name] = float(np.rad2deg(encoder_q_after))
             self.telemetry.encoder_velocity_rad_s[name] = float(encoder_w_after)
-            self.telemetry.position_error_deg[name] = float(np.rad2deg(command_error))
+            self.telemetry.position_error_deg[name] = float(np.rad2deg(command_errors[index]))
             self.telemetry.elastic_deflection_deg[name] = float(np.rad2deg(spring_deflection))
-            self.telemetry.backlash_deflection_deg[name] = float(np.rad2deg(backlash_deflection))
-            self.telemetry.friction_torque[name] = float(friction_torque)
-            self.telemetry.load_torque[name] = float(load_torque)
-            self.telemetry.encoder_std_deg[name] = float(
-                self.encoder_base_noise_deg
-                + self.encoder_velocity_noise_deg * abs(link_w)
-                + self.encoder_current_noise_deg * abs(current) / max(1e-6, self.current_limit)
-                + self.encoder_contact_noise_deg * contact_force
-            )
+            self.telemetry.backlash_deflection_deg[name] = float(np.rad2deg(backlash_deflections[index]))
+            self.telemetry.friction_torque[name] = float(friction_torques[index])
+            self.telemetry.load_torque[name] = float(load_torques[index])
+            self.telemetry.gravity_torque[name] = float(gravity_torque[index])
+            self.telemetry.coupling_torque[name] = float(coriolis_torque[index])
+            self.telemetry.process_torque[name] = float(process_torque[index])
+            self.telemetry.encoder_std_deg[name] = float(encoder_stds[index])
             self.telemetry.thermal_fraction[name] = temperature
-            self.telemetry.torque_limit_fraction[name] = float(current_limit / max(1e-6, self.current_limit))
-            values[name] = float(np.rad2deg(q))
+            self.telemetry.torque_limit_fraction[name] = float(
+                current_limits[index] / max(1e-6, self.current_limit)
+            )
+            values[name] = float(np.rad2deg(q[index]))
         return ArmPose(**values).clipped()
 
 
@@ -325,24 +478,26 @@ class VerticalCanvas:
     thickness: np.ndarray = field(init=False)
     wetness: np.ndarray = field(init=False)
     black_mass: np.ndarray = field(init=False)
+    surface_tone: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
         n = self.config.canvas_size
         self.thickness = np.zeros((n, n), dtype=np.float32)
         self.wetness = np.zeros((n, n), dtype=np.float32)
         self.black_mass = np.zeros((n, n), dtype=np.float32)
+        self.surface_tone = np.zeros((n, n), dtype=np.float32)
 
     def clear(self) -> None:
         self.thickness.fill(0.0)
         self.wetness.fill(0.0)
         self.black_mass.fill(0.0)
+        self.surface_tone.fill(0.0)
 
     def coverage_field(self) -> np.ndarray:
         return 1.0 - np.exp(-self.thickness / self.config.thickness_scale)
 
     def visible_tone(self) -> np.ndarray:
-        denom = np.maximum(self.thickness, 1e-6)
-        return np.clip(self.black_mass / denom, 0.0, 1.0)
+        return np.clip(self.surface_tone, 0.0, 1.0)
 
     def observed_tone(self) -> np.ndarray:
         coverage = self.coverage_field()
@@ -425,8 +580,7 @@ class VerticalCanvas:
         deposited = float(dt) * max(0.0, deposition_rate) * footprint
         region = np.s_[row0:row1, col0:col1]
         previous_thickness = self.thickness[region]
-        previous_black = self.black_mass[region]
-        previous_tone = np.clip(previous_black / np.maximum(previous_thickness, 1e-6), 0.0, 1.0)
+        previous_tone = self.surface_tone[region]
         incoming_tone = float(tone >= 0.5)
         surface_alpha = 1.0 - np.exp(
             -deposited / max(1e-8, float(self.config.oil_surface_opacity_thickness))
@@ -441,10 +595,10 @@ class VerticalCanvas:
         loaded_tone = (1.0 - wet_pickup) * incoming_tone + wet_pickup * previous_tone
         new_thickness = previous_thickness + deposited
         new_tone = (1.0 - surface_alpha) * previous_tone + surface_alpha * loaded_tone
-        self.wetness *= self.config.wetness_decay
         self.thickness[region] = new_thickness
         self.wetness[region] += 0.8 * deposited
-        self.black_mass[region] = np.clip(new_tone, 0.0, 1.0) * new_thickness
+        self.black_mass[region] += deposited * incoming_tone
+        self.surface_tone[region] = np.clip(new_tone, 0.0, 1.0)
 
 
 @dataclass(slots=True)

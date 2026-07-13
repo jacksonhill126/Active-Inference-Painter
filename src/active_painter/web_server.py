@@ -156,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--driver-bootstrap-transitions", type=int, default=None)
     parser.add_argument("--driver-bootstrap-train-steps", type=int, default=None)
     parser.add_argument("--checkpoint-path", default=None)
-    parser.add_argument("--checkpoint-save-every-transitions", type=int, default=1)
+    parser.add_argument("--checkpoint-save-every-transitions", type=int, default=10)
     return parser
 
 

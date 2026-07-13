@@ -18,8 +18,14 @@ from .config import PainterConfig
 from .efe import EFEComponents
 from .env import StrokeAction
 from .models import GaussianBelief
-from .motor_planning import motor_efe_terms, motor_policy_log_prior, motor_realization_policy_alternatives
+from .motor_planning import (
+    motor_efe_terms,
+    motor_policy_log_prior,
+    motor_realization_log_evidence,
+    motor_realization_policy_alternatives,
+)
 from .policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy, policy_stop_log_prior
+from .passage_inference import PassageBelief, infer_passage_observation
 from .spatial_agent import SpatialActiveInferencePainter
 from .spatial_efe import SpatialEFEComponents
 from .spatial_hierarchy import infer_mark_event_belief
@@ -87,7 +93,7 @@ class ArmActiveInferenceDriver:
     bootstrap_transitions: int = 96
     bootstrap_train_steps: int = 180
     checkpoint_path: Path | str | None = None
-    checkpoint_save_every_transitions: int = 1
+    checkpoint_save_every_transitions: int = 10
     enabled: bool = True
     on_stop: Callable[[], None] | None = None
     agent: ActiveInferencePainter | SpatialActiveInferencePainter = field(init=False)
@@ -117,6 +123,7 @@ class ArmActiveInferenceDriver:
     _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
+    _planner_generation: int = field(default=0, init=False)
     _pending_current: StrokeExecution | None = field(default=None, init=False)
     _pending_stopped: bool = field(default=False, init=False)
     _pending_ranked: list[tuple[Policy, EFEComponents | SpatialEFEComponents, float]] | None = field(default=None, init=False)
@@ -124,6 +131,7 @@ class ArmActiveInferenceDriver:
     _pending_passage_queue: tuple[StrokeAction, ...] = field(default_factory=tuple, init=False)
     _pending_passage: PassageLatent | None = field(default=None, init=False)
     _pending_passage_plan: PassagePlanLatent | None = field(default=None, init=False)
+    _pending_plan_scope: str = field(default="global", init=False)
     _pending_error: str | None = field(default=None, init=False)
     _transition_to_learn: tuple[
         np.ndarray | SpatialCanvasState,
@@ -139,6 +147,7 @@ class ArmActiveInferenceDriver:
     _passage_queue: list[StrokeAction] = field(default_factory=list, init=False)
     _active_passage: PassageLatent | None = field(default=None, init=False)
     _active_passage_plan: PassagePlanLatent | None = field(default=None, init=False)
+    _passage_belief: PassageBelief | None = field(default=None, init=False)
     _active_passage_total_strokes: int = field(default=0, init=False)
     _active_passage_completed_strokes: int = field(default=0, init=False)
     _contact_release_count: int = field(default=0, init=False)
@@ -334,6 +343,7 @@ class ArmActiveInferenceDriver:
 
     def reset(self, sim: ArmPainterSim) -> None:
         with self._planner_lock:
+            self._planner_generation += 1
             self.current = None
             self.stopped = False
             self.stroke_count = 0
@@ -348,7 +358,6 @@ class ArmActiveInferenceDriver:
             self._planning_profile_current = None
             self._planning_forecast_cache = {}
             self._planning_started_at = None
-            self._planner_thread = None
             self._pending_current = None
             self._pending_stopped = False
             self._pending_ranked = None
@@ -356,6 +365,7 @@ class ArmActiveInferenceDriver:
             self._pending_passage_queue = ()
             self._pending_passage = None
             self._pending_passage_plan = None
+            self._pending_plan_scope = "global"
             self._pending_error = None
             self._transition_to_learn = None
             self._post_stroke_retract_remaining = 0.0
@@ -366,6 +376,7 @@ class ArmActiveInferenceDriver:
             self._passage_queue = []
             self._active_passage = None
             self._active_passage_plan = None
+            self._passage_belief = None
             self._active_passage_total_strokes = 0
             self._active_passage_completed_strokes = 0
             self._contact_release_count = 0
@@ -409,7 +420,7 @@ class ArmActiveInferenceDriver:
         if self._uses_spatial_planner():
             assert isinstance(self.agent, SpatialActiveInferencePainter)
             assert isinstance(state, SpatialCanvasState)
-            self.agent.update_belief(action, state)
+            self.agent.update_belief(action, state, motor_primitive)
         else:
             assert isinstance(self.agent, ActiveInferencePainter)
             assert isinstance(state, np.ndarray)
@@ -442,19 +453,27 @@ class ArmActiveInferenceDriver:
             self._hold_retracted(sim, dt, scope=hold_scope)
             self._post_stroke_retract_remaining = max(0.0, self._post_stroke_retract_remaining - dt)
             if self._post_stroke_retract_remaining <= 0.0 and self._passage_queue:
-                self._start_next_passage_stroke(sim)
-            if not self._passage_queue and self.current is None:
-                self._start_background_plan(sim)
+                self._consume_background_plan()
             return
         if self._consume_background_plan():
             self._hold_retracted(sim, dt, scope="global")
             return
         if self.current is None:
             if self._passage_queue:
-                self._start_next_passage_stroke(sim)
+                if self.planning:
+                    self._hold_retracted(sim, dt, scope="passage")
+                    return
+                if self._passage_belief is None:
+                    self._start_next_passage_stroke(sim)
+                elif self._pending_error is None:
+                    self._start_local_passage_plan(sim)
+                    self._hold_retracted(sim, dt, scope="passage")
+                else:
+                    self._start_next_passage_stroke(sim)
                 return
             self._hold_retracted(sim, dt, scope="global")
-            self._start_background_plan(sim)
+            if self._global_retraction_ready(sim):
+                self._start_background_plan(sim)
             return
         self._hold_pose = None
         self._execute_current(sim, dt)
@@ -556,6 +575,19 @@ class ArmActiveInferenceDriver:
         z = 0.0
         return ik_pose_for_canvas_point(x, z, sim.canvas.distance - self.config.global_planning_retract_depth)
 
+    def _global_retraction_ready(self, sim: ArmPainterSim) -> bool:
+        tip = sim.kinematics.tip(sim.actual_pose)
+        required_clearance = max(
+            0.5,
+            float(self.config.global_planning_clearance_fraction)
+            * float(self.config.global_planning_retract_depth),
+        )
+        return bool(
+            np.all(np.isfinite(tip))
+            and float(tip[1]) <= sim.canvas.distance - required_clearance
+            and sim.contact.pressure <= self.config.contact_release_pressure_threshold
+        )
+
     def _passage_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
         x, z = self._active_passage_world_center(sim)
         return ik_pose_for_canvas_point(x, z, sim.canvas.distance - self.config.local_passage_retract_depth)
@@ -584,6 +616,161 @@ class ArmActiveInferenceDriver:
             return 0.0, 0.0
         return x, z
 
+    def _local_passage_candidates(self) -> tuple[list[Policy], list[float], dict[tuple[StrokeAction, ...], PassageLatent]]:
+        if self._passage_belief is None or self._active_passage is None:
+            raise RuntimeError("Local passage planning requires an active passage belief.")
+        continuation_probability = float(np.clip(self.config.passage_continuation_probability, 1e-4, 1.0 - 1e-4))
+        policies = [Policy((StrokeAction.stop_action(),))]
+        log_priors = [float(np.log1p(-continuation_probability))]
+        latent_by_actions: dict[tuple[StrokeAction, ...], PassageLatent] = {}
+        candidate_limit = max(2, int(self.config.passage_local_candidate_policies))
+        tones = (
+            (0.0, 1.0)
+            if self.config.stroke_tone_prior is None
+            else (float(self.config.stroke_tone_prior),)
+        )
+        geometry_index = 0
+        while len(policies) < candidate_limit:
+            for tone in tones:
+                if len(policies) >= candidate_limit:
+                    break
+                if geometry_index == 0:
+                    latent = replace(self._passage_belief.mean_latent(), tone=float(tone))
+                else:
+                    latent = self._passage_belief.sample_latent(self.agent.policy_sampler.rng, tone=float(tone))
+                remaining_actions = self.agent.policy_sampler.passage_actions(
+                    latent,
+                    start_index=self._active_passage_completed_strokes,
+                )
+                if not remaining_actions:
+                    continue
+                actions = tuple(remaining_actions) + (StrokeAction.stop_action(),)
+                policy = Policy(actions)
+                policies.append(policy)
+                log_priors.append(
+                    float(np.log(continuation_probability))
+                    + self._passage_belief.transition_log_prior(latent)
+                )
+                latent_by_actions[actions] = latent
+            geometry_index += 1
+        return policies, log_priors, latent_by_actions
+
+    def _start_local_passage_plan(self, sim: ArmPainterSim) -> None:
+        if not self._passage_queue or self._passage_belief is None or self.current is not None:
+            return
+        with self._planner_lock:
+            if self.planning or self._pending_ranked is not None or self._pending_current is not None:
+                return
+            if self._planner_thread is not None and self._planner_thread.is_alive():
+                return
+            self.planning = True
+            self._planning_started_at = time.perf_counter()
+            self._pending_error = None
+            body_snapshot = copy.deepcopy(sim)
+            generation = self._planner_generation
+        thread = threading.Thread(
+            target=self._background_local_passage_plan,
+            args=(body_snapshot, generation),
+            name="active-painter-local-passage-plan",
+            daemon=True,
+        )
+        with self._planner_lock:
+            self._planner_thread = thread
+        thread.start()
+
+    def _background_local_passage_plan(
+        self,
+        body_snapshot: ArmPainterSim,
+        generation: int | None = None,
+    ) -> None:
+        generation = self._planner_generation if generation is None else int(generation)
+        with self._planner_lock:
+            if generation != self._planner_generation:
+                return
+        started = time.perf_counter()
+        profile: dict[str, object] = {
+            "kind": "planning_profile",
+            "scope": "passage_local",
+            "totalSeconds": 0.0,
+            "policyInferenceSeconds": 0.0,
+            "policySampleSeconds": 0.0,
+            "baseEFESeconds": 0.0,
+            "motorForecastSeconds": 0.0,
+            "motorEFERescoreSeconds": 0.0,
+            "posteriorSeconds": 0.0,
+            "selectedForecastSeconds": 0.0,
+            "selectedForecastCacheHits": 0,
+            "policyCount": 0,
+            "motorForecastCount": 0,
+            "motorForecastCacheHits": 0,
+            "candidateMotorRealizations": 0,
+        }
+        self._planning_profile_current = profile
+        self._planning_forecast_cache = {}
+        pending_current: StrokeExecution | None = None
+        pending_stopped = False
+        pending_ranked: list[tuple[Policy, EFEComponents | SpatialEFEComponents, float]] | None = None
+        pending_components: EFEComponents | SpatialEFEComponents | None = None
+        pending_queue: tuple[StrokeAction, ...] = ()
+        pending_passage = self._active_passage
+        error: str | None = None
+        try:
+            policies, log_priors, latent_by_actions = self._local_passage_candidates()
+            self._profile_set("policyCount", len(policies))
+            phase_started = time.perf_counter()
+            if self._uses_spatial_planner():
+                ranked = self._infer_spatial_policy_with_execution_forecasts(
+                    body_snapshot,
+                    policies,
+                    log_priors,
+                )
+            else:
+                ranked = self._infer_policy_with_execution_forecasts(
+                    body_snapshot,
+                    policies,
+                    log_priors,
+                )
+            self._profile_add_seconds("policyInferenceSeconds", time.perf_counter() - phase_started)
+            pending_ranked = ranked
+            policy, component, posterior = ranked[0]
+            pending_components = component
+            if policy.actions[0].stop:
+                pending_stopped = True
+            else:
+                pending_passage = latent_by_actions.get(policy.actions, pending_passage)
+                pending_queue = tuple(action for action in policy.actions[1:] if not action.stop)
+                primitive = policy.motor_primitive
+                pending_current = StrokeExecution(
+                    action=policy.actions[0],
+                    efe=component,
+                    posterior=float(posterior),
+                    initial_state=self._planner_state(body_snapshot),
+                    forecast=self._profiled_forecast_action(body_snapshot, policy.actions[0], primitive),
+                    motor_primitive=primitive,
+                    controller=controller_for_motor_primitive(primitive),
+                )
+        except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
+            error = repr(exc)
+        profile["totalSeconds"] = time.perf_counter() - started
+        with self._planner_lock:
+            if generation != self._planner_generation:
+                return
+            self._pending_current = pending_current
+            self._pending_stopped = pending_stopped
+            self._pending_ranked = pending_ranked
+            self._pending_components = pending_components
+            self._pending_passage_queue = pending_queue
+            self._pending_passage = pending_passage
+            self._pending_passage_plan = self._active_passage_plan
+            self._pending_plan_scope = "passage_local"
+            self._pending_error = error
+            self.last_planning_seconds = float(profile["totalSeconds"])
+            self.last_planning_profile = dict(profile)
+            self.planning = False
+            self._planning_started_at = None
+        self._planning_profile_current = None
+        self._planning_forecast_cache = {}
+
     def _start_background_plan(self, sim: ArmPainterSim) -> None:
         if self.current is not None or self._passage_queue:
             return
@@ -606,9 +793,10 @@ class ArmActiveInferenceDriver:
             self.planning = True
             self._planning_started_at = time.perf_counter()
             self._pending_error = None
+            generation = self._planner_generation
         thread = threading.Thread(
             target=self._background_plan,
-            args=(state, transition, body_snapshot),
+            args=(state, transition, body_snapshot, generation),
             name="active-painter-policy-plan",
             daemon=True,
         )
@@ -626,7 +814,12 @@ class ArmActiveInferenceDriver:
             np.ndarray | SpatialCanvasState,
         ] | None,
         body_snapshot: ArmPainterSim | None = None,
+        generation: int | None = None,
     ) -> None:
+        generation = self._planner_generation if generation is None else int(generation)
+        with self._planner_lock:
+            if generation != self._planner_generation:
+                return
         started = time.perf_counter()
         pending_current: StrokeExecution | None = None
         pending_stopped = False
@@ -638,6 +831,7 @@ class ArmActiveInferenceDriver:
         error: str | None = None
         profile: dict[str, object] = {
             "kind": "planning_profile",
+            "scope": "global",
             "totalSeconds": 0.0,
             "beliefUpdateSeconds": 0.0,
             "policyInferenceSeconds": 0.0,
@@ -662,14 +856,17 @@ class ArmActiveInferenceDriver:
         self._planning_forecast_cache = {}
         try:
             phase_started = time.perf_counter()
-            if transition is not None:
-                before, action, motor_primitive, after = transition
-                self._add_transition_to_agent(before, action, after, motor_primitive)
-                self.trained_transitions += 1
-                self._update_agent_belief(action, after, motor_primitive)
-            else:
-                self._reset_agent_belief(state)
-            self.belief = self.agent.belief
+            with self._planner_lock:
+                if generation != self._planner_generation:
+                    return
+                if transition is not None:
+                    before, action, motor_primitive, after = transition
+                    self._add_transition_to_agent(before, action, after, motor_primitive)
+                    self.trained_transitions += 1
+                    self._update_agent_belief(action, after, motor_primitive)
+                else:
+                    self._reset_agent_belief(state)
+                self.belief = self.agent.belief
             self._profile_add_seconds("beliefUpdateSeconds", time.perf_counter() - phase_started)
             phase_started = time.perf_counter()
             if body_snapshot is None:
@@ -692,10 +889,19 @@ class ArmActiveInferenceDriver:
                 pending_stopped = True
             else:
                 motor_primitive = policy.motor_primitive
-                if policy.passage is not None or policy.passage_plan is not None:
-                    pending_passage_queue = tuple(action for action in policy.actions[1:] if not action.stop)
+                if policy.passage is not None:
+                    passage_actions = policy.actions[:-1]
+                    pending_passage_queue = tuple(passage_actions[1:])
                     pending_passage = policy.passage
+                elif policy.passage_plan is not None:
+                    # Receding-horizon hierarchy: the full plan supplies the
+                    # global terminal rollout, but execution commits only to
+                    # its first explicit passage boundary.
                     pending_passage_plan = policy.passage_plan
+                    pending_passage = policy.passage_plan.passages[0]
+                    first_passage_count = pending_passage.stroke_count
+                    passage_actions = policy.actions[:first_passage_count]
+                    pending_passage_queue = tuple(passage_actions[1:])
                 pending_current = StrokeExecution(
                     action=action,
                     efe=efe,
@@ -714,6 +920,8 @@ class ArmActiveInferenceDriver:
         phase_started = time.perf_counter()
         profile["totalSeconds"] = time.perf_counter() - started
         with self._planner_lock:
+            if generation != self._planner_generation:
+                return
             self._pending_current = pending_current
             self._pending_stopped = pending_stopped
             self._pending_ranked = pending_ranked
@@ -721,6 +929,7 @@ class ArmActiveInferenceDriver:
             self._pending_passage_queue = pending_passage_queue
             self._pending_passage = pending_passage
             self._pending_passage_plan = pending_passage_plan
+            self._pending_plan_scope = "global"
             self._pending_error = error
             self.last_planning_seconds = time.perf_counter() - started
             profile["totalSeconds"] = self.last_planning_seconds
@@ -734,7 +943,7 @@ class ArmActiveInferenceDriver:
         # selected stroke's execution instead of extending the planning gap.
         # _start_background_plan will not launch the next planner thread until
         # this one exits, so training never races policy evaluation.
-        if error is None and transition is not None:
+        if error is None and transition is not None and generation == self._planner_generation:
             try:
                 train_started = time.perf_counter()
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
@@ -819,6 +1028,7 @@ class ArmActiveInferenceDriver:
             pending_passage_queue = self._pending_passage_queue
             pending_passage = self._pending_passage
             pending_passage_plan = self._pending_passage_plan
+            pending_plan_scope = self._pending_plan_scope
             # Diagnostic: stop had the lowest expected free energy, but the
             # declared stop prior demoted it below a continuation policy.
             stop_blocked = False
@@ -834,6 +1044,7 @@ class ArmActiveInferenceDriver:
             self._pending_passage_queue = ()
             self._pending_passage = None
             self._pending_passage_plan = None
+            self._pending_plan_scope = "global"
         if pending_ranked is not None:
             self.last_ranked = pending_ranked
         if pending_components is not None:
@@ -849,8 +1060,20 @@ class ArmActiveInferenceDriver:
             self._passage_queue = list(pending_passage_queue)
             self._active_passage = pending_passage
             self._active_passage_plan = pending_passage_plan
-            self._active_passage_total_strokes = 1 + len(self._passage_queue) if self._passage_queue else 0
-            self._active_passage_completed_strokes = 0
+            if pending_plan_scope == "global":
+                self._active_passage_total_strokes = (
+                    pending_passage.stroke_count if pending_passage is not None else 0
+                )
+                self._active_passage_completed_strokes = 0
+                self._passage_belief = (
+                    PassageBelief.from_latent(pending_passage, self.config)
+                    if pending_passage is not None
+                    else None
+                )
+            elif pending_passage is not None:
+                self._active_passage_total_strokes = pending_passage.stroke_count
+                if self._passage_belief is not None:
+                    self._passage_belief = replace(self._passage_belief, template=pending_passage)
             self._hold_pose = None
             self._hold_command_pose = None
             self._hold_command_velocity = {}
@@ -904,13 +1127,26 @@ class ArmActiveInferenceDriver:
                 else:
                     with self._planner_lock:
                         self._transition_to_learn = (ex.initial_state, ex.action, ex.motor_primitive, after)
+                if self._passage_belief is not None and self._active_passage is not None:
+                    observation = infer_passage_observation(
+                        ex.initial_state,
+                        after,
+                        ex.action,
+                        self._active_passage,
+                        max(0, self._active_passage_completed_strokes - 1),
+                        self.config,
+                    )
+                    self._passage_belief = self._passage_belief.update(observation, self.config)
+                    self._active_passage = self._passage_belief.mean_latent()
             if passage_continues:
                 self._post_stroke_retract_remaining = max(0.0, self.config.passage_local_retract_seconds)
+                self._start_local_passage_plan(sim)
                 self._hold_retracted(sim, dt, scope="passage")
             else:
                 had_active_passage = self._active_passage_total_strokes > 0
                 self._active_passage = None
                 self._active_passage_plan = None
+                self._passage_belief = None
                 self._active_passage_total_strokes = 0
                 self._active_passage_completed_strokes = 0
                 retract_seconds = (
@@ -931,13 +1167,18 @@ class ArmActiveInferenceDriver:
     def _infer_policy_with_execution_forecasts(
         self,
         body_snapshot: ArmPainterSim,
+        policies: list[Policy] | None = None,
+        policy_log_priors: list[float] | None = None,
     ) -> list[tuple[Policy, EFEComponents, float]]:
         assert isinstance(self.agent, ActiveInferencePainter)
         assert isinstance(self.belief, GaussianBelief)
         agent = self.agent
         belief = self.belief
         phase_started = time.perf_counter()
-        policies = agent.policy_sampler.sample()
+        policies = agent.policy_sampler.sample() if policies is None else list(policies)
+        policy_log_priors = [0.0] * len(policies) if policy_log_priors is None else list(policy_log_priors)
+        if len(policy_log_priors) != len(policies):
+            raise ValueError("Policy log priors must align with candidate policies.")
         self._profile_add_seconds("policySampleSeconds", time.perf_counter() - phase_started)
         self._profile_set("policyCount", len(policies))
         phase_started = time.perf_counter()
@@ -953,6 +1194,10 @@ class ArmActiveInferenceDriver:
         motor_primitive_candidates = 0
         forecasted_indices: set[int] = set()
         active_indices: list[int] = list(stop_indices)
+        painting_log_evidence = {
+            index: -self.config.policy_precision * base_components[index].total
+            for index in stop_indices
+        }
         forecast_cache: dict[tuple[object, ...], ExecutionForecast] = {}
 
         def forecast_index(index: int) -> bool:
@@ -961,9 +1206,7 @@ class ArmActiveInferenceDriver:
             first_action = policy.actions[0]
             if first_action.stop:
                 return True
-            best_policy = policy
-            best_component: EFEComponents | None = None
-            best_feasible = False
+            alternatives: list[tuple[Policy, EFEComponents, bool]] = []
             for motor_policy in motor_realization_policy_alternatives(policy, self.config):
                 motor_primitive_candidates += 1
                 self._profile_increment("candidateMotorRealizations")
@@ -1008,17 +1251,26 @@ class ArmActiveInferenceDriver:
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
-                if (
-                    best_component is None
-                    or (forecast.feasible and not best_feasible)
-                    or (forecast.feasible == best_feasible and comp.total < best_component.total)
-                ):
-                    best_policy = motor_policy
-                    best_component = comp
-                    best_feasible = bool(forecast.feasible)
-            assert best_component is not None
+                alternatives.append((motor_policy, comp, bool(forecast.feasible)))
+            feasible_alternatives = [entry for entry in alternatives if entry[2]]
+            eligible = feasible_alternatives or alternatives
+            log_evidence, motor_posterior = motor_realization_log_evidence(
+                [entry[1].total for entry in eligible],
+                [motor_policy_log_prior(entry[0], self.config) for entry in eligible],
+                self.config.policy_precision,
+            )
+            selected = int(np.argmax(motor_posterior))
+            best_policy, best_component, best_feasible = eligible[selected]
+            best_component = replace(
+                best_component,
+                motor_efe_approximation=(
+                    f"{best_component.motor_efe_approximation}; motor realization posterior marginalized "
+                    "within the painting policy"
+                ).strip("; "),
+            )
             policies[index] = best_policy
             components[index] = best_component
+            painting_log_evidence[index] = log_evidence
             forecasted_indices.add(index)
             if best_feasible:
                 active_indices.append(index)
@@ -1043,19 +1295,17 @@ class ArmActiveInferenceDriver:
         self.last_motor_rejections = rejections
         self.last_motor_primitive_candidates = motor_primitive_candidates
         phase_started = time.perf_counter()
-        active_g = torch.tensor([components[i].total for i in active_indices], device=agent.device)
-        active_log_prior = torch.tensor(
+        active_logits = torch.tensor(
             [
                 policy_stop_log_prior(policies[i], believed_coverage, self.config)
-                + motor_policy_log_prior(policies[i], self.config)
+                + painting_log_evidence[i]
+                + policy_log_priors[i]
                 for i in active_indices
             ],
             device=agent.device,
         )
-        active_posterior = torch.softmax(
-            -self.config.policy_precision * (active_g - active_g.min()) + active_log_prior,
-            dim=0,
-        )
+        active_posterior = torch.softmax(active_logits - active_logits.max(), dim=0)
+        self._profile_set("motorRealizationMarginalization", "logsumexp over declared motor policy prior")
         posterior_values = [0.0 for _ in policies]
         for index, prob in zip(active_indices, active_posterior.detach().cpu().tolist()):
             posterior_values[index] = prob
@@ -1070,13 +1320,22 @@ class ArmActiveInferenceDriver:
     def _infer_spatial_policy_with_execution_forecasts(
         self,
         body_snapshot: ArmPainterSim,
+        policies: list[Policy] | None = None,
+        policy_log_priors: list[float] | None = None,
     ) -> list[tuple[Policy, SpatialEFEComponents, float]]:
         assert isinstance(self.agent, SpatialActiveInferencePainter)
         assert isinstance(self.belief, SpatialCanvasState)
         agent = self.agent
         belief = self.belief
         phase_started = time.perf_counter()
-        policies = agent.policy_sampler.sample(belief.coverage(self.config.thickness_scale))
+        policies = (
+            agent.policy_sampler.sample(belief.coverage(self.config.thickness_scale))
+            if policies is None
+            else list(policies)
+        )
+        policy_log_priors = [0.0] * len(policies) if policy_log_priors is None else list(policy_log_priors)
+        if len(policy_log_priors) != len(policies):
+            raise ValueError("Policy log priors must align with candidate policies.")
         self._profile_add_seconds("policySampleSeconds", time.perf_counter() - phase_started)
         self._profile_set("policyCount", len(policies))
         phase_started = time.perf_counter()
@@ -1092,6 +1351,10 @@ class ArmActiveInferenceDriver:
         motor_primitive_candidates = 0
         forecasted_indices: set[int] = set()
         active_indices: list[int] = list(stop_indices)
+        painting_log_evidence = {
+            index: -self.config.policy_precision * base_components[index].total
+            for index in stop_indices
+        }
         forecast_cache: dict[tuple[object, ...], ExecutionForecast] = {}
         rollout_grid_size = (
             pixel_material_from_state(belief).shape[-1]
@@ -1116,9 +1379,7 @@ class ArmActiveInferenceDriver:
             first_action = policy.actions[0]
             if first_action.stop:
                 return True
-            best_policy = policy
-            best_component: SpatialEFEComponents | None = None
-            best_feasible = False
+            alternatives: list[tuple[Policy, SpatialEFEComponents, bool]] = []
             for motor_policy in motor_realization_policy_alternatives(policy, self.config):
                 motor_primitive_candidates += 1
                 self._profile_increment("candidateMotorRealizations")
@@ -1144,6 +1405,11 @@ class ArmActiveInferenceDriver:
                 rescore_started = time.perf_counter()
                 next_material = forecast.next_state_mean.reshape(material_shape)
                 mean = torch.tensor(next_material, device=agent.device, dtype=torch.float32)
+                material_delta = torch.tensor(
+                    forecast.canvas_delta_mean.reshape(material_shape),
+                    device=agent.device,
+                    dtype=torch.float32,
+                )
                 variance = torch.tensor(
                     self._spatial_material_variance_from_forecast(belief, next_material, forecast, body_snapshot),
                     device=agent.device,
@@ -1155,6 +1421,7 @@ class ArmActiveInferenceDriver:
                     motor_policy,
                     mean,
                     variance,
+                    next_material_delta=material_delta,
                     execution_uncertainty=forecast.execution_uncertainty,
                     contact_loss_probability=forecast.contact_loss_probability,
                     motor_overshoot=forecast.overshoot,
@@ -1168,17 +1435,26 @@ class ArmActiveInferenceDriver:
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
-                if (
-                    best_component is None
-                    or (forecast.feasible and not best_feasible)
-                    or (forecast.feasible == best_feasible and comp.total < best_component.total)
-                ):
-                    best_policy = motor_policy
-                    best_component = comp
-                    best_feasible = bool(forecast.feasible)
-            assert best_component is not None
+                alternatives.append((motor_policy, comp, bool(forecast.feasible)))
+            feasible_alternatives = [entry for entry in alternatives if entry[2]]
+            eligible = feasible_alternatives or alternatives
+            log_evidence, motor_posterior = motor_realization_log_evidence(
+                [entry[1].total for entry in eligible],
+                [motor_policy_log_prior(entry[0], self.config) for entry in eligible],
+                self.config.policy_precision,
+            )
+            selected = int(np.argmax(motor_posterior))
+            best_policy, best_component, best_feasible = eligible[selected]
+            best_component = replace(
+                best_component,
+                motor_efe_approximation=(
+                    f"{best_component.motor_efe_approximation}; motor realization posterior marginalized "
+                    "within the painting policy"
+                ).strip("; "),
+            )
             policies[index] = best_policy
             components[index] = best_component
+            painting_log_evidence[index] = log_evidence
             forecasted_indices.add(index)
             if best_feasible:
                 active_indices.append(index)
@@ -1203,19 +1479,17 @@ class ArmActiveInferenceDriver:
         self.last_motor_rejections = rejections
         self.last_motor_primitive_candidates = motor_primitive_candidates
         phase_started = time.perf_counter()
-        active_g = torch.tensor([components[i].total for i in active_indices], device=agent.device)
-        active_log_prior = torch.tensor(
+        active_logits = torch.tensor(
             [
                 policy_stop_log_prior(policies[i], believed_coverage, self.config)
-                + motor_policy_log_prior(policies[i], self.config)
+                + painting_log_evidence[i]
+                + policy_log_priors[i]
                 for i in active_indices
             ],
             device=agent.device,
         )
-        active_posterior = torch.softmax(
-            -self.config.policy_precision * (active_g - active_g.min()) + active_log_prior,
-            dim=0,
-        )
+        active_posterior = torch.softmax(active_logits - active_logits.max(), dim=0)
+        self._profile_set("motorRealizationMarginalization", "logsumexp over declared motor policy prior")
         posterior_values = [0.0 for _ in policies]
         for index, prob in zip(active_indices, active_posterior.detach().cpu().tolist()):
             posterior_values[index] = prob
@@ -1277,6 +1551,7 @@ class ArmActiveInferenceDriver:
     def diagnostics(self) -> dict[str, Any]:
         action = asdict(self.current.action) if self.current is not None else None
         efe = asdict(self.last_components) if self.last_components is not None else None
+        vfe = asdict(self.agent.last_vfe) if self.agent.last_vfe is not None else None
         posterior_values = [prob for _, _, prob in self.last_ranked]
         posterior_entropy = float(
             -sum(prob * np.log(max(prob, 1e-12)) for prob in posterior_values)
@@ -1333,6 +1608,7 @@ class ArmActiveInferenceDriver:
             "passageQueueLength": len(self._passage_queue),
             "activePassage": asdict(self._active_passage) if self._active_passage is not None else None,
             "activePassagePlan": asdict(self._active_passage_plan) if self._active_passage_plan is not None else None,
+            "activePassageBelief": self._passage_belief.diagnostics() if self._passage_belief is not None else None,
             "activePassageTotalStrokes": self._active_passage_total_strokes,
             "activePassageCompletedStrokes": self._active_passage_completed_strokes,
             "minimumStopCoverage": self.config.minimum_stop_coverage,
@@ -1368,6 +1644,7 @@ class ArmActiveInferenceDriver:
                 else None
             ),
             "efe": efe,
+            "vfe": vfe,
             "phase": self.phase_label(),
             "posterior": self.current.posterior if self.current is not None else None,
             "topPolicies": [
@@ -1376,6 +1653,7 @@ class ArmActiveInferenceDriver:
                     "firstStop": policy.actions[0].stop,
                     "passage": asdict(policy.passage) if policy.passage is not None else None,
                     "passagePlan": asdict(policy.passage_plan) if policy.passage_plan is not None else None,
+                    "passageBoundaries": [list(boundary) for boundary in policy.passage_boundaries],
                     "motorPrimitive": asdict(policy.motor_primitive) if policy.motor_primitive is not None else None,
                     "posterior": prob,
                     "total": comp.total,
@@ -1442,7 +1720,7 @@ class ArmActiveInferenceDriver:
                 )
             return (
                 f"Spatial Gaussian q(s_grid) over {self.belief.grid_size}x{self.belief.grid_size} "
-                "material fields: thickness, wetness, black_mass, observed_tone, ground_contrast, material_coverage; "
+                "material fields: thickness, wetness, conserved black_mass, surface_tone, ground_contrast, material_coverage; "
                 "six canvas summaries are diagnostics only"
             )
         return "Gaussian q(s) over six canvas summary states; spatial hierarchy is not active in this runtime mode"
@@ -1462,7 +1740,7 @@ class ArmActiveInferenceDriver:
 
     def _execution_forecast_diagnostics(self) -> dict[str, object] | None:
         forecast = self.current.forecast if self.current is not None else self.last_execution_forecast
-        return forecast.diagnostics() if forecast is not None else None
+        return forecast.diagnostics(include_state_fields=False) if forecast is not None else None
 
     def phase_label(self) -> str:
         if self.current is not None:

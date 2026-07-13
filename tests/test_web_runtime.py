@@ -58,7 +58,7 @@ def test_web_runtime_can_enable_spatial_material_planner() -> None:
         "thickness",
         "wetness",
         "black_mass",
-        "observed_tone",
+        "surface_tone",
         "ground_contrast",
         "material_coverage",
     ]
@@ -107,7 +107,7 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert summary.telemetry_max_samples == 54_000
     assert summary.telemetry_sample_hz == 15.0
     assert summary.checkpoint_path is None
-    assert summary.checkpoint_save_every_transitions == 1
+    assert summary.checkpoint_save_every_transitions == 10
 
 
 def test_web_server_exposes_checkpoint_options() -> None:
@@ -292,6 +292,7 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "currentPlanningSeconds" in main_js
     assert "planningProfile" in main_js
     assert "Plan base EFE" in main_js
+    assert "VFE F" in main_js
     assert "Checkpoint" in main_js
     assert "retentionPolicy" in main_js
 

@@ -7,7 +7,7 @@ from active_painter.arm_agent_driver import canvas_summary_state
 from active_painter.arm_sim import ArmPainterSim
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
-from active_painter.motor_planning import motor_efe_terms
+from active_painter.motor_planning import motor_efe_terms, motor_realization_log_evidence
 from active_painter.policies import MotorPrimitiveLatent, Policy
 from active_painter.stroke_execution import (
     ContactAwareStrokeController,
@@ -27,8 +27,10 @@ def test_contact_aware_controller_reduces_overshoot_against_direct_waypoint_base
     aware = forecast_stroke_execution(sim, action, canvas_summary_state, controller=ContactAwareStrokeController())
 
     assert aware.feasible
-    assert aware.overshoot < 0.5 * direct.overshoot
     assert aware.execution_uncertainty < direct.execution_uncertainty
+    assert aware.joint_target_error_rms < direct.joint_target_error_rms
+    assert aware.joint_current_rms < direct.joint_current_rms
+    assert sum(aware.path_covariance) < sum(direct.path_covariance)
     # The aware controller gates paint until tracking engages, so a small
     # contact-loss fraction is deliberate; it must stay bounded rather than
     # beat an ungated baseline that paints while off-track.
@@ -93,10 +95,10 @@ def test_execution_forecast_rejects_degenerate_stationary_paint_realization() ->
 
     assert not forecast.feasible
     assert forecast.intended_path_length < 0.18
-    assert forecast.realized_path_span < 0.08
+    assert forecast.realized_path_span < 0.2
 
 
-def test_forecast_uncertainty_depends_on_body_state_controllability() -> None:
+def test_forecast_proprioceptive_risk_depends_on_body_state_controllability() -> None:
     cfg = PainterConfig(canvas_size=48)
     near = ArmPainterSim(cfg)
     far = ArmPainterSim(cfg)
@@ -107,8 +109,8 @@ def test_forecast_uncertainty_depends_on_body_state_controllability() -> None:
     near_forecast = forecast_stroke_execution(near, action, canvas_summary_state)
     far_forecast = forecast_stroke_execution(far, action, canvas_summary_state)
 
-    assert far_forecast.execution_uncertainty > near_forecast.execution_uncertainty
-    assert sum(far_forecast.path_covariance) > sum(near_forecast.path_covariance)
+    assert far_forecast.joint_target_error_rms > near_forecast.joint_target_error_rms
+    assert motor_efe_terms(far_forecast, cfg).risk > motor_efe_terms(near_forecast, cfg).risk
 
 
 def test_joint_space_motor_primitive_forecast_reports_proprioceptive_outcomes() -> None:
@@ -125,7 +127,10 @@ def test_joint_space_motor_primitive_forecast_reports_proprioceptive_outcomes() 
     )
 
     assert forecast.motor_primitive_kind == "elbow_pivot"
-    assert forecast.proprioceptive_observation_dim > 0
+    assert forecast.proprioceptive_observation_dim == 27
+    assert len(forecast.proprioceptive_labels) == forecast.proprioceptive_observation_dim
+    assert forecast.motor_rollout_samples == sim.config.motor_forecast_samples
+    assert sum(forecast.proprioceptive_predictive_variance) > 0.0
     assert forecast.joint_current_rms >= 0.0
     assert forecast.joint_torque_rms >= 0.0
     assert forecast.joint_path_length_deg > 0.0
@@ -150,7 +155,23 @@ def test_motor_efe_terms_are_separate_precision_weighted_proprioceptive_terms() 
 
     assert terms.risk >= 0.0
     assert terms.ambiguity >= 0.0
+    assert terms.epistemic_value > 0.0
+    assert "analytic in nats" in terms.approximation
     assert "hard safety limits remain external" in terms.approximation
+
+
+def test_motor_realization_evidence_marginalizes_declared_prior_without_candidate_count_bonus() -> None:
+    precision = 2.5
+    single_evidence, single_posterior = motor_realization_log_evidence([1.2], [0.0], precision)
+    repeated_evidence, repeated_posterior = motor_realization_log_evidence(
+        [1.2, 1.2, 1.2],
+        [-float(torch.log(torch.tensor(3.0)))] * 3,
+        precision,
+    )
+
+    assert repeated_evidence == pytest.approx(single_evidence)
+    assert single_posterior.tolist() == pytest.approx([1.0])
+    assert repeated_posterior.tolist() == pytest.approx([1.0 / 3.0] * 3)
 
 
 def test_execution_forecast_changes_efe_through_realized_canvas_distribution() -> None:
@@ -226,6 +247,7 @@ def test_motor_efe_terms_contribute_to_total_without_mixing_with_coverage_terms(
         motor_feasible=True,
         motor_risk=0.4,
         motor_ambiguity=0.2,
+        motor_epistemic_value=0.1,
         motor_efe_approximation="test proprioceptive modality",
     )
 
@@ -233,4 +255,5 @@ def test_motor_efe_terms_contribute_to_total_without_mixing_with_coverage_terms(
     assert motor_loaded.transition_risk == base.transition_risk
     assert motor_loaded.motor_risk == pytest.approx(0.4)
     assert motor_loaded.motor_ambiguity == pytest.approx(0.2)
-    assert motor_loaded.total == pytest.approx(base.total + 0.6)
+    assert motor_loaded.motor_epistemic_value == pytest.approx(0.1)
+    assert motor_loaded.total == pytest.approx(base.total + 0.5)

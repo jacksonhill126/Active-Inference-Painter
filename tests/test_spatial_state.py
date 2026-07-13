@@ -7,6 +7,7 @@ from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.models import SpatialDynamicsEnsemble, SpatialTransitionMember
 from active_painter.policies import Policy
+from active_painter.spatial_inference import SpatialVariationalStateEstimator
 from active_painter.preferences import TerminalCoveragePreference
 from active_painter.spatial_efe import SpatialExpectedFreeEnergy
 from active_painter.spatial_state import (
@@ -39,11 +40,11 @@ class DeterministicFootprintDynamics:
         delta[:, 2:3] = tone * deposited
         next_material = material + delta
         if next_material.shape[1] > 3:
-            pigment_tone = torch.clamp(next_material[:, 2] / torch.clamp(next_material[:, 0], min=1e-6), 0.0, 1.0)
             coverage = 1.0 - torch.exp(-torch.clamp(next_material[:, 0], min=0.0) / 0.005)
-            next_material[:, 3] = torch.clamp((1.0 - coverage) * 0.34 + coverage * pigment_tone, 0.0, 1.0)
+            next_material[:, 3:4] = torch.where(deposited > 0.0, tone, material[:, 3:4])
         if next_material.shape[1] > 4:
-            next_material[:, 4] = torch.abs(next_material[:, 3] - 0.34)
+            observed = (1.0 - coverage) * 0.34 + coverage * next_material[:, 3]
+            next_material[:, 4] = torch.abs(observed - 0.34)
         if next_material.shape[1] > 5:
             next_material[:, 5] = 1.0 - torch.exp(-torch.clamp(next_material[:, 0], min=0.0) / 0.005)
         aleatoric = torch.full_like(next_material, 2e-5)
@@ -88,11 +89,40 @@ def test_spatial_material_coverage_is_derived_from_thickness_not_visible_tone() 
     assert after.material_coverage_mean(cfg.thickness_scale) > before.material_coverage_mean(cfg.thickness_scale)
     assert after.material[0].mean() > before.material[0].mean()
     assert after.material[2].mean() == before.material[2].mean()
-    assert after.material[3].mean() < before.material[3].mean()
+    assert after.material[3].mean() == before.material[3].mean()
+    assert after.material[4].mean() > before.material[4].mean()
     assert after.material[4].mean() > before.material[4].mean()
 
 
-def test_spatial_state_includes_observed_tone_contrast_and_derived_material_coverage_fields() -> None:
+def test_spatial_posterior_combines_transition_prior_and_material_likelihood() -> None:
+    cfg = PainterConfig(canvas_size=16, spatial_grid_size=8, local_identity_logvar=-10.0)
+    sim = ArmPainterSim(cfg)
+    initial_observation = spatial_canvas_state(sim, cfg)
+    estimator = SpatialVariationalStateEstimator(cfg, torch.device("cpu"))
+    prior = estimator.initialize(initial_observation)
+    action = StrokeAction(0.25, 0.5, 0.75, 0.5, 0.1, 0.5, tone=1.0)
+    sim.canvas.paint_at(
+        np.asarray([0.0, sim.canvas.distance, 0.0]),
+        pressure=0.7,
+        tone=1.0,
+        dt=1.0 / 60.0,
+    )
+    observation = spatial_canvas_state(sim, cfg)
+
+    posterior = estimator.infer(prior, action, observation, DeterministicFootprintDynamics())
+
+    assert posterior.pixel_logvar is not None
+    assert posterior.pixel_logvar.shape == (cfg.spatial_material_channels, cfg.canvas_size, cfg.canvas_size)
+    assert np.isfinite(posterior.pixel_logvar).all()
+    assert estimator.last_vfe is not None
+    assert np.isclose(
+        estimator.last_vfe.total,
+        estimator.last_vfe.complexity + estimator.last_vfe.negative_log_likelihood,
+    )
+    assert estimator.last_vfe.complexity >= 0.0
+
+
+def test_spatial_state_includes_surface_tone_contrast_and_derived_material_coverage_fields() -> None:
     cfg = PainterConfig(canvas_size=32, spatial_grid_size=16)
     sim = ArmPainterSim(cfg)
     sim.canvas.paint_at(
@@ -108,12 +138,12 @@ def test_spatial_state_includes_observed_tone_contrast_and_derived_material_cove
         "thickness",
         "wetness",
         "black_mass",
-        "observed_tone",
+        "surface_tone",
         "ground_contrast",
         "material_coverage",
     ]
     assert state.material.shape == (len(MATERIAL_CHANNELS), 16, 16)
-    assert state.material[3].max() > cfg.canvas_ground_tone
+    assert state.material[3].max() > 0.2
     assert state.material[4].max() > 0.0
     assert np.allclose(state.material[5], state.coverage(cfg.thickness_scale))
 
@@ -218,9 +248,9 @@ def test_spatial_dynamics_projection_supports_backpropagation() -> None:
     next_material[:, 1, 2:6, 2:6] = 0.004
     next_material[:, 2, 2:6, 2:6] = 0.006
     coverage = 1.0 - torch.exp(-torch.clamp(next_material[:, 0], min=0.0) / cfg.thickness_scale)
-    pigment_tone = torch.clamp(next_material[:, 2] / torch.clamp(next_material[:, 0], min=1e-6), 0.0, 1.0)
-    next_material[:, 3] = torch.clamp((1.0 - coverage) * cfg.canvas_ground_tone + coverage * pigment_tone, 0.0, 1.0)
-    next_material[:, 4] = torch.abs(next_material[:, 3] - cfg.canvas_ground_tone)
+    next_material[:, 3] = 0.6
+    observed_tone = (1.0 - coverage) * cfg.canvas_ground_tone + coverage * next_material[:, 3]
+    next_material[:, 4] = torch.abs(observed_tone - cfg.canvas_ground_tone)
     next_material[:, 5] = coverage
 
     loss = model.nll(material, action, next_material)
@@ -231,18 +261,18 @@ def test_spatial_dynamics_projection_supports_backpropagation() -> None:
     assert all(torch.isfinite(gradient).all() for gradient in gradients)
 
 
-def test_spatial_material_support_allows_wetness_decay_but_not_erasure() -> None:
+def test_spatial_material_support_preserves_persistent_wetness_and_material() -> None:
     current = torch.tensor([[[[0.4]], [[0.3]], [[0.2]], [[0.0]], [[0.0]], [[0.0]]]])
     proposed = torch.tensor([[[[0.1]], [[0.05]], [[0.0]], [[0.7]], [[0.9]], [[0.2]]]])
 
     projected = SpatialTransitionMember._project_material_support(current, proposed)
 
     assert projected[0, 0, 0, 0] == current[0, 0, 0, 0]
-    assert projected[0, 1, 0, 0] == proposed[0, 1, 0, 0]
+    assert projected[0, 1, 0, 0] == current[0, 1, 0, 0]
     assert projected[0, 2, 0, 0] == current[0, 2, 0, 0]
     expected_coverage = torch.tensor(1.0 - np.exp(-0.4 / 0.005), dtype=projected.dtype)
-    assert torch.isclose(projected[0, 3, 0, 0], torch.tensor(0.5))
-    assert torch.isclose(projected[0, 4, 0, 0], torch.tensor(abs(0.5 - 0.34), dtype=projected.dtype))
+    assert torch.isclose(projected[0, 3, 0, 0], torch.tensor(0.7))
+    assert torch.isclose(projected[0, 4, 0, 0], torch.tensor(abs(0.7 - 0.34), dtype=projected.dtype))
     assert torch.isclose(projected[0, 5, 0, 0], expected_coverage)
 
 

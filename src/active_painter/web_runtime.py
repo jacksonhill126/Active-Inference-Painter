@@ -32,7 +32,7 @@ class WebSimRuntime:
     driver_bootstrap_transitions: int = 96
     driver_bootstrap_train_steps: int = 180
     checkpoint_path: Path | str | None = None
-    checkpoint_save_every_transitions: int = 1
+    checkpoint_save_every_transitions: int = 10
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)

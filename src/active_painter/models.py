@@ -143,8 +143,8 @@ class SpatialDynamicsEnsemble(nn.Module):
     """Learned p_theta(s_grid[t+1] | s_grid[t], a_raster[t]).
 
     This model is deliberately spatial and material-only: it predicts local
-    thickness, wetness, and pigment mass fields. It does not contain aesthetic
-    reward terms or composition heuristics.
+    thickness, wetness, conserved pigment mass, and surface optics. It does not
+    contain aesthetic reward terms or composition heuristics.
     """
 
     def __init__(self, config: PainterConfig) -> None:
