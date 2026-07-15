@@ -75,6 +75,7 @@ def project_material_support(
     proposed: torch.Tensor,
     thickness_scale: float,
     ground_tone: float,
+    paint_presence_threshold: float = 0.0001,
 ) -> torch.Tensor:
     # Structural support: material thickness and pigment mass have no
     # erasing/clearing action inside a candidate painting policy. Wetness is
@@ -88,12 +89,15 @@ def project_material_support(
     channels[1] = torch.maximum(channels[1], current[:, 1:2])
     channels[2] = torch.maximum(channels[2], current[:, 2:3])
     scale = max(1e-8, float(thickness_scale))
+    threshold = max(0.0, float(paint_presence_threshold))
     if len(channels) > 3:
-        coverage = 1.0 - torch.exp(-torch.clamp(channels[0], min=0.0) / scale)
+        thickness = torch.clamp(channels[0], min=0.0)
+        coverage = (thickness >= threshold).to(thickness.dtype)
+        opacity = 1.0 - torch.exp(-thickness / scale)
         channels[3] = torch.clamp(channels[3], 0.0, 1.0)
     if len(channels) > 4:
-        observed_tone = (1.0 - coverage) * float(ground_tone) + coverage * channels[3]
+        observed_tone = (1.0 - opacity) * float(ground_tone) + opacity * channels[3]
         channels[4] = torch.abs(observed_tone - float(ground_tone))
     if len(channels) > 5:
-        channels[5] = 1.0 - torch.exp(-torch.clamp(channels[0], min=0.0) / scale)
+        channels[5] = coverage
     return torch.cat(channels, dim=1)

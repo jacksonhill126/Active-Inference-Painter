@@ -4,7 +4,14 @@ import pytest
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.motor_planning import motor_realization_policy_alternatives
-from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy, PolicySampler
+from active_painter.policies import (
+    MotorPrimitiveLatent,
+    PassageLatent,
+    PassagePlanLatent,
+    Policy,
+    PolicySampler,
+    polyline_vertices,
+)
 
 
 def test_policy_sampler_includes_immediate_stop_and_only_terminal_stop() -> None:
@@ -110,6 +117,26 @@ def test_motor_realization_alternatives_are_policy_latents_not_extra_actions() -
     assert all(policy.actions == base.actions for policy in alternatives)
 
 
+def test_default_motor_alternatives_include_symmetric_upper_arm_roll_sweeps() -> None:
+    cfg = PainterConfig(motor_roll_sweep_degrees=28.0)
+    stroke = StrokeAction(0.1, 0.1, 0.9, 0.9, 0.08, 0.5, 1.0)
+    base = Policy((stroke, StrokeAction.stop_action()))
+
+    alternatives = motor_realization_policy_alternatives(base, cfg)
+    primitives = {
+        policy.motor_primitive.kind: policy.motor_primitive
+        for policy in alternatives
+        if policy.motor_primitive is not None
+    }
+
+    assert set(primitives) == set(cfg.motor_realization_kinds)
+    assert primitives["upper_arm_roll_positive"].pivot_joint == "roll"
+    assert primitives["upper_arm_roll_positive"].roll_start_deg == pytest.approx(-28.0)
+    assert primitives["upper_arm_roll_positive"].roll_end_deg == pytest.approx(28.0)
+    assert primitives["upper_arm_roll_negative"].roll_start_deg == pytest.approx(28.0)
+    assert primitives["upper_arm_roll_negative"].roll_end_deg == pytest.approx(-28.0)
+
+
 def test_policy_rejects_single_mark_passage_metadata() -> None:
     stroke = StrokeAction(0.1, 0.1, 0.9, 0.9, 0.08, 0.5, 1.0)
     passage = PassageLatent("band", 0.5, 0.5, 0.0, 0.4, 0.08, 1, 0.08, 0.5, 1.0)
@@ -147,6 +174,52 @@ def test_policy_sampler_includes_higher_level_passage_candidates() -> None:
         len({action.tone for action in policy.actions[:-1]}) == 1
         for policy in passages
     )
+
+
+def test_polyline_passage_decodes_to_connected_constant_turn_straight_marks() -> None:
+    cfg = PainterConfig(
+        candidate_policies=18,
+        planning_horizon=4,
+        passage_proposal_mix=1.0,
+        passage_plan_proposal_mix=0.0,
+        passage_polyline_mix=1.0,
+        stroke_tone_prior=1.0,
+    )
+
+    passages = [policy for policy in PolicySampler(cfg, seed=27).sample() if policy.passage is not None]
+
+    assert passages
+    assert all(policy.passage is not None and policy.passage.kind == "polyline" for policy in passages)
+    for policy in passages:
+        assert policy.passage is not None
+        actions = policy.actions[:-1]
+        assert all(
+            np.allclose((left.x1, left.y1), (right.x0, right.y0), atol=1e-10)
+            for left, right in zip(actions[:-1], actions[1:])
+        )
+        lengths = np.asarray(
+            [np.hypot(action.x1 - action.x0, action.y1 - action.y0) for action in actions]
+        )
+        directions = np.unwrap(
+            np.asarray([np.arctan2(action.y1 - action.y0, action.x1 - action.x0) for action in actions])
+        )
+        assert float(lengths.sum()) == pytest.approx(policy.passage.length)
+        assert np.diff(directions) == pytest.approx(
+            np.full(max(0, len(actions) - 1), policy.passage.turn)
+        )
+        vertices = polyline_vertices(policy.passage)
+        assert np.all(vertices >= 0.03 - 1e-10)
+        assert np.all(vertices <= 0.97 + 1e-10)
+
+
+def test_polyline_continuation_is_the_exact_remaining_segment_suffix() -> None:
+    sampler = PolicySampler(PainterConfig(), seed=5)
+    latent = PassageLatent("polyline", 0.5, 0.5, 0.4, 0.62, -0.45, 4, 0.08, 0.5, 1.0)
+
+    complete = sampler.passage_actions(latent)
+    remaining = sampler.passage_actions(latent, start_index=2)
+
+    assert remaining == complete[2:]
 
 
 def test_passage_candidates_are_disabled_by_zero_passage_mix() -> None:

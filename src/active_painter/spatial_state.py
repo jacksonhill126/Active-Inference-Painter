@@ -35,10 +35,10 @@ class MaterialPyramidLevel:
     def dimensions(self) -> int:
         return int(np.prod(self.material.shape))
 
-    def coverage(self, thickness_scale: float) -> np.ndarray:
+    def coverage(self, presence_threshold: float) -> np.ndarray:
         if self.material.shape[0] > 5:
             return self.material[5]
-        return coverage_from_thickness(self.material[0], thickness_scale)
+        return coverage_from_thickness(self.material[0], presence_threshold)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,13 +59,13 @@ class SpatialCanvasState:
     def grid_size(self) -> int:
         return int(self.material.shape[-1])
 
-    def coverage(self, thickness_scale: float) -> np.ndarray:
+    def coverage(self, presence_threshold: float) -> np.ndarray:
         if self.material.shape[0] > 5:
             return self.material[5]
-        return coverage_from_thickness(self.material[0], thickness_scale)
+        return coverage_from_thickness(self.material[0], presence_threshold)
 
-    def material_coverage_mean(self, thickness_scale: float) -> float:
-        return float(self.coverage(thickness_scale).mean())
+    def material_coverage_mean(self, presence_threshold: float) -> float:
+        return float(self.coverage(presence_threshold).mean())
 
     def flatten_mean(self) -> np.ndarray:
         return self.material.astype(np.float32).reshape(-1)
@@ -164,10 +164,11 @@ def project_material_fields(material: np.ndarray, config: PainterConfig) -> np.n
     if projected.shape[0] <= 3:
         return projected
     thickness = projected[0]
-    coverage = 1.0 - np.exp(-thickness / max(1e-8, config.thickness_scale))
+    coverage = coverage_from_thickness(thickness, config.paint_presence_threshold)
+    opacity = 1.0 - np.exp(-thickness / max(1e-8, config.thickness_scale))
     projected[3] = np.clip(projected[3], 0.0, 1.0)
     if projected.shape[0] > 4:
-        observed_tone = (1.0 - coverage) * config.canvas_ground_tone + coverage * projected[3]
+        observed_tone = (1.0 - opacity) * config.canvas_ground_tone + opacity * projected[3]
         projected[4] = np.abs(observed_tone - config.canvas_ground_tone)
     if projected.shape[0] > 5:
         projected[5] = coverage
@@ -220,8 +221,10 @@ def downsample_mean(field: np.ndarray, grid_size: int) -> np.ndarray:
     return out
 
 
-def coverage_from_thickness(thickness: np.ndarray, thickness_scale: float) -> np.ndarray:
-    return (1.0 - np.exp(-np.clip(thickness, 0.0, None) / max(1e-8, thickness_scale))).astype(np.float32)
+def coverage_from_thickness(thickness: np.ndarray, presence_threshold: float) -> np.ndarray:
+    """Return paint-presence occupancy, independent of thickness above threshold."""
+
+    return (np.clip(thickness, 0.0, None) >= max(0.0, presence_threshold)).astype(np.float32)
 
 
 def rasterize_stroke_action(
@@ -288,7 +291,7 @@ def rasterize_stroke_action(
 
 
 def spatial_state_diagnostics(state: SpatialCanvasState, config: PainterConfig) -> dict[str, object]:
-    coverage = state.coverage(config.thickness_scale)
+    coverage = state.coverage(config.paint_presence_threshold)
     return {
         "kind": "spatial_material",
         "gridSize": state.grid_size,
@@ -318,7 +321,7 @@ def material_pyramid_diagnostics(
             "meanWetness": float(level.material[1].mean()),
             "meanBlackMass": float(level.material[2].mean()),
             "meanSurfaceTone": float(level.material[3].mean()) if level.material.shape[0] > 3 else None,
-            "coverageMean": float(level.coverage(config.thickness_scale).mean()),
+            "coverageMean": float(level.coverage(config.paint_presence_threshold).mean()),
         }
         for level in pyramid
     ]

@@ -34,6 +34,7 @@ scene.add(key);
 const armMat = new THREE.MeshStandardMaterial({ color: 0x9fb0d0, metalness: 0.45, roughness: 0.36 });
 const jointMat = new THREE.MeshStandardMaterial({ color: 0x5ad1c4, metalness: 0.25, roughness: 0.35, emissive: 0x103c38 });
 const tipMat = new THREE.MeshStandardMaterial({ color: 0xf0734e, roughness: 0.35, emissive: 0x331004 });
+const rollMat = new THREE.MeshStandardMaterial({ color: 0xf2c14e, metalness: 0.35, roughness: 0.3 });
 
 const joints = [0, 1, 2].map((_, i) => {
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(i === 2 ? 0.45 : 0.65, 32, 16), i === 2 ? tipMat : jointMat);
@@ -46,6 +47,9 @@ const links = [0, 1].map(() => {
   scene.add(mesh);
   return mesh;
 });
+
+const elbowHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 1, 24), rollMat);
+scene.add(elbowHinge);
 
 let canvasTexture = new THREE.Texture();
 canvasTexture.colorSpace = THREE.SRGBColorSpace;
@@ -76,6 +80,13 @@ function placeLink(mesh, a, b) {
   mesh.position.copy(mid);
   mesh.scale.set(1, len, 1);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+}
+
+function placeAxis(mesh, center, axis, length) {
+  const direction = v3(axis).normalize();
+  mesh.position.copy(v3(center));
+  mesh.scale.set(1, length, 1);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
 }
 
 async function command(type, value = undefined) {
@@ -205,6 +216,7 @@ async function pollState() {
   for (let i = 0; i < joints.length; i++) joints[i].position.copy(v3(points[i]));
   placeLink(links[0], points[0], points[1]);
   placeLink(links[1], points[1], points[2]);
+  placeAxis(elbowHinge, points[1], state.elbowHingeAxis || [1, 0, 0], 2.0);
 
   canvasMesh.position.y = state.canvas.distance;
   frame.position.y = state.canvas.distance - 0.01;
@@ -223,6 +235,14 @@ async function pollState() {
   const beliefMean = belief.mean || [];
   const beliefStd = belief.std || [];
   const spatialBelief = state.agent?.spatialBelief || {};
+  const composition = state.agent?.composition || {};
+  const hierarchy = composition.hierarchy || {};
+  const canvasLatent = hierarchy.canvas || {};
+  const relationalLatent = hierarchy.relational || {};
+  const passageTrajectory = hierarchy.passageTrajectory || {};
+  const passageKindUpdates = passageTrajectory.kindUpdateCounts || {};
+  const topPassageTrajectory = composition.topPolicyPassageTrajectory || {};
+  const passageEvaluation = composition.passageTrajectoryEvaluation || {};
   const materialPyramid = spatialBelief.materialPyramid || [];
   const pyramidText = materialPyramid.length
     ? materialPyramid.map((level) => `${level.name}:${level.gridSize}`).join(" -> ")
@@ -233,7 +253,7 @@ async function pollState() {
   const policyRows = topPolicies.slice(0, 4).map((p, i) =>
     row(
       `q(policy) #${i + 1}`,
-      `${pct(p.posterior)} / ${policyKind(p)} / ${p.rolloutMode || "dense_grid"} ${p.rolloutGridSize || "-"} / G ${num(p.total)} / C_T ${num(p.terminalCoverageMean)}`
+      `${pct(p.posterior)} / ${policyKind(p)} / ${p.rolloutMode || "dense_grid"} ${p.rolloutGridSize || "-"} / ${p.hierarchyTransitionMode || "unavailable"} ${p.passageTrajectorySteps || 0} steps / G ${num(p.total)} / C_T ${num(p.terminalCoverageMean)}`
     )
   );
 
@@ -242,7 +262,7 @@ async function pollState() {
     `coverage mean <b>${state.canvas.coverage.toFixed(4)}</b> / pressure summary <b>${state.contact.pressure.toFixed(3)}</b>`,
     `agent <b>${state.agentEnabled ? agentPhaseLabel(state.agent) : "scripted fallback"}</b> / sim <b>${state.simTime.toFixed(1)}s</b>`,
     `VFE F <b>${num(vfe.total)}</b> = complexity <b>${num(vfe.complexity)}</b> + negative log likelihood <b>${num(vfe.negative_log_likelihood)}</b>`,
-    `EFE G <b>${num(efe.total)}</b> = terminal risk <b>${num(efe.terminal_risk)}</b> + ambiguity <b>${num(efe.ambiguity)}</b> + transition risk <b>${num(efe.transition_risk)}</b> + transition ambiguity <b>${num(efe.transition_ambiguity)}</b> + motor risk <b>${num(efe.motor_risk)}</b> + motor ambiguity <b>${num(efe.motor_ambiguity)}</b>`,
+    `EFE G <b>${num(efe.total)}</b> = terminal risk <b>${num(efe.terminal_risk)}</b> + ambiguity <b>${num(efe.ambiguity)}</b> + transition risk <b>${num(efe.transition_risk)}</b> + transition ambiguity <b>${num(efe.transition_ambiguity)}</b> + canvas latent risk <b>${num(efe.canvas_transition_risk)}</b> + relational risk <b>${num(efe.relational_transition_risk)}</b> + motor risk <b>${num(efe.motor_risk)}</b> + motor ambiguity <b>${num(efe.motor_ambiguity)}</b>`,
   ].join("<br>");
 
   specs.innerHTML = [
@@ -258,7 +278,14 @@ async function pollState() {
     row("Current planner time", `${num(state.agent?.currentPlanningSeconds)} s`),
     row("Last planner time", `${num(state.agent?.lastPlanningSeconds)} s`),
     row("Plan base EFE", `${num(planningProfile.baseEFESeconds)} s`),
-    row("Plan motor forecast", `${num(planningProfile.motorForecastSeconds)} s / ${planningProfile.motorForecastCount ?? 0}`),
+    row(
+      "Plan motor forecast",
+      `${num(planningProfile.motorForecastSeconds)} s / ${planningProfile.motorForecastCount ?? 0}`
+    ),
+    row(
+      "Motor forecast batches",
+      `${planningProfile.motorForecastBatchCount ?? 0} batches / ${planningProfile.motorForecastWorkers ?? 0} workers`
+    ),
     row("Plan motor rescore", `${num(planningProfile.motorEFERescoreSeconds)} s`),
     row("Plan composition", `${num(planningProfile.compositionDiagnosticSeconds)} s`),
     row("Plan trailing train", `${num(planningProfile.trailingTrainingSeconds)} s`),
@@ -298,6 +325,29 @@ async function pollState() {
     row("Passage posterior mass", pct(state.agent?.passagePosteriorMass)),
     row("Passage-plan candidates", String(state.agent?.passagePlanCandidateCount ?? 0)),
     row("Passage-plan posterior mass", pct(state.agent?.passagePlanPosteriorMass)),
+    row("Canvas latent", `${canvasLatent.dimensions ?? "-"} dims / ${canvasLatent.updateCount ?? 0} updates`),
+    row("Canvas posterior std", num(canvasLatent.posteriorStdMean)),
+    row("Relational latent", `${relationalLatent.dimensions ?? "-"} dims / ${relationalLatent.updateCount ?? 0} updates`),
+    row("Relational posterior std", num(relationalLatent.posteriorStdMean)),
+    row("Relational observation", `${hierarchy.relationalObservationDimensions ?? "-"} dims / ${hierarchy.markSlots ?? "-"} slots`),
+    row("Passage transition replay", String(composition.passageReplaySize ?? 0)),
+    row("Hierarchy transition loss", num(composition.lastTransitionTrainingLoss)),
+    row("Passage-step replay", String(composition.passageStepReplaySize ?? 0)),
+    row("Passage trajectory updates", String(passageTrajectory.transitionUpdates ?? 0)),
+    row(
+      "Passage kind support",
+      `band ${passageKindUpdates.band ?? 0} / chain ${passageKindUpdates.chain ?? 0} / polyline ${passageKindUpdates.polyline ?? 0}`
+    ),
+    row("Passage trajectory loss", num(composition.lastPassageTrajectoryLoss)),
+    row("Passage one-step canvas KL", num(passageEvaluation.canvasKLNatsPerDim)),
+    row("Passage one-step relation KL", num(passageEvaluation.relationalKLNatsPerDim)),
+    row("Passage conditioning gain", `${num(passageEvaluation.conditioningGainNatsPerDim)} nats/dim`),
+    row(
+      "Predicted coarse trajectory",
+      topPassageTrajectory.stepCount
+        ? `${topPassageTrajectory.stepCount} steps / ${(topPassageTrajectory.coarseMaterialFieldShape || []).join("x")}`
+        : "-"
+    ),
     row("Planning scope", state.agent?.planningScope || "-"),
     row("Hold scope", state.agent?.holdScope || "-"),
     row(
@@ -315,6 +365,11 @@ async function pollState() {
     row("Ambiguity", num(efe.ambiguity)),
     row("Transition risk", num(efe.transition_risk)),
     row("Transition ambiguity", num(efe.transition_ambiguity)),
+    row("Canvas transition risk", num(efe.canvas_transition_risk)),
+    row("Relational transition risk", num(efe.relational_transition_risk)),
+    row("Passage canvas trajectory risk", num(efe.passage_canvas_trajectory_risk)),
+    row("Passage relational trajectory risk", num(efe.passage_relational_trajectory_risk)),
+    row("Passage likelihood observations", num(efe.passage_trajectory_observation_count)),
     row("Motor risk", num(efe.motor_risk)),
     row("Motor ambiguity", num(efe.motor_ambiguity)),
     row("Motor EFE approx", efe.motor_efe_approximation || "-"),
@@ -326,6 +381,7 @@ async function pollState() {
     row("Local transition steps", String(efe.local_transition_steps ?? 0)),
     row("Sequential patch steps", String(efe.sequential_patch_steps ?? 0)),
     row("Identity approx", efe.identity_transition_approximation || "-"),
+    row("Hierarchy rollout", `${efe.hierarchy_transition_mode || "unavailable"} / ${efe.passage_trajectory_steps ?? 0} steps`),
     row("q(coverage) mean / std", `${num(beliefMean[0])} / ${num(beliefStd[0])}`),
     row("q(mean thickness) mean / std", `${num(beliefMean[1])} / ${num(beliefStd[1])}`),
     ...policyRows,

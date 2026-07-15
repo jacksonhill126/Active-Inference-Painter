@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, replace
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -36,6 +37,7 @@ class StrokeReference:
     intended_start: tuple[float, float]
     intended_end: tuple[float, float]
     feasible: bool
+    flow: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +200,13 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
         phase_pressure = pressure_base * (0.72 + 0.28 * np.sin(np.pi * u) ** 2)
         width_pressure = 0.42 * clip_scalar(action.width / 0.30, 0.0, 1.0)
         consequence_pressure = clip_scalar(phase_pressure + width_pressure - 0.12 * speed_factor, 0.04, 0.92)
+        # Width-taper envelope: ramp 0->1 over the first `tf` of the paint phase
+        # and 1->0 over the last `tf`, so the mark narrows to points at its ends.
+        tf = clip_scalar(c.config.brush_taper_fraction, 0.0, 0.49)
+        if tf > 1e-3:
+            flow = float(smootherstep(clip_scalar(u / tf, 0.0, 1.0)) * smootherstep(clip_scalar((1.0 - u) / tf, 0.0, 1.0)))
+        else:
+            flow = 1.0
         return StrokeReference(
             phase="paint",
             t=t,
@@ -209,6 +218,7 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
             intended_start=(x0, z0),
             intended_end=(x1, z1),
             feasible=feasible,
+            flow=flow,
         )
 
     u = (t - timing.approach - timing.press - timing.paint) / timing.lift
@@ -227,8 +237,13 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
     )
 
 
-def pose_for_reference(reference: StrokeReference) -> ArmPose:
-    return ik_pose_for_canvas_point(reference.x, reference.z, reference.depth)
+def pose_for_reference(reference: StrokeReference, *, upper_arm_roll_deg: float = 0.0) -> ArmPose:
+    return ik_pose_for_canvas_point(
+        reference.x,
+        reference.z,
+        reference.depth,
+        upper_arm_roll_deg=upper_arm_roll_deg,
+    )
 
 
 class DirectStrokeController:
@@ -260,12 +275,16 @@ class ContactAwareStrokeController:
         max_joint_speed_deg: float = 72.0,
         paint_tracking_tolerance: float = 0.65,
         paint_engage_fraction: float = 0.045,
+        roll_start_deg: float = 0.0,
+        roll_end_deg: float = 0.0,
     ) -> None:
         self.preview_time = preview_time
         self.filter_time = filter_time
         self.max_joint_speed_deg = max_joint_speed_deg
         self.paint_tracking_tolerance = paint_tracking_tolerance
         self.paint_engage_fraction = paint_engage_fraction
+        self.roll_start_deg = float(roll_start_deg)
+        self.roll_end_deg = float(roll_end_deg)
         self._filtered_pose: ArmPose | None = None
 
     def reset(self, sim: ArmPainterSim, action: StrokeAction, timing: StrokeTiming) -> None:
@@ -302,6 +321,7 @@ class ContactAwareStrokeController:
             target_x,
             target_z,
             preview_reference.depth - travel_pullback,
+            upper_arm_roll_deg=self._roll_for_reference(preview_reference, timing),
         )
         if self._filtered_pose is None:
             self._filtered_pose = sim.actual_pose
@@ -324,6 +344,16 @@ class ContactAwareStrokeController:
             intended_pressure=float(intended_pressure),
             reference=current_reference,
         )
+
+    def _roll_for_reference(self, reference: StrokeReference, timing: StrokeTiming) -> float:
+        if reference.phase in {"approach", "press"}:
+            return self.roll_start_deg
+        if reference.phase == "lift":
+            return self.roll_end_deg
+        paint_start = timing.approach + timing.press
+        u = clip_scalar((reference.t - paint_start) / max(timing.paint, 1e-6), 0.0, 1.0)
+        alpha = smootherstep(u)
+        return float((1.0 - alpha) * self.roll_start_deg + alpha * self.roll_end_deg)
 
     def _paint_contact_is_ready(self, sim: ArmPainterSim, reference: StrokeReference) -> bool:
         start = np.asarray(reference.intended_start, dtype=np.float64)
@@ -359,12 +389,16 @@ class JointSpaceStrokeController:
     def __init__(
         self,
         kind: str = "joint_spline",
+        roll_start_deg: float = 0.0,
+        roll_end_deg: float = 0.0,
         filter_time: float = 0.16,
         max_joint_speed_deg: float = 72.0,
         paint_tracking_tolerance: float = 0.85,
         paint_engage_fraction: float = 0.045,
     ) -> None:
         self.kind = kind
+        self.roll_start_deg = float(roll_start_deg)
+        self.roll_end_deg = float(roll_end_deg)
         self.filter_time = filter_time
         self.max_joint_speed_deg = max_joint_speed_deg
         self.paint_tracking_tolerance = paint_tracking_tolerance
@@ -379,8 +413,8 @@ class JointSpaceStrokeController:
         self._filtered_pose = sim.actual_pose
         start_ref = stroke_reference(action, sim, timing.approach + timing.press, timing)
         end_ref = stroke_reference(action, sim, timing.approach + timing.press + timing.paint, timing)
-        self._start_pose = pose_for_reference(start_ref)
-        self._end_pose = pose_for_reference(end_ref)
+        self._start_pose = pose_for_reference(start_ref, upper_arm_roll_deg=self.roll_start_deg)
+        self._end_pose = pose_for_reference(end_ref, upper_arm_roll_deg=self.roll_end_deg)
         start_tip = sim.kinematics.tip(self._start_pose)
         end_tip = sim.kinematics.tip(self._end_pose)
         self._intended_start = (float(start_tip[0]), float(start_tip[2]))
@@ -388,7 +422,8 @@ class JointSpaceStrokeController:
 
     def command(self, sim: ArmPainterSim, action: StrokeAction, t: float, dt: float, timing: StrokeTiming) -> StrokeCommand:
         reference = stroke_reference(action, sim, t, timing)
-        desired_pose = pose_for_reference(reference)
+        roll_deg = self.roll_start_deg if reference.phase in {"approach", "press"} else self.roll_end_deg
+        desired_pose = pose_for_reference(reference, upper_arm_roll_deg=roll_deg)
         intended_start = reference.intended_start
         intended_end = reference.intended_end
         if reference.phase == "paint":
@@ -450,6 +485,13 @@ class JointSpaceStrokeController:
                 "roll": smootherstep(smooth**1.35),
                 "elbow": smootherstep(smooth**1.45),
             }
+        elif self.kind in {"upper_arm_roll_positive", "upper_arm_roll_negative"}:
+            joint_alpha = {
+                "yaw": smootherstep(smooth**1.25),
+                "pitch": smootherstep(smooth**1.25),
+                "roll": smootherstep(smooth**0.78),
+                "elbow": smootherstep(smooth**1.25),
+            }
         else:
             joint_alpha = dict.fromkeys(JOINT_NAMES, smooth)
         return ArmPose(
@@ -491,7 +533,51 @@ def controller_for_motor_primitive(
     kind = "cartesian_ik" if motor_primitive is None else motor_primitive.kind
     if kind in ("cartesian", "cartesian_ik", ""):
         return ContactAwareStrokeController()
-    return JointSpaceStrokeController(kind=kind)
+    if kind in {"upper_arm_roll_positive", "upper_arm_roll_negative"}:
+        assert motor_primitive is not None
+        return ContactAwareStrokeController(
+            roll_start_deg=motor_primitive.roll_start_deg,
+            roll_end_deg=motor_primitive.roll_end_deg,
+        )
+    return JointSpaceStrokeController(
+        kind=kind,
+        roll_start_deg=0.0 if motor_primitive is None else motor_primitive.roll_start_deg,
+        roll_end_deg=0.0 if motor_primitive is None else motor_primitive.roll_end_deg,
+    )
+
+
+_JITTERED_BODY_PARAMETERS = (
+    "coulomb_friction",
+    "static_friction",
+    "backlash_deadband_deg",
+    "transmission_stiffness",
+    "process_torque_noise_std",
+)
+
+
+def _jitter_body_parameters(working: ArmPainterSim, noise_sample_index: int) -> None:
+    """Perturb the forecast body model per rollout particle.
+
+    The deep-copied plant represents the agent's belief about its own body;
+    particles beyond the first draw log-normally jittered friction, backlash,
+    stiffness, and process noise, so the across-particle spread of predicted
+    outcomes carries parameter (epistemic) uncertainty about the body -- and
+    motions that amplify it forecast wider. Particle 0 keeps the mean body
+    model so single-sample forecasts stay unbiased. Deterministic per index.
+    """
+
+    fraction = float(working.config.body_param_jitter_fraction)
+    if fraction <= 0.0 or noise_sample_index <= 0:
+        return
+    rng = np.random.default_rng(9173 + 31 * int(noise_sample_index))
+    sigma = float(np.log1p(max(0.0, fraction)))
+    for name in _JITTERED_BODY_PARAMETERS:
+        value = getattr(working.plant, name)
+        scale = float(np.exp(rng.normal(0.0, sigma)))
+        if isinstance(value, dict):
+            setattr(working.plant, name, {key: float(entry) * scale for key, entry in value.items()})
+        else:
+            setattr(working.plant, name, float(value) * scale)
 
 
 def _forecast_stroke_execution_once(
@@ -509,6 +595,7 @@ def _forecast_stroke_execution_once(
     motor_primitive_kind = "cartesian_ik" if motor_primitive is None else motor_primitive.kind
     working = copy.deepcopy(sim)
     working.plant.select_forecast_noise_sample(noise_sample_index)
+    _jitter_body_parameters(working, noise_sample_index)
     before_state = summary_fn(working)
     controller.reset(working, action, timing)
 
@@ -538,6 +625,8 @@ def _forecast_stroke_execution_once(
         working.paint_enabled = command.brush_down
         working.intended_contact_pressure = command.intended_pressure
         working.brush_tone = float(action.tone >= 0.5)
+        working.intended_paint_load = float(action.amount)
+        working.brush_flow = command.reference.flow
         working.step(dt)
         pose_vec = _pose_vector(working.actual_pose)
         target_vec = _pose_vector(working.target_pose)
@@ -835,6 +924,45 @@ def forecast_stroke_execution(
         motor_rollout_samples=sample_count,
         feasibility_probability=feasibility_probability,
     )
+
+
+def forecast_stroke_executions_batch(
+    sim: ArmPainterSim,
+    requests: Sequence[tuple[StrokeAction, MotorPrimitiveLatent | None]],
+    summary_fn: Callable[[ArmPainterSim], np.ndarray],
+    *,
+    dt: float = 1.0 / 90.0,
+    rollout_samples: int | None = None,
+    max_workers: int = 1,
+) -> list[ExecutionForecast]:
+    """Schedule independent motor likelihoods without changing their physics.
+
+    Every request still runs ``forecast_stroke_execution`` with its original
+    simulator snapshot, integration step, and Monte Carlo sample count. The
+    executor only overlaps forecasts for alternative motor realizations.
+    ``executor.map`` preserves request order for posterior marginalization.
+    """
+
+    request_list = list(requests)
+    if not request_list:
+        return []
+
+    def run(request: tuple[StrokeAction, MotorPrimitiveLatent | None]) -> ExecutionForecast:
+        action, motor_primitive = request
+        return forecast_stroke_execution(
+            sim,
+            action,
+            summary_fn,
+            motor_primitive=motor_primitive,
+            dt=dt,
+            rollout_samples=rollout_samples,
+        )
+
+    worker_count = min(len(request_list), max(1, int(max_workers)))
+    if worker_count == 1:
+        return [run(request) for request in request_list]
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="motor-forecast") as executor:
+        return list(executor.map(run, request_list))
 
 
 def smootherstep(u: float) -> float:

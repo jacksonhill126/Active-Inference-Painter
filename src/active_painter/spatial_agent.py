@@ -5,12 +5,12 @@ from dataclasses import asdict
 import numpy as np
 import torch
 
-from .composition import CompositionHierarchy
+from .canvas_hierarchy import HierarchicalCanvasModel, passage_step_descriptor, policy_descriptor
 from .config import PainterConfig
 from .env import StrokeAction
 from .local_spatial import LocalPatchReplayBuffer
 from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
-from .policies import MotorPrimitiveLatent, Policy, PolicySampler, policy_stop_log_prior
+from .policies import MotorPrimitiveLatent, PassageLatent, Policy, PolicySampler, policy_stop_log_prior
 from .preferences import TerminalCoveragePreference
 from .replay import ReplayBuffer
 from .spatial_efe import SpatialEFEComponents, SpatialExpectedFreeEnergy
@@ -32,11 +32,14 @@ class SpatialActiveInferencePainter:
         else:
             self.dynamics = SpatialDynamicsEnsemble(config).to(self.device)
         self.preference = TerminalCoveragePreference(config)
-        self.composition: CompositionHierarchy | None = None
+        self.composition: HierarchicalCanvasModel | None = None
         self.composition_optimizer: torch.optim.Adam | None = None
         self.last_composition_loss: float | None = None
+        self.last_hierarchy_transition_loss: float | None = None
+        self.last_passage_trajectory_loss: float | None = None
+        self.last_passage_trajectory_evaluation: dict[str, float] | None = None
         if config.composition_gap_precision > 0.0:
-            self.composition = CompositionHierarchy(config).to(self.device)
+            self.composition = HierarchicalCanvasModel(config).to(self.device)
             self.composition_optimizer = torch.optim.Adam(
                 self.composition.parameters(), lr=config.composition_lr
             )
@@ -51,6 +54,8 @@ class SpatialActiveInferencePainter:
             else ReplayBuffer(config.replay_capacity, seed=seed)
         )
         self.composition_replay = ReplayBuffer(config.replay_capacity, seed=seed + 101)
+        self.passage_replay = ReplayBuffer(config.replay_capacity, seed=seed + 211)
+        self.passage_step_replay = ReplayBuffer(config.replay_capacity, seed=seed + 307)
         self.optimizer = torch.optim.Adam(self.dynamics.parameters(), lr=config.model_lr)
         material = np.zeros(
             (config.spatial_material_channels, config.spatial_grid_size, config.spatial_grid_size),
@@ -61,6 +66,56 @@ class SpatialActiveInferencePainter:
 
     def reset_belief(self, observation: SpatialCanvasState) -> None:
         self.belief = self.estimator.initialize(observation)
+
+    def reset_hierarchy_beliefs(self, observation: SpatialCanvasState) -> None:
+        if self.composition is None:
+            return
+        fields = torch.tensor(observation.material, device=self.device, dtype=torch.float32).unsqueeze(0)
+        self.composition.reset_persistent_beliefs(fields)
+
+    def update_hierarchy_beliefs(
+        self,
+        observation: SpatialCanvasState,
+        actions: tuple[StrokeAction, ...],
+    ) -> None:
+        if self.composition is None:
+            return
+        fields = torch.tensor(observation.material, device=self.device, dtype=torch.float32).unsqueeze(0)
+        descriptor = torch.tensor(
+            policy_descriptor(actions, self.cfg),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self.composition.update_persistent_beliefs(fields, descriptor)
+
+    def add_passage_transition(
+        self,
+        state: SpatialCanvasState,
+        actions: tuple[StrokeAction, ...],
+        next_state: SpatialCanvasState,
+    ) -> None:
+        self.passage_replay.add(
+            state.flatten_mean(),
+            policy_descriptor(actions, self.cfg),
+            next_state.flatten_mean(),
+        )
+
+    def add_passage_step_transition(
+        self,
+        state: SpatialCanvasState,
+        passage: PassageLatent,
+        step_index: int,
+        next_state: SpatialCanvasState,
+    ) -> None:
+        """Train the passage likelihood without updating the slow posterior."""
+
+        if not self.cfg.passage_trajectory_enabled:
+            return
+        self.passage_step_replay.add(
+            state.flatten_mean(),
+            passage_step_descriptor(passage, step_index),
+            next_state.flatten_mean(),
+        )
 
     @property
     def last_vfe(self):
@@ -112,11 +167,11 @@ class SpatialActiveInferencePainter:
         )
 
     def infer_policy(self) -> tuple[Policy, SpatialEFEComponents, list[tuple[Policy, SpatialEFEComponents, float]]]:
-        coverage_field = self.belief.coverage(self.cfg.thickness_scale)
+        coverage_field = self.belief.coverage(self.cfg.paint_presence_threshold)
         policies = self.policy_sampler.sample(coverage_field)
         components = self.efe.evaluate_batch(self.belief, policies)
         g = torch.tensor([component.total for component in components], device=self.device)
-        believed_coverage = self.belief.material_coverage_mean(self.cfg.thickness_scale)
+        believed_coverage = self.belief.material_coverage_mean(self.cfg.paint_presence_threshold)
         log_prior = torch.tensor(
             [policy_stop_log_prior(policy, believed_coverage, self.cfg) for policy in policies],
             device=self.device,
@@ -216,6 +271,56 @@ class SpatialActiveInferencePainter:
             torch.nn.utils.clip_grad_norm_(self.composition.parameters(), 5.0)
             self.composition_optimizer.step()
             self.last_composition_loss = float(loss.item())
+        self._train_hierarchy_transitions(field_shape)
+
+    def _train_hierarchy_transitions(self, field_shape: tuple[int, int, int]) -> None:
+        if self.composition is None or self.composition_optimizer is None:
+            return
+        aggregate_ready = len(self.passage_replay) >= self.cfg.hierarchy_transition_batch_size
+        trajectory_ready = (
+            self.cfg.passage_trajectory_enabled
+            and len(self.passage_step_replay) >= self.cfg.passage_trajectory_batch_size
+        )
+        if not (aggregate_ready or trajectory_ready):
+            return
+        for _ in range(max(1, self.cfg.hierarchy_transition_train_steps) if aggregate_ready else 0):
+            batch = self.passage_replay.sample(self.cfg.hierarchy_transition_batch_size, self.device)
+            loss = self.composition.transition_training_loss(
+                batch.state.reshape(-1, *field_shape),
+                batch.action,
+                batch.next_state.reshape(-1, *field_shape),
+            )
+            self.composition_optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.composition.parameters(), 5.0)
+            self.composition_optimizer.step()
+            self.composition.mark_transition_update()
+            self.last_hierarchy_transition_loss = float(loss.item())
+        for _ in range(max(1, self.cfg.passage_trajectory_train_steps) if trajectory_ready else 0):
+            batch = self.passage_step_replay.sample(self.cfg.passage_trajectory_batch_size, self.device)
+            loss = self.composition.passage_trajectory_training_loss(
+                batch.state.reshape(-1, *field_shape),
+                batch.action,
+                batch.next_state.reshape(-1, *field_shape),
+            )
+            self.composition_optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.composition.parameters(), 5.0)
+            self.composition_optimizer.step()
+            self.composition.mark_passage_trajectory_update(batch.action)
+            self.last_passage_trajectory_loss = float(loss.item())
+            self.last_passage_trajectory_evaluation = self.composition.passage_trajectory_evaluation(
+                batch.state.reshape(-1, *field_shape),
+                batch.action,
+                batch.next_state.reshape(-1, *field_shape),
+            )
+
+    def rebuild_passage_kind_support(self) -> None:
+        if self.composition is None:
+            return
+        self.composition.rebuild_passage_kind_support(
+            [transition[1] for transition in self.passage_step_replay.data]
+        )
 
     @torch.no_grad()
     def belief_composition_gap(self) -> float | None:

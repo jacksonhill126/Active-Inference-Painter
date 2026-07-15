@@ -157,6 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--driver-bootstrap-train-steps", type=int, default=None)
     parser.add_argument("--checkpoint-path", default=None)
     parser.add_argument("--checkpoint-save-every-transitions", type=int, default=10)
+    parser.add_argument("--device", default=None, help="torch device for the planner, e.g. cuda, cuda:0, cpu (default: cuda if available)")
     return parser
 
 
@@ -201,7 +202,9 @@ def main() -> None:
         driver_bootstrap_train_steps=bootstrap_train_steps,
         checkpoint_path=args.checkpoint_path,
         checkpoint_save_every_transitions=args.checkpoint_save_every_transitions,
+        device=args.device,
     )
+    print(f"Planner device: {runtime.agent_driver.agent.device}", flush=True)
     server = bind_server(args.host, args.port, PainterRequestHandler)
     server.runtime = runtime
     server.web_root = WEB_ROOT

@@ -1,7 +1,12 @@
 import json
+import threading
+import time
 
+import numpy as np
 import pytest
 import torch
+
+import active_painter.stroke_execution as stroke_execution_module
 
 from active_painter.arm_agent_driver import canvas_summary_state
 from active_painter.arm_sim import ArmPainterSim
@@ -13,7 +18,9 @@ from active_painter.stroke_execution import (
     ContactAwareStrokeController,
     DirectStrokeController,
     StrokeTiming,
+    controller_for_motor_primitive,
     forecast_stroke_execution,
+    forecast_stroke_executions_batch,
     pose_for_reference,
     stroke_reference,
 )
@@ -134,6 +141,58 @@ def test_joint_space_motor_primitive_forecast_reports_proprioceptive_outcomes() 
     assert forecast.joint_current_rms >= 0.0
     assert forecast.joint_torque_rms >= 0.0
     assert forecast.joint_path_length_deg > 0.0
+
+
+def test_upper_arm_roll_motor_primitive_uses_contact_aware_roll_sweep() -> None:
+    primitive = MotorPrimitiveLatent(
+        "upper_arm_roll_positive",
+        pivot_joint="roll",
+        roll_start_deg=-32.0,
+        roll_end_deg=32.0,
+    )
+
+    controller = controller_for_motor_primitive(primitive)
+
+    assert isinstance(controller, ContactAwareStrokeController)
+    assert controller.roll_start_deg == pytest.approx(-32.0)
+    assert controller.roll_end_deg == pytest.approx(32.0)
+    timing = StrokeTiming()
+    paint_midpoint = stroke_reference(
+        StrokeAction(0.2, 0.35, 0.8, 0.55, 0.08, 0.7, 1.0),
+        ArmPainterSim(PainterConfig(canvas_size=48)),
+        timing.approach + timing.press + 0.5 * timing.paint,
+        timing,
+    )
+    assert controller._roll_for_reference(paint_midpoint, timing) == pytest.approx(0.0)
+
+
+def test_opposite_upper_arm_roll_policies_have_distinct_feasible_likelihoods() -> None:
+    cfg = PainterConfig(canvas_size=48, motor_forecast_samples=1)
+    action = StrokeAction(0.2, 0.35, 0.8, 0.55, 0.08, 0.7, 1.0)
+    forecasts = []
+    for kind, start, end in (
+        ("upper_arm_roll_positive", -32.0, 32.0),
+        ("upper_arm_roll_negative", 32.0, -32.0),
+    ):
+        forecasts.append(
+            forecast_stroke_execution(
+                ArmPainterSim(cfg),
+                action,
+                canvas_summary_state,
+                motor_primitive=MotorPrimitiveLatent(
+                    kind,
+                    pivot_joint="roll",
+                    roll_start_deg=start,
+                    roll_end_deg=end,
+                ),
+                dt=1.0 / 45.0,
+            )
+        )
+
+    assert all(forecast.feasible for forecast in forecasts)
+    assert forecasts[0].motor_primitive_kind != forecasts[1].motor_primitive_kind
+    assert forecasts[0].contact_loss_probability != pytest.approx(forecasts[1].contact_loss_probability)
+    assert forecasts[0].joint_path_length_deg != pytest.approx(forecasts[1].joint_path_length_deg)
 
 
 def test_motor_efe_terms_are_separate_precision_weighted_proprioceptive_terms() -> None:
@@ -257,3 +316,73 @@ def test_motor_efe_terms_contribute_to_total_without_mixing_with_coverage_terms(
     assert motor_loaded.motor_ambiguity == pytest.approx(0.2)
     assert motor_loaded.motor_epistemic_value == pytest.approx(0.1)
     assert motor_loaded.total == pytest.approx(base.total + 0.5)
+
+
+def test_motor_forecast_batch_overlaps_independent_requests_and_preserves_order(monkeypatch) -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=24, motor_forecast_samples=1))
+    action = StrokeAction(0.35, 0.45, 0.55, 0.45, 0.06, 0.5, 1.0)
+    primitives = [
+        MotorPrimitiveLatent("cartesian_ik"),
+        MotorPrimitiveLatent("joint_spline"),
+        MotorPrimitiveLatent("elbow_pivot", pivot_joint="elbow"),
+    ]
+    lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def fake_forecast(*args, motor_primitive=None, dt=0.0, rollout_samples=None, **kwargs):
+        nonlocal active, maximum_active
+        assert args[0] is sim
+        assert dt == pytest.approx(1.0 / 45.0)
+        assert rollout_samples == 3
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        return motor_primitive.kind
+
+    monkeypatch.setattr(stroke_execution_module, "forecast_stroke_execution", fake_forecast)
+
+    results = forecast_stroke_executions_batch(
+        sim,
+        [(action, primitive) for primitive in primitives],
+        canvas_summary_state,
+        dt=1.0 / 45.0,
+        rollout_samples=3,
+        max_workers=3,
+    )
+
+    assert results == [primitive.kind for primitive in primitives]
+    assert maximum_active > 1
+
+
+def test_batched_and_sequential_motor_likelihoods_are_numerically_identical() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=24, motor_forecast_samples=2))
+    action = StrokeAction(0.38, 0.48, 0.58, 0.48, 0.06, 0.55, 1.0)
+    requests = [
+        (action, MotorPrimitiveLatent("cartesian_ik")),
+        (action, MotorPrimitiveLatent("joint_spline")),
+    ]
+
+    sequential = forecast_stroke_executions_batch(
+        sim,
+        requests,
+        canvas_summary_state,
+        dt=1.0 / 45.0,
+        max_workers=1,
+    )
+    batched = forecast_stroke_executions_batch(
+        sim,
+        requests,
+        canvas_summary_state,
+        dt=1.0 / 45.0,
+        max_workers=2,
+    )
+
+    for expected, actual in zip(sequential, batched):
+        np.testing.assert_allclose(actual.next_state_mean, expected.next_state_mean, rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(actual.next_state_variance, expected.next_state_variance, rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(actual.proprioceptive_mean, expected.proprioceptive_mean, rtol=0.0, atol=0.0)
+        assert actual.feasibility_probability == pytest.approx(expected.feasibility_probability)

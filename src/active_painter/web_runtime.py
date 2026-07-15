@@ -33,6 +33,7 @@ class WebSimRuntime:
     driver_bootstrap_train_steps: int = 180
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
+    device: str | None = None
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)
@@ -56,6 +57,14 @@ class WebSimRuntime:
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,
         )
+        # Replay capacity must be sized to the state representation. In spatial
+        # mode each transition holds full-resolution material patches (~200 KB
+        # for the local-patch buffer, plus composition/passage states), so the
+        # 50k default would grow the three buffers to ~15-20 GB over an
+        # overnight run -- a rolling window of a few thousand recent strokes is
+        # ample for online continual learning. Summary mode's 6-float states
+        # are negligible, so it keeps the large default.
+        replay_capacity = 5_000 if self.planner_state_kind == "spatial_material" else 50_000
         driver_config = PainterConfig(
             canvas_size=64,
             candidate_policies=32,
@@ -68,6 +77,7 @@ class WebSimRuntime:
             planner_state_kind=self.planner_state_kind,
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,
+            replay_capacity=replay_capacity,
         )
         self.sim = ArmPainterSim(sim_config)
         self.agent_driver = ArmActiveInferenceDriver(
@@ -77,6 +87,7 @@ class WebSimRuntime:
             checkpoint_path=self.checkpoint_path,
             checkpoint_save_every_transitions=self.checkpoint_save_every_transitions,
             on_stop=self._complete_stopped_painting,
+            device=self.device,
         )
         self.telemetry_log = ArmTelemetryLog(max_samples=self.telemetry_max_samples)
         self.agent_driver.reset(self.sim)
@@ -224,6 +235,8 @@ class WebSimRuntime:
                 "renderPoints": render_points.astype(float).tolist(),
                 "tip": points[-1].astype(float).tolist(),
                 "renderTip": render_points[-1].astype(float).tolist(),
+                "upperArmAxis": self.sim.kinematics.upper_arm_axis(pose).astype(float).tolist(),
+                "elbowHingeAxis": self.sim.kinematics.elbow_hinge_axis(pose).astype(float).tolist(),
                 "contact": {
                     "onCanvas": contact.on_canvas,
                     "projectedOnCanvas": contact.on_canvas,

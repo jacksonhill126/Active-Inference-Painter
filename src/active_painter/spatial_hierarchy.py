@@ -66,7 +66,7 @@ class MarkEventBelief:
 
 
 def infer_mark_event_belief(state: SpatialCanvasState, config: PainterConfig) -> MarkEventBelief:
-    coverage = state.coverage(config.thickness_scale)
+    coverage = state.coverage(config.paint_presence_threshold)
     active = coverage >= config.mark_activation_coverage
     components = _connected_components(active)
     slots = [

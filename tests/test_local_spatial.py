@@ -67,6 +67,33 @@ class RecordingPatchMember(DivergentPatchMember):
         return super().forward(material, action_raster)
 
 
+def test_material_support_counts_painted_cells_once_regardless_of_layer_thickness() -> None:
+    cfg = PainterConfig()
+    current = torch.zeros(1, cfg.spatial_material_channels, 4, 4)
+    first = current.clone()
+    first[:, 0, 1:3, 1:3] = 2.0 * cfg.paint_presence_threshold
+    layered = first.clone()
+    layered[:, 0, 1:3, 1:3] *= 50.0
+
+    projected_first = project_material_support(
+        current,
+        first,
+        cfg.thickness_scale,
+        cfg.canvas_ground_tone,
+        cfg.paint_presence_threshold,
+    )
+    projected_layered = project_material_support(
+        projected_first,
+        layered,
+        cfg.thickness_scale,
+        cfg.canvas_ground_tone,
+        cfg.paint_presence_threshold,
+    )
+
+    assert torch.equal(projected_first[:, 5], projected_layered[:, 5])
+    assert projected_first[:, 5].mean().item() == 0.25
+
+
 def test_local_patch_bounds_cover_compact_action_support_and_clip_edges() -> None:
     cfg = PainterConfig(canvas_size=32, local_patch_margin_cells=2, local_patch_min_cells=8)
     action = StrokeAction(0.01, 0.02, 0.22, 0.08, 0.08, 0.5, 1.0)

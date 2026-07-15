@@ -19,6 +19,7 @@ from .local_spatial import (
     pixel_material_from_state,
 )
 from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
+from .canvas_hierarchy import policy_descriptor
 from .policies import Policy
 from .preferences import TerminalCoveragePreference
 from .spatial_state import SpatialCanvasState, rasterize_stroke_action
@@ -28,6 +29,18 @@ SpatialFirstTransition = (
     tuple[torch.Tensor, torch.Tensor]
     | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 )
+
+
+def _paint_presence_probability(
+    thickness_mean: torch.Tensor,
+    thickness_variance: torch.Tensor,
+    threshold: float,
+) -> torch.Tensor:
+    """Gaussian probability that material thickness exceeds the occupancy threshold."""
+
+    std = torch.sqrt(torch.clamp(thickness_variance, min=1e-12))
+    standardized = (float(threshold) - thickness_mean) / (math.sqrt(2.0) * std)
+    return torch.clamp(0.5 * torch.erfc(standardized), 0.0, 1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +84,11 @@ class SpatialEFEComponents:
     transition_ambiguity: float = 0.0
     composition_gap: float = 0.0
     composition_risk: float = 0.0
+    canvas_transition_risk: float = 0.0
+    relational_transition_risk: float = 0.0
+    passage_canvas_trajectory_risk: float = 0.0
+    passage_relational_trajectory_risk: float = 0.0
+    passage_trajectory_observation_count: float = 0.0
     grid_size: int = 0
     material_channels: int = 0
     execution_uncertainty: float = 0.0
@@ -88,6 +106,8 @@ class SpatialEFEComponents:
     local_transition_steps: int = 0
     sequential_patch_steps: int = 0
     identity_transition_approximation: str = ""
+    hierarchy_transition_mode: str = "unavailable"
+    passage_trajectory_steps: int = 0
 
 
 @dataclass(slots=True)
@@ -170,6 +190,90 @@ class SpatialExpectedFreeEnergy:
             return zeros, zeros
         gap = self.composition.compression_gap(terminal_fields)
         return gap, -self.cfg.composition_gap_precision * gap
+
+    def _hierarchy_transition_terms(
+        self,
+        terminal_fields: torch.Tensor,
+        policies: Sequence[Policy],
+        samples_per_policy: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.composition is None or not hasattr(self.composition, "transition_efe_terms"):
+            zeros = torch.zeros(terminal_fields.shape[0], device=terminal_fields.device)
+            return zeros, zeros
+        descriptors = torch.tensor(
+            np.stack([policy_descriptor(policy, self.cfg) for policy in policies]),
+            device=terminal_fields.device,
+            dtype=terminal_fields.dtype,
+        ).repeat_interleave(max(1, int(samples_per_policy)), dim=0)
+        return self.composition.transition_efe_terms(  # type: ignore[attr-defined]
+            terminal_fields,
+            descriptors,
+            policies=policies,
+            samples_per_policy=max(1, int(samples_per_policy)),
+            include_structured_passages=False,
+        )
+
+    def _passage_trajectory_active(self, policies: Sequence[Policy]) -> bool:
+        if self.composition is None or not hasattr(self.composition, "passage_trajectory_efe_terms"):
+            return False
+        update_count = getattr(self.composition, "passage_trajectory_update_count", None)
+        return bool(
+            self.cfg.passage_trajectory_enabled
+            and update_count is not None
+            and int(update_count.item()) > 0
+            and any(policy.passage is not None or policy.passage_plan is not None for policy in policies)
+        )
+
+    def _passage_trajectory_terms(
+        self,
+        fields: list[torch.Tensor],
+        policy_indices: list[int],
+        step_indices: list[int],
+        policies: Sequence[Policy],
+        policy_count: int,
+        samples_per_step: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        zeros = torch.zeros(policy_count, device=self.device)
+        if not fields:
+            return zeros, zeros.clone(), zeros.clone()
+        stacked = torch.cat(fields, dim=0)
+        expanded_policies = [policies[index] for index in policy_indices]
+        row_canvas, row_relational, valid = self.composition.passage_trajectory_efe_terms(  # type: ignore[attr-defined]
+            stacked,
+            expanded_policies,
+            step_indices,
+        )
+        indices = torch.tensor(policy_indices, device=stacked.device, dtype=torch.long)
+        weight = 1.0 / max(1, int(samples_per_step))
+        canvas = torch.zeros(policy_count, device=stacked.device, dtype=stacked.dtype)
+        relational = torch.zeros_like(canvas)
+        observation_count = torch.zeros_like(canvas)
+        canvas.index_add_(0, indices, row_canvas * weight)
+        relational.index_add_(0, indices, row_relational * weight)
+        observation_count.index_add_(0, indices, valid.to(stacked.dtype) * weight)
+        return canvas, relational, observation_count
+
+    def _hierarchy_rollout_diagnostics(self, policy: Policy) -> tuple[str, int]:
+        structured = policy.passage is not None or policy.passage_plan is not None
+        steps = len(policy.actions) - 1 if structured else 0
+        update_count = getattr(self.composition, "passage_trajectory_update_count", None)
+        trained = bool(update_count is not None and int(update_count.item()) > 0)
+        if structured:
+            if trained and self.cfg.passage_trajectory_enabled:
+                supported = (
+                    int(self.composition.passage_trajectory_supported_steps(policy))  # type: ignore[attr-defined]
+                    if hasattr(self.composition, "passage_trajectory_supported_steps")
+                    else steps
+                )
+                if supported == steps and steps > 0:
+                    return "passage_trajectory", supported
+                if supported > 0:
+                    return "passage_trajectory_partial", supported
+            return "unavailable", 0
+        aggregate_count = getattr(self.composition, "transition_update_count", None)
+        if aggregate_count is not None and int(aggregate_count.item()) > 0:
+            return "aggregate_policy", 0
+        return "unavailable", 0
 
     @torch.no_grad()
     def evaluate(self, belief: SpatialCanvasState, policy: Policy) -> SpatialEFEComponents:
@@ -435,6 +539,33 @@ class SpatialExpectedFreeEnergy:
             context is not None and not policy.actions[0].stop
             for policy, context in zip(policies, transition_contexts)
         ]
+        trajectory_fields: list[torch.Tensor] = []
+        trajectory_policy_indices: list[int] = []
+        trajectory_step_indices: list[int] = []
+        track_passage_trajectory = self._passage_trajectory_active(policies)
+
+        def record_passage_step(step_index: int) -> None:
+            if not track_passage_trajectory:
+                return
+            active_structured = [
+                index
+                for index, policy in enumerate(policies)
+                if depths[index] > step_index
+                and (policy.passage is not None or policy.passage_plan is not None)
+            ]
+            if not active_structured:
+                return
+            _, _, step_fields = self._sparse_terminal_statistics(
+                material,
+                base_variance,
+                sparse_states,
+                self.cfg.spatial_grid_size,
+            )
+            for policy_index in active_structured:
+                start = policy_index * member_count
+                trajectory_fields.append(step_fields[start : start + member_count])
+                trajectory_policy_indices.extend([policy_index] * member_count)
+                trajectory_step_indices.extend([step_index] * member_count)
 
         for step in range(max(depths, default=0)):
             if step == 0:
@@ -481,6 +612,7 @@ class SpatialExpectedFreeEnergy:
                         proposed_patch,
                         self.cfg.thickness_scale,
                         self.cfg.canvas_ground_tone,
+                        self.cfg.paint_presence_threshold,
                     )
                     selected_within = (
                         forecast_variance[:, row_slice, col_slice]
@@ -528,6 +660,7 @@ class SpatialExpectedFreeEnergy:
                 action_raster = torch.tensor(raster, device=device, dtype=torch.float32)[:, row_slice, col_slice]
                 specs.append((policy_index, bounds, action_raster))
             if not specs:
+                record_passage_step(step)
                 continue
 
             buckets: dict[tuple[int, int, int], list[tuple[int, LocalPatchBounds, torch.Tensor]]] = {}
@@ -624,6 +757,8 @@ class SpatialExpectedFreeEnergy:
                         full_area,
                     ).mean()
 
+            record_passage_step(step)
+
         coverage_mean, coverage_variance, composition_fields = self._sparse_terminal_statistics(
             material,
             base_variance,
@@ -640,6 +775,21 @@ class SpatialExpectedFreeEnergy:
         member_gap, member_composition_risk = self._composition_terms(composition_fields)
         composition_gap = member_gap.reshape(policy_count, member_count).mean(dim=1)
         composition_risk = member_composition_risk.reshape(policy_count, member_count).mean(dim=1)
+        member_canvas_risk, member_relational_risk = self._hierarchy_transition_terms(
+            composition_fields,
+            policies,
+            member_count,
+        )
+        canvas_transition_risk = member_canvas_risk.reshape(policy_count, member_count).mean(dim=1)
+        relational_transition_risk = member_relational_risk.reshape(policy_count, member_count).mean(dim=1)
+        passage_canvas_risk, passage_relational_risk, passage_observation_count = self._passage_trajectory_terms(
+            trajectory_fields,
+            trajectory_policy_indices,
+            trajectory_step_indices,
+            policies,
+            policy_count,
+            member_count,
+        )
 
         ambiguity = self.cfg.ambiguity_precision * ambiguity
         transition_risk = self.cfg.transition_precision * transition_risk
@@ -675,6 +825,10 @@ class SpatialExpectedFreeEnergy:
             + transition_risk
             + transition_ambiguity
             + composition_risk
+            + canvas_transition_risk
+            + relational_transition_risk
+            + passage_canvas_risk
+            + passage_relational_risk
             + motor_risk_t
             + motor_ambiguity_t
             - motor_epistemic_t
@@ -695,6 +849,11 @@ class SpatialExpectedFreeEnergy:
                 transition_ambiguity=float(transition_ambiguity[index].item()),
                 composition_gap=float(composition_gap[index].item()),
                 composition_risk=float(composition_risk[index].item()),
+                canvas_transition_risk=float(canvas_transition_risk[index].item()),
+                relational_transition_risk=float(relational_transition_risk[index].item()),
+                passage_canvas_trajectory_risk=float(passage_canvas_risk[index].item()),
+                passage_relational_trajectory_risk=float(passage_relational_risk[index].item()),
+                passage_trajectory_observation_count=float(passage_observation_count[index].item()),
                 grid_size=belief.grid_size,
                 material_channels=channels,
                 execution_uncertainty=(
@@ -732,6 +891,8 @@ class SpatialExpectedFreeEnergy:
                 local_transition_steps=local_steps[index],
                 sequential_patch_steps=sequential_steps[index],
                 identity_transition_approximation=self._local_identity_approximation(local_steps[index]),
+                hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policies[index])[0],
+                passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policies[index])[1],
             )
             for index in range(policy_count)
         ]
@@ -795,6 +956,17 @@ class SpatialExpectedFreeEnergy:
         local_steps = 0
         sequential_steps = 0
         first_transition_used = False
+        trajectory_fields: list[torch.Tensor] = []
+        trajectory_policy_indices: list[int] = []
+        trajectory_step_indices: list[int] = []
+        track_passage_trajectory = self._passage_trajectory_active([policy])
+
+        def record_passage_step(step_index: int) -> None:
+            if not track_passage_trajectory:
+                return
+            trajectory_fields.append(self._composition_fields_from_terminal(mean).clone())
+            trajectory_policy_indices.append(0)
+            trajectory_step_indices.append(step_index)
 
         for step, action in enumerate(policy.actions):
             if action.stop:
@@ -807,6 +979,7 @@ class SpatialExpectedFreeEnergy:
                     proposed,
                     self.cfg.thickness_scale,
                     self.cfg.canvas_ground_tone,
+                    self.cfg.paint_presence_threshold,
                 )
                 changed = (projected - mean).abs().sum(dim=1) > 1e-8
                 touched = touched | changed[0]
@@ -814,6 +987,7 @@ class SpatialExpectedFreeEnergy:
                 variance = torch.clamp(next_variance.unsqueeze(0), min=1e-8)
                 ambiguity = ambiguity + self._observation_ambiguity(mean).mean()
                 first_transition_used = True
+                record_passage_step(step)
                 continue
 
             raster = rasterize_stroke_action(
@@ -824,6 +998,7 @@ class SpatialExpectedFreeEnergy:
             )
             bounds = local_patch_bounds_for_raster(raster, width, self.cfg)
             if bounds is None:
+                record_passage_step(step)
                 continue
             if bounds.area > max(1, self.cfg.local_patch_sequential_cell_limit):
                 sequential_steps += 1
@@ -836,6 +1011,7 @@ class SpatialExpectedFreeEnergy:
                 next_patch,
                 self.cfg.thickness_scale,
                 self.cfg.canvas_ground_tone,
+                self.cfg.paint_presence_threshold,
             )
             next_variance = torch.clamp(aleatoric + epistemic, min=1e-8)
 
@@ -849,6 +1025,7 @@ class SpatialExpectedFreeEnergy:
             touched[row_slice, col_slice] = True
             local_steps += 1
             ambiguity = ambiguity + self._observation_ambiguity_scaled(next_patch, full_area).mean()
+            record_passage_step(step)
 
         coverage_mean, coverage_variance = self._coverage_moments(mean, variance)
         coverage_std = torch.sqrt(torch.clamp(coverage_variance, min=1e-8))
@@ -865,6 +1042,24 @@ class SpatialExpectedFreeEnergy:
         composition_gap, composition_risk = self._composition_terms(composition_fields)
         composition_gap = composition_gap.mean()
         composition_risk = composition_risk.mean()
+        canvas_transition_risk, relational_transition_risk = self._hierarchy_transition_terms(
+            composition_fields,
+            [policy],
+            1,
+        )
+        canvas_transition_risk = canvas_transition_risk.mean()
+        relational_transition_risk = relational_transition_risk.mean()
+        passage_canvas_risk, passage_relational_risk, passage_observation_count = self._passage_trajectory_terms(
+            trajectory_fields,
+            trajectory_policy_indices,
+            trajectory_step_indices,
+            [policy],
+            1,
+            1,
+        )
+        passage_canvas_risk = passage_canvas_risk[0]
+        passage_relational_risk = passage_relational_risk[0]
+        passage_observation_count = passage_observation_count[0]
 
         ambiguity = self.cfg.ambiguity_precision * ambiguity
         transition_risk = self.cfg.transition_precision * transition_risk
@@ -879,6 +1074,10 @@ class SpatialExpectedFreeEnergy:
             + transition_risk
             + transition_ambiguity
             + composition_risk
+            + canvas_transition_risk
+            + relational_transition_risk
+            + passage_canvas_risk
+            + passage_relational_risk
             + motor_risk_value
             + motor_ambiguity_value
             - motor_epistemic_value_used
@@ -896,6 +1095,11 @@ class SpatialExpectedFreeEnergy:
             transition_ambiguity=float(transition_ambiguity.item()),
             composition_gap=float(composition_gap.item()),
             composition_risk=float(composition_risk.item()),
+            canvas_transition_risk=float(canvas_transition_risk.item()),
+            relational_transition_risk=float(relational_transition_risk.item()),
+            passage_canvas_trajectory_risk=float(passage_canvas_risk.item()),
+            passage_relational_trajectory_risk=float(passage_relational_risk.item()),
+            passage_trajectory_observation_count=float(passage_observation_count.item()),
             grid_size=belief.grid_size,
             material_channels=channels,
             execution_uncertainty=execution_uncertainty if first_transition_used else 0.0,
@@ -913,6 +1117,8 @@ class SpatialExpectedFreeEnergy:
             local_transition_steps=local_steps,
             sequential_patch_steps=sequential_steps,
             identity_transition_approximation=self._local_identity_approximation(local_steps),
+            hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policy)[0],
+            passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policy)[1],
         )
 
     def _transition_to_rollout_grid(
@@ -1013,6 +1219,10 @@ class SpatialExpectedFreeEnergy:
 
         depths = [len(policy.actions) - 1 for policy in policies]
         first_transition_used = False
+        trajectory_fields: list[torch.Tensor] = []
+        trajectory_policy_indices: list[int] = []
+        trajectory_step_indices: list[int] = []
+        track_passage_trajectory = self._passage_trajectory_active(policies)
         for step in range(max(depths, default=0)):
             active = [index for index in range(policy_count) if depths[index] > step]
             if not active:
@@ -1028,6 +1238,7 @@ class SpatialExpectedFreeEnergy:
                     next_mean.expand(len(active) * member_count, *field_shape),
                     self.cfg.thickness_scale,
                     self.cfg.canvas_ground_tone,
+                    self.cfg.paint_presence_threshold,
                 )
                 member_states[active_t] = projected.reshape(len(active), member_count, *field_shape)
                 member_within[active_t] = torch.clamp(
@@ -1082,6 +1293,16 @@ class SpatialExpectedFreeEnergy:
             ambiguity[active_t] = ambiguity[active_t] + self._observation_ambiguity(flat_members).reshape(
                 len(active), member_count
             ).mean(dim=1)
+            if track_passage_trajectory:
+                coarse_step_fields = self._composition_fields_from_terminal(flat_members)
+                for active_position, policy_index in enumerate(active):
+                    policy = policies[policy_index]
+                    if policy.passage is None and policy.passage_plan is None:
+                        continue
+                    start = active_position * member_count
+                    trajectory_fields.append(coarse_step_fields[start : start + member_count])
+                    trajectory_policy_indices.extend([policy_index] * member_count)
+                    trajectory_step_indices.extend([step] * member_count)
 
         coverage_mean, coverage_variance = self._member_coverage_moments(member_states, member_within)
         coverage_std = torch.sqrt(torch.clamp(coverage_variance, min=1e-8))
@@ -1096,6 +1317,21 @@ class SpatialExpectedFreeEnergy:
         )
         composition_gap = member_gap.reshape(policy_count, member_count).mean(dim=1)
         composition_risk = member_composition_risk.reshape(policy_count, member_count).mean(dim=1)
+        member_canvas_risk, member_relational_risk = self._hierarchy_transition_terms(
+            member_states.reshape(policy_count * member_count, *field_shape),
+            policies,
+            member_count,
+        )
+        canvas_transition_risk = member_canvas_risk.reshape(policy_count, member_count).mean(dim=1)
+        relational_transition_risk = member_relational_risk.reshape(policy_count, member_count).mean(dim=1)
+        passage_canvas_risk, passage_relational_risk, passage_observation_count = self._passage_trajectory_terms(
+            trajectory_fields,
+            trajectory_policy_indices,
+            trajectory_step_indices,
+            policies,
+            policy_count,
+            member_count,
+        )
 
         ambiguity = self.cfg.ambiguity_precision * ambiguity
         transition_risk = self.cfg.transition_precision * transition_risk
@@ -1114,6 +1350,10 @@ class SpatialExpectedFreeEnergy:
             + transition_risk
             + transition_ambiguity
             + composition_risk
+            + canvas_transition_risk
+            + relational_transition_risk
+            + passage_canvas_risk
+            + passage_relational_risk
             + motor_risk_t
             + motor_ambiguity_t
             - motor_epistemic_t
@@ -1133,6 +1373,11 @@ class SpatialExpectedFreeEnergy:
                 transition_ambiguity=float(transition_ambiguity[index].item()),
                 composition_gap=float(composition_gap[index].item()),
                 composition_risk=float(composition_risk[index].item()),
+                canvas_transition_risk=float(canvas_transition_risk[index].item()),
+                relational_transition_risk=float(relational_transition_risk[index].item()),
+                passage_canvas_trajectory_risk=float(passage_canvas_risk[index].item()),
+                passage_relational_trajectory_risk=float(passage_relational_risk[index].item()),
+                passage_trajectory_observation_count=float(passage_observation_count[index].item()),
                 grid_size=belief.grid_size,
                 material_channels=channels,
                 execution_uncertainty=execution_uncertainty if first_transition_used else 0.0,
@@ -1146,6 +1391,8 @@ class SpatialExpectedFreeEnergy:
                 execution_forecast_used=first_transition_used,
                 rollout_mode="dense_grid",
                 rollout_grid_size=belief.grid_size,
+                hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policies[index])[0],
+                passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policies[index])[1],
             )
             for index in range(policy_count)
         ]
@@ -1168,11 +1415,14 @@ class SpatialExpectedFreeEnergy:
                 return torch.clamp(mean[..., 5, :, :], 0.0, 1.0), torch.clamp(
                     variance[..., 5, :, :], min=1e-8
                 )
-            scale = max(1e-8, self.cfg.thickness_scale)
-            thickness = torch.clamp(mean[..., 0, :, :], min=0.0)
-            coverage = 1.0 - torch.exp(-thickness / scale)
-            derivative = torch.exp(-thickness / scale) / scale
-            coverage_variance = derivative.square() * torch.clamp(variance[..., 0, :, :], min=1e-8)
+            thickness = mean[..., 0, :, :]
+            thickness_variance = torch.clamp(variance[..., 0, :, :], min=1e-8)
+            coverage = _paint_presence_probability(
+                thickness,
+                thickness_variance,
+                self.cfg.paint_presence_threshold,
+            )
+            coverage_variance = coverage * (1.0 - coverage)
             return coverage, coverage_variance
 
         base_coverage, base_coverage_variance = coverage_fields(base_mean, base_variance)
@@ -1292,11 +1542,14 @@ class SpatialExpectedFreeEnergy:
             cell_coverage = torch.clamp(member_states[:, :, 5], 0.0, 1.0)
             cell_variance = torch.clamp(member_within[:, :, 5], min=1e-8)
         else:
-            scale = max(1e-8, self.cfg.thickness_scale)
-            thickness = torch.clamp(member_states[:, :, 0], min=0.0)
-            cell_coverage = 1.0 - torch.exp(-thickness / scale)
-            derivative = torch.exp(-thickness / scale) / scale
-            cell_variance = derivative.square() * torch.clamp(member_within[:, :, 0], min=1e-8)
+            thickness = member_states[:, :, 0]
+            thickness_variance = torch.clamp(member_within[:, :, 0], min=1e-8)
+            cell_coverage = _paint_presence_probability(
+                thickness,
+                thickness_variance,
+                self.cfg.paint_presence_threshold,
+            )
+            cell_variance = cell_coverage * (1.0 - cell_coverage)
         member_coverage = cell_coverage.mean(dim=(-2, -1))
         cell_count = float(cell_coverage.shape[-2] * cell_coverage.shape[-1])
         within_aggregate = cell_variance.sum(dim=(-2, -1)) / (cell_count * cell_count)
@@ -1330,6 +1583,10 @@ class SpatialExpectedFreeEnergy:
         transition_ambiguity = torch.tensor(0.0, device=self.device)
         epistemic_value = torch.tensor(0.0, device=self.device)
         first_transition_used = False
+        trajectory_fields: list[torch.Tensor] = []
+        trajectory_policy_indices: list[int] = []
+        trajectory_step_indices: list[int] = []
+        track_passage_trajectory = self._passage_trajectory_active([policy])
 
         for step, action in enumerate(policy.actions):
             if action.stop:
@@ -1347,7 +1604,11 @@ class SpatialExpectedFreeEnergy:
                 elif next_variance.ndim == 3:
                     next_variance = next_variance.unsqueeze(0)
                 next_mean = project_material_support(
-                    mean, next_mean, self.cfg.thickness_scale, self.cfg.canvas_ground_tone
+                    mean,
+                    next_mean,
+                    self.cfg.thickness_scale,
+                    self.cfg.canvas_ground_tone,
+                    self.cfg.paint_presence_threshold,
                 )
                 next_variance = torch.clamp(next_variance, min=1e-8)
                 first_transition_used = True
@@ -1364,7 +1625,11 @@ class SpatialExpectedFreeEnergy:
                 ).unsqueeze(0)
                 next_mean, aleatoric, epistemic = self.dynamics.predictive_moments(mean, action_raster)
                 next_mean = project_material_support(
-                    mean, next_mean, self.cfg.thickness_scale, self.cfg.canvas_ground_tone
+                    mean,
+                    next_mean,
+                    self.cfg.thickness_scale,
+                    self.cfg.canvas_ground_tone,
+                    self.cfg.paint_presence_threshold,
                 )
                 next_variance = torch.clamp(aleatoric + epistemic, min=1e-8)
 
@@ -1377,6 +1642,10 @@ class SpatialExpectedFreeEnergy:
 
             mean = next_mean
             variance = next_variance
+            if track_passage_trajectory:
+                trajectory_fields.append(self._composition_fields_from_terminal(mean).clone())
+                trajectory_policy_indices.append(0)
+                trajectory_step_indices.append(step)
 
         coverage_mean, coverage_variance = self._coverage_moments(mean, variance)
         coverage_std = torch.sqrt(torch.clamp(coverage_variance, min=1e-8))
@@ -1392,6 +1661,24 @@ class SpatialExpectedFreeEnergy:
         composition_gap, composition_risk = self._composition_terms(mean)
         composition_gap = composition_gap.mean()
         composition_risk = composition_risk.mean()
+        canvas_transition_risk, relational_transition_risk = self._hierarchy_transition_terms(
+            mean,
+            [policy],
+            1,
+        )
+        canvas_transition_risk = canvas_transition_risk.mean()
+        relational_transition_risk = relational_transition_risk.mean()
+        passage_canvas_risk, passage_relational_risk, passage_observation_count = self._passage_trajectory_terms(
+            trajectory_fields,
+            trajectory_policy_indices,
+            trajectory_step_indices,
+            [policy],
+            1,
+            1,
+        )
+        passage_canvas_risk = passage_canvas_risk[0]
+        passage_relational_risk = passage_relational_risk[0]
+        passage_observation_count = passage_observation_count[0]
 
         ambiguity = self.cfg.ambiguity_precision * ambiguity
         transition_risk = self.cfg.transition_precision * transition_risk
@@ -1406,6 +1693,10 @@ class SpatialExpectedFreeEnergy:
             + transition_risk
             + transition_ambiguity
             + composition_risk
+            + canvas_transition_risk
+            + relational_transition_risk
+            + passage_canvas_risk
+            + passage_relational_risk
             + motor_risk_value
             + motor_ambiguity_value
             - motor_epistemic_value_used
@@ -1423,6 +1714,11 @@ class SpatialExpectedFreeEnergy:
             transition_ambiguity=float(transition_ambiguity.item()),
             composition_gap=float(composition_gap.item()),
             composition_risk=float(composition_risk.item()),
+            canvas_transition_risk=float(canvas_transition_risk.item()),
+            relational_transition_risk=float(relational_transition_risk.item()),
+            passage_canvas_trajectory_risk=float(passage_canvas_risk.item()),
+            passage_relational_trajectory_risk=float(passage_relational_risk.item()),
+            passage_trajectory_observation_count=float(passage_observation_count.item()),
             grid_size=belief.grid_size,
             material_channels=int(mean.shape[1]),
             execution_uncertainty=execution_uncertainty if first_transition_used else 0.0,
@@ -1436,6 +1732,8 @@ class SpatialExpectedFreeEnergy:
             execution_forecast_used=first_transition_used,
             rollout_mode="dense_grid",
             rollout_grid_size=belief.grid_size,
+            hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policy)[0],
+            passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policy)[1],
         )
 
     def _coverage_moments(self, material_mean: torch.Tensor, material_variance: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1443,12 +1741,14 @@ class SpatialExpectedFreeEnergy:
             cell_coverage = torch.clamp(material_mean[:, 5], 0.0, 1.0)
             cell_coverage_variance = torch.clamp(material_variance[:, 5], min=1e-8)
         else:
-            thickness_mean = torch.clamp(material_mean[:, 0], min=0.0)
+            thickness_mean = material_mean[:, 0]
             thickness_variance = torch.clamp(material_variance[:, 0], min=1e-8)
-            scale = max(1e-8, self.cfg.thickness_scale)
-            cell_coverage = 1.0 - torch.exp(-thickness_mean / scale)
-            derivative = torch.exp(-thickness_mean / scale) / scale
-            cell_coverage_variance = derivative.square() * thickness_variance
+            cell_coverage = _paint_presence_probability(
+                thickness_mean,
+                thickness_variance,
+                self.cfg.paint_presence_threshold,
+            )
+            cell_coverage_variance = cell_coverage * (1.0 - cell_coverage)
         coverage_mean = torch.clamp(cell_coverage.mean(dim=(-2, -1)), 1e-4, 1.0 - 1e-4)
         cell_count = float(cell_coverage.shape[-2] * cell_coverage.shape[-1])
         coverage_variance = torch.clamp(cell_coverage_variance.sum(dim=(-2, -1)) / (cell_count * cell_count), min=1e-8)

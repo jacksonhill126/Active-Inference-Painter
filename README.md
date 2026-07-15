@@ -7,14 +7,70 @@ It deliberately separates:
 
 - **Generative process**: stochastic wet-into-wet oil deposition with persistent
   wetness, conserved bulk pigment, an optically dominant surface tone, and
-  thickness-derived material coverage. There is intentionally no wetness decay.
+  paint-presence material coverage. A pixel counts once after its thickness
+  crosses the declared presence threshold; additional layers change material
+  and optics but not covered area. There is intentionally no wetness decay.
 - **Generative model**: a learned ensemble transition density over latent canvas states plus an explicit observation likelihood.
 - **Posterior inference**: variational state estimation by minimizing variational free energy.
 - **Preferences**: a terminal Beta density over coverage, applied only when a policy terminates in `stop`.
 - **Policy inference**: posterior over policies from expected free energy.
-- **Execution**: arm realization stays below policy selection, but the planner can now compare declared first-stroke motor realization latents such as Cartesian IK, joint-space splines, and elbow-led arcs through predicted canvas and proprioceptive outcomes.
+- **Execution**: arm realization stays below policy selection, but the planner can now compare declared first-stroke motor realization latents such as Cartesian IK, joint-space splines, elbow-led arcs, and positive/negative upper-arm roll sweeps through predicted canvas and proprioceptive outcomes.
 
-No hand-written aesthetic reward is used. Coverage is not inferred from visible color: white paint on white ground still adds thickness and coverage.
+No hand-written aesthetic reward is used. Coverage is not inferred from visible
+color: white paint on white ground occupies canvas area, while repeated paint in
+an already occupied pixel does not add coverage.
+
+## Brush paint-handling
+
+The arm's brush (`VerticalCanvas.paint_at` / `Brush` in `arm_sim.py`) is a round
+contact patch with hard support, enriched with four physical behaviors. All of
+this lives in the generative *process*, below the painting-policy boundary; the
+learned transition model observes the resulting canvas transitions and adapts.
+It is oil: paint does not dry within a session and the brush does not run out
+mid-stroke — deposition is consistent along a mark and the canvas keeps its
+wetness (there is no wetness decay).
+
+- **Brush loading.** The stroke's `amount` sets how heavily the brush is loaded,
+  which scales deposited thickness/opacity uniformly along the mark (a fuller
+  brush lays thicker paint). It never depletes or thins toward the end
+  (`brush_load_min`/`brush_load_max`).
+- **Directional shape.** Each deposition step paints the disc swept from the
+  previous contact point, so travel elongates and connects the mark. The
+  cross-stroke radius is unchanged (round brush); only the along-travel extent
+  grows (`brush_directional_enabled`).
+- **Bristle furrows.** A round brush is a bundle of hairs; a fraction run dry
+  (`brush_bristle_gap_fraction`), carving lengthwise furrows that stay unpainted.
+  Unlike a deposition-rate wobble these survive opacity build-up, so the mark
+  reads as brushed (`brush_bristle_*`; set depth and gaps to 0 for smooth).
+- **Canvas tooth/grain.** A fixed substrate texture (as in Krita/MyPaint): a
+  lightly loaded brush deposits only on the raised tooth, while more pressure
+  works paint into the valleys. This is the primary source of mark texture and
+  survives opacity because unreached valleys stay bare
+  (`canvas_grain_strength`, `canvas_grain_reach_*`).
+- **Stroke-end taper.** Brush width ramps in/out over the ends of the paint
+  phase (`brush_taper_fraction`, `brush_taper_min_width`), so marks come to
+  points instead of round caps. Driven by the stroke controller's `flow`
+  envelope, below the policy boundary.
+- **Wet blending (dirty brush).** Per deposition step the head skims a
+  pressure-scaled fraction of the wet surface layer into a small held reservoir
+  (volume plus pigment mass, exactly conserved against the canvas ledger), and
+  redeposits a share of it mixed with the fresh load, biased toward the leading
+  edge so paint is pushed ahead of the stroke. This bidirectional-transfer loop
+  is the same cheap core used by ArtRage and Krita's color-smudge engine
+  (`brush_pickup_*`, `brush_capacity_thickness`, `brush_release_fraction`,
+  `brush_push_forward`). Every knob is calibratable from a few real strokes.
+- **Bristle-tip trailer dynamics.** The painting point is a damped follower of
+  the commanded contact point (`brush_tip_lag_seconds`), so entries hook and
+  curves flow like a pulled brush tip rather than a rigid stamp.
+
+The policy sampler also biases proposed strokes toward longer sweeps (a declared
+empirical policy prior), since a round brush over a short span reads as a dab.
+
+Loading and carried tone are per-stroke state set on pen-down from the action,
+so each stroke stays a deterministic function of the canvas and the action (no
+cross-stroke brush memory the learned model cannot see). Brush tilt relative to
+the canvas normal is not yet modeled; the round footprint is oriented only by
+travel direction.
 
 ## Core expected-free-energy terms
 
@@ -45,8 +101,8 @@ The immediate `stop` policy is always available. Continuation policies are sampl
 
 ## Composition hierarchy (compression gap)
 
-Spatial mode carries a hierarchical composition layer (`composition.py`): a
-latent code `z` with a learned decoder over the spatial material fields. The
+Spatial mode carries a hierarchical composition layer (`canvas_hierarchy.py`):
+a spatial canvas latent with a learned decoder over the material fields. The
 single declared structural preference over terminal canvases is
 
 ```
@@ -66,6 +122,36 @@ logged in diagnostics. Because the gap is evaluated on every candidate
 terminal state including immediate stop, continue-vs-stop comparisons already
 express compression progress: painting continues while strokes are expected to
 increase the hierarchy's explanatory advantage near the coverage band.
+
+The same model carries two slower transition levels that remain distinct from
+the structural preference:
+
+- a persistent `8 x 4 x 4` canvas posterior `q(z_canvas)` in the default
+  16-cell planner configuration;
+- a 24-dimensional relational posterior `q(z_relational)` inferred from eight
+  uncertain region slots and every pairwise displacement, distance, overlap,
+  tone difference, and material-mass relationship. The deterministic slot
+  observation preserves disconnected components and subdivides large connected
+  paint masses, so dense passages do not collapse into one relational object.
+
+Both posteriors update only at executed passage boundaries. Two learned
+Gaussian transition likelihoods operate over them. The aggregate likelihood is
+conditioned on a deterministic descriptor of the whole proposed mark
+trajectory. The passage likelihood is Markovian: it receives the persistent
+`PassageLatent` plus a passage-relative phase for each subordinate mark, rolls
+the canvas and relational latents forward one mark at a time, and decodes a
+coarse material observation at every step. Real marks train this per-step
+likelihood without directly updating the persistent canvas or relational
+posterior mid-passage.
+
+For structured passage candidates, the hierarchy therefore evaluates
+`sum_t KL[q(z_t) || p(z_t | z_0, z_passage, phase_1:t)]` over every predicted
+mark. Ensemble members are averaged at each step, while the temporal terms are
+summed. Unstructured candidates use the aggregate policy transition. Canvas
+and relational terms retain their separate declared precisions and remain zero
+until the relevant likelihood has received training updates. Immediate `stop`
+uses an identity latent transition prior. These are transition beliefs inside
+EFE, not composition rewards.
 
 ## Rollouts, policy priors, and precisions
 
@@ -100,10 +186,15 @@ increase the hierarchy's explanatory advantage near the coverage band.
 - **Hierarchical passage proposals.** A declared fraction
   (`passage_proposal_mix`) of continuation candidates are generated from a
   slower `PassageLatent` transition prior over several related marks. Current
-  passage kinds are parallel mark bands and chained mark phrases; each passage
-  still terminates in `stop`, and expected free energy scores the predicted
-  terminal consequences. This is a policy prior over multi-mark latent
-  trajectories, not fine-tuning and not an aesthetic reward.
+  passage kinds are parallel mark bands, chained mark phrases, and polylines.
+  A polyline is represented by center, central direction, total length, signed
+  turn, segment count, width, amount, and tone, then deterministically decoded
+  into two to four endpoint-connected straight brush actions. Each segment is
+  still a regular learned mark, with lift and local receding-horizon inference
+  before the next segment; connected geometry does not imply uninterrupted
+  brush contact. Every passage terminates in `stop`, and expected free energy
+  scores the predicted consequences. This is a policy prior over multi-mark
+  latent trajectories, not fine-tuning and not an aesthetic reward.
 - **Passage-plan proposals.** When the planning horizon is deep enough, a
   declared fraction (`passage_plan_proposal_mix`) of candidates are generated
   from a slower `PassagePlanLatent` over multiple passage latents. The plan
@@ -116,7 +207,12 @@ increase the hierarchy's explanatory advantage near the coverage band.
   direction, length, spacing, width, and amount, plus a beta-Bernoulli tone
   factor. A small local policy set is then inferred before the next mark. The
   arm performs the deeper global deliberation from a retracted pose only at a
-  passage boundary.
+  passage boundary. Local candidate policies retain the same passage latent and
+  their passage-relative start index, so local correction cannot silently turn
+  the remaining marks back into unrelated one-mark policies. Each passage kind
+  has separate evidence support: a newly introduced polyline receives spatial
+  rollout EFE but no passage-trajectory likelihood KL until that likelihood has
+  trained on executed polyline steps.
 - **Embodied motor realization priors.** During arm-driven planning, top
   canvas candidates are expanded into declared first-stroke
   `MotorPrimitiveLatent` alternatives (`cartesian_ik`, `joint_spline`,
@@ -136,6 +232,20 @@ increase the hierarchy's explanatory advantage near the coverage band.
   transition likelihood is `p(s_next | s, stroke, motor_realization)` rather
   than stroke-only. Hard joint/current/workspace limits remain external safety
   constraints, and no motor-ease reward is introduced.
+- **Learned motion reliability.** Per motor realization kind, the driver
+  maintains an inverse-gamma precision belief over the squared ratio of
+  realized to forecast tracking error (`motor_reliability_*`), updated after
+  every executed stroke from path and pressure residuals. The posterior mean
+  scales the expected squared error of the execution-fidelity outcome channels
+  inside motor EFE, so motions that prove jittery pay proportionally more risk
+  and reliable ones win selection; the belief's remaining uncertainty is
+  credited as information gain for trying a kind. The belief persists in the
+  checkpoint and is reported in diagnostics (`motionReliability`). Forecast
+  rollout particles beyond the first also perturb friction, backlash,
+  transmission stiffness, and process noise (`body_param_jitter_fraction`), so
+  motions that amplify body-parameter uncertainty forecast wider even before
+  reliability evidence arrives. This is the sim-to-real seam: on hardware the
+  same residuals calibrate the body model instead of a copied simulator.
 - **Per-modality precisions.** `terminal_risk_precision`,
   `ambiguity_precision`, `transition_precision`,
   `motor_proprioceptive_risk_precision`, and
@@ -160,6 +270,8 @@ python -m active_painter.web_server --planner-state-kind spatial_material
 Spatial mode performs an initial dynamics bootstrap before the URL is printed.
 For a quick no-bootstrap smoke test, add
 `--driver-bootstrap-transitions 0 --driver-bootstrap-train-steps 0`.
+The planner runs on CUDA automatically when available; pass `--device cpu`
+(or `cuda:1`, etc.) to override. The resolved device is printed at startup.
 The web renderer displays the canvas on a neutral gray ground so both white and
 black paint are visible. Tone support is unconstrained by default; use
 `--stroke-tone-prior black`, `--stroke-tone-prior white`, or
@@ -228,6 +340,14 @@ It shows a stochastic coupled 4-DOF arm plant with encoders, pose-dependent
 inertia, Coriolis coupling, residual gravity, motor/link inertia, friction and
 compliance; plus a vertical wet oil-paint canvas, soft wrist contact,
 pressure-dependent brush width, motor telemetry, and material coverage.
+The roll coordinate rotates the elbow hinge around the upper-arm axis. Two
+fixed-endpoint roll-sweep policies are inferred alongside the existing motor
+realizations; their start and end poses use exact fixed-roll IK, and their
+proprioceptive and canvas consequences enter the motor EFE posterior.
+The expensive embodied refinement is capped at the three best base-EFE canvas
+policies, keeping the default stochastic forecast count below the previous
+eight-policy, three-realization budget to account for richer fixed-roll IK,
+while all canvas candidates still receive their base EFE evaluation.
 This body simulation sits below the painting policy boundary; it does not select
 painting policies.
 

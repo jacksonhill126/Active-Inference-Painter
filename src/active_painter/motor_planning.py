@@ -8,6 +8,11 @@ from .config import PainterConfig
 from .policies import MotorPrimitiveLatent, Policy
 
 
+# Execution-fidelity outcome channels: the ones the learned per-kind
+# reliability belief is fitted on (and therefore the ones it inflates).
+_FIDELITY_CHANNEL_PREFIXES = ("path_error", "pressure_error", "target_error_", "contact_loss")
+
+
 @dataclass(frozen=True, slots=True)
 class MotorEFETerms:
     """Precision-weighted EFE terms for proprioceptive outcome modalities."""
@@ -37,7 +42,8 @@ def motor_realization_policy_alternatives(policy: Policy, config: PainterConfig)
                 policy.actions,
                 passage=policy.passage,
                 passage_plan=policy.passage_plan,
-                motor_primitive=_motor_primitive(kind),
+                motor_primitive=_motor_primitive(kind, config),
+                passage_start_index=policy.passage_start_index,
             )
         )
     return alternatives
@@ -77,7 +83,12 @@ def motor_realization_log_evidence(
     return maximum + float(np.log(max(normalizer, 1e-300))), posterior
 
 
-def motor_efe_terms(forecast, config: PainterConfig) -> MotorEFETerms:
+def motor_efe_terms(
+    forecast,
+    config: PainterConfig,
+    reliability_inflation: float = 1.0,
+    reliability_epistemic_nats: float = 0.0,
+) -> MotorEFETerms:
     """EFE over a diagonal proprioceptive predictive density, in nats.
 
     Risk is expected negative log probability under declared zero-centered
@@ -85,6 +96,17 @@ def motor_efe_terms(forecast, config: PainterConfig) -> MotorEFETerms:
     normalizers omitted. Ambiguity is likelihood entropy in excess of each
     preference scale. Epistemic value is the diagonal Gaussian mutual
     information between process uncertainty and proprioceptive observations.
+
+    ``reliability_inflation`` is the learned per-motion-kind precision belief:
+    the posterior mean of the squared realized-vs-forecast execution error
+    ratio. A kind that is r-times jitterier than the body model realizes
+    r-times the tracking error, so the belief scales the *expected squared
+    error* (mean^2 plus variance) of the execution-fidelity channels -- path,
+    pressure, target tracking, contact loss -- the same quantities the belief
+    is fitted on. Effort channels (current, torque, velocity, acceleration,
+    limit proximity) are not inflated. ``reliability_epistemic_nats`` is the
+    belief's resolvable uncertainty, credited as information gain for executing
+    (and thereby measuring) the kind.
     """
 
     labels = tuple(forecast.proprioceptive_labels)
@@ -95,12 +117,18 @@ def motor_efe_terms(forecast, config: PainterConfig) -> MotorEFETerms:
         raise ValueError("Execution forecast lacks a complete proprioceptive predictive density.")
     preference_std = np.asarray([_preference_std(label, config) for label in labels], dtype=np.float64)
     preference_variance = np.maximum(preference_std * preference_std, 1e-8)
-    predictive_variance = np.maximum(predictive_variance, 0.0)
-    likelihood_variance = np.maximum(likelihood_variance, 1e-8)
+    inflation = max(1e-2, float(reliability_inflation))
+    is_fidelity = np.asarray(
+        [1.0 if label.startswith(_FIDELITY_CHANNEL_PREFIXES) else 0.0 for label in labels],
+        dtype=np.float64,
+    )
+    channel_inflation = 1.0 + (inflation - 1.0) * is_fidelity
+    predictive_variance = np.maximum(predictive_variance, 0.0) * channel_inflation
+    likelihood_variance = np.maximum(likelihood_variance, 1e-8) * channel_inflation
     outcome_variance = predictive_variance + likelihood_variance
 
     expected_negative_log_preference = 0.5 * np.sum(
-        (mean * mean + outcome_variance) / preference_variance
+        (mean * mean * channel_inflation + outcome_variance) / preference_variance
     )
     likelihood_excess_entropy = 0.5 * np.sum(
         np.log1p(likelihood_variance / preference_variance)
@@ -110,7 +138,10 @@ def motor_efe_terms(forecast, config: PainterConfig) -> MotorEFETerms:
     )
     risk = float(config.motor_proprioceptive_risk_precision * expected_negative_log_preference)
     ambiguity = float(config.motor_proprioceptive_ambiguity_precision * likelihood_excess_entropy)
-    epistemic_value = float(config.motor_proprioceptive_ambiguity_precision * mutual_information)
+    epistemic_value = float(
+        config.motor_proprioceptive_ambiguity_precision
+        * (mutual_information + max(0.0, float(reliability_epistemic_nats)))
+    )
     return MotorEFETerms(
         risk=risk,
         ambiguity=ambiguity,
@@ -118,7 +149,8 @@ def motor_efe_terms(forecast, config: PainterConfig) -> MotorEFETerms:
         approximation=(
             f"diagonal Gaussian motor EFE over {len(labels)} named normalized proprioceptive outcomes; "
             "risk omits policy-independent preference normalizers; likelihood entropy and process-observation "
-            "mutual information are analytic in nats; hard safety limits remain external"
+            "mutual information are analytic in nats; expected squared error of execution-fidelity channels "
+            f"scaled by the learned per-kind reliability inflation {inflation:.3f}; hard safety limits remain external"
         ),
     )
 
@@ -145,9 +177,11 @@ def _preference_std(label: str, config: PainterConfig) -> float:
     raise ValueError(f"No declared motor outcome preference for {label!r}.")
 
 
-def _motor_primitive(kind: str) -> MotorPrimitiveLatent:
+def _motor_primitive(kind: str, config: PainterConfig) -> MotorPrimitiveLatent:
     pivot = ""
     description = "Cartesian contact-aware IK realization"
+    roll_start = 0.0
+    roll_end = 0.0
     if kind == "joint_spline":
         description = "joint-space interpolation between contact poses"
     elif kind == "elbow_pivot":
@@ -156,4 +190,17 @@ def _motor_primitive(kind: str) -> MotorPrimitiveLatent:
     elif kind == "shoulder_yaw_arc":
         pivot = "yaw"
         description = "shoulder-yaw-led joint-space arc between contact poses"
-    return MotorPrimitiveLatent(kind=kind, pivot_joint=pivot, description=description)
+    elif kind in {"upper_arm_roll_positive", "upper_arm_roll_negative"}:
+        pivot = "roll"
+        sweep = abs(float(config.motor_roll_sweep_degrees))
+        direction = 1.0 if kind == "upper_arm_roll_positive" else -1.0
+        roll_start = -direction * sweep
+        roll_end = direction * sweep
+        description = "contact-aware upper-arm-axis roll sweep along the Cartesian mark path"
+    return MotorPrimitiveLatent(
+        kind=kind,
+        pivot_joint=pivot,
+        description=description,
+        roll_start_deg=roll_start,
+        roll_end_deg=roll_end,
+    )

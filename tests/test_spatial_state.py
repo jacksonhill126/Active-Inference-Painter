@@ -40,13 +40,15 @@ class DeterministicFootprintDynamics:
         delta[:, 2:3] = tone * deposited
         next_material = material + delta
         if next_material.shape[1] > 3:
-            coverage = 1.0 - torch.exp(-torch.clamp(next_material[:, 0], min=0.0) / 0.005)
+            thickness = torch.clamp(next_material[:, 0], min=0.0)
+            opacity = 1.0 - torch.exp(-thickness / 0.005)
+            coverage = (thickness >= 0.0001).to(thickness.dtype)
             next_material[:, 3:4] = torch.where(deposited > 0.0, tone, material[:, 3:4])
         if next_material.shape[1] > 4:
-            observed = (1.0 - coverage) * 0.34 + coverage * next_material[:, 3]
+            observed = (1.0 - opacity) * 0.34 + opacity * next_material[:, 3]
             next_material[:, 4] = torch.abs(observed - 0.34)
         if next_material.shape[1] > 5:
-            next_material[:, 5] = 1.0 - torch.exp(-torch.clamp(next_material[:, 0], min=0.0) / 0.005)
+            next_material[:, 5] = coverage
         aleatoric = torch.full_like(next_material, 2e-5)
         epistemic = torch.zeros_like(next_material)
         return next_material, aleatoric, epistemic
@@ -68,8 +70,8 @@ def test_spatial_state_distinguishes_equal_summary_canvases_at_different_locatio
     assert right_state.material.shape == (len(MATERIAL_CHANNELS), 16, 16)
     assert not np.allclose(left_state.material, right_state.material)
     assert np.isclose(
-        left_state.material_coverage_mean(cfg.thickness_scale),
-        right_state.material_coverage_mean(cfg.thickness_scale),
+        left_state.material_coverage_mean(cfg.paint_presence_threshold),
+        right_state.material_coverage_mean(cfg.paint_presence_threshold),
     )
 
 
@@ -86,7 +88,9 @@ def test_spatial_material_coverage_is_derived_from_thickness_not_visible_tone() 
     )
     after = spatial_canvas_state(sim, cfg)
 
-    assert after.material_coverage_mean(cfg.thickness_scale) > before.material_coverage_mean(cfg.thickness_scale)
+    assert after.material_coverage_mean(cfg.paint_presence_threshold) > before.material_coverage_mean(
+        cfg.paint_presence_threshold
+    )
     assert after.material[0].mean() > before.material[0].mean()
     assert after.material[2].mean() == before.material[2].mean()
     assert after.material[3].mean() == before.material[3].mean()
@@ -145,7 +149,7 @@ def test_spatial_state_includes_surface_tone_contrast_and_derived_material_cover
     assert state.material.shape == (len(MATERIAL_CHANNELS), 16, 16)
     assert state.material[3].max() > 0.2
     assert state.material[4].max() > 0.0
-    assert np.allclose(state.material[5], state.coverage(cfg.thickness_scale))
+    assert np.allclose(state.material[5], state.coverage(cfg.paint_presence_threshold))
 
 
 def test_material_pyramid_includes_pixel_tile_and_planner_levels() -> None:
@@ -163,7 +167,10 @@ def test_material_pyramid_includes_pixel_tile_and_planner_levels() -> None:
     assert [level.name for level in pyramid] == ["pixel", "tile_16", "planner"]
     assert [level.grid_size for level in state.pyramid] == [32, 16, 8]
     assert all(level.material.shape == (len(MATERIAL_CHANNELS), level.grid_size, level.grid_size) for level in pyramid)
-    assert all(np.isclose(level.coverage(cfg.thickness_scale).mean(), coverage_mean) for level in pyramid)
+    assert all(
+        np.isclose(level.coverage(cfg.paint_presence_threshold).mean(), coverage_mean)
+        for level in pyramid
+    )
 
 
 def test_coarse_material_coverage_preserves_pixel_coverage_not_blurred_thickness() -> None:
@@ -173,7 +180,9 @@ def test_coarse_material_coverage_preserves_pixel_coverage_not_blurred_thickness
 
     coarse = material_grid_from_canvas(sim.canvas, 1)
     pixel_coverage_mean = float(sim.canvas.coverage_field().mean())
-    coverage_from_mean_thickness = float(coverage_from_thickness(coarse[0], cfg.thickness_scale).item())
+    coverage_from_mean_thickness = float(
+        coverage_from_thickness(coarse[0], cfg.paint_presence_threshold).item()
+    )
 
     assert np.isclose(float(coarse[5, 0, 0]), pixel_coverage_mean)
     assert not np.isclose(float(coarse[5, 0, 0]), coverage_from_mean_thickness)
@@ -191,7 +200,7 @@ def test_spatial_downsample_preserves_material_means_for_divisible_grid() -> Non
     assert np.isclose(state.material[0].mean(), sim.canvas.thickness.mean())
     assert np.isclose(state.material[1].mean(), sim.canvas.wetness.mean())
     assert np.isclose(state.material[2].mean(), sim.canvas.black_mass.mean())
-    assert np.allclose(state.material[5], state.coverage(cfg.thickness_scale))
+    assert np.allclose(state.material[5], state.coverage(cfg.paint_presence_threshold))
 
 
 def test_stroke_action_rasterization_is_spatial_and_deterministic() -> None:
@@ -247,9 +256,11 @@ def test_spatial_dynamics_projection_supports_backpropagation() -> None:
     next_material[:, 0, 2:6, 2:6] = 0.01
     next_material[:, 1, 2:6, 2:6] = 0.004
     next_material[:, 2, 2:6, 2:6] = 0.006
-    coverage = 1.0 - torch.exp(-torch.clamp(next_material[:, 0], min=0.0) / cfg.thickness_scale)
+    thickness = torch.clamp(next_material[:, 0], min=0.0)
+    opacity = 1.0 - torch.exp(-thickness / cfg.thickness_scale)
+    coverage = (thickness >= cfg.paint_presence_threshold).to(thickness.dtype)
     next_material[:, 3] = 0.6
-    observed_tone = (1.0 - coverage) * cfg.canvas_ground_tone + coverage * next_material[:, 3]
+    observed_tone = (1.0 - opacity) * cfg.canvas_ground_tone + opacity * next_material[:, 3]
     next_material[:, 4] = torch.abs(observed_tone - cfg.canvas_ground_tone)
     next_material[:, 5] = coverage
 
@@ -270,7 +281,7 @@ def test_spatial_material_support_preserves_persistent_wetness_and_material() ->
     assert projected[0, 0, 0, 0] == current[0, 0, 0, 0]
     assert projected[0, 1, 0, 0] == current[0, 1, 0, 0]
     assert projected[0, 2, 0, 0] == current[0, 2, 0, 0]
-    expected_coverage = torch.tensor(1.0 - np.exp(-0.4 / 0.005), dtype=projected.dtype)
+    expected_coverage = torch.tensor(1.0, dtype=projected.dtype)
     assert torch.isclose(projected[0, 3, 0, 0], torch.tensor(0.7))
     assert torch.isclose(projected[0, 4, 0, 0], torch.tensor(abs(0.7 - 0.34), dtype=projected.dtype))
     assert torch.isclose(projected[0, 5, 0, 0], expected_coverage)

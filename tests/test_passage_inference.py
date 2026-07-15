@@ -1,11 +1,12 @@
 import numpy as np
+import pytest
 
 from active_painter.arm_agent_driver import ArmActiveInferenceDriver
 from active_painter.arm_sim import ArmPainterSim
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.passage_inference import PassageBelief, infer_passage_observation
-from active_painter.policies import PassageLatent
+from active_painter.policies import PassageLatent, PolicySampler, polyline_vertices
 from active_painter.spatial_state import spatial_canvas_state
 
 
@@ -46,6 +47,41 @@ def test_surface_tone_likelihood_updates_tone_factor_separately_from_geometry() 
     assert posterior.mean.shape == (7,)
 
 
+def test_polyline_passage_belief_preserves_signed_turn_and_observes_central_direction() -> None:
+    cfg = PainterConfig()
+    passage = PassageLatent("polyline", 0.5, 0.5, 0.7, 0.6, -0.4, 3, 0.08, 0.5, 1.0)
+    actions = PolicySampler(cfg, seed=2).passage_actions(passage)
+    prior = PassageBelief.from_latent(passage, cfg)
+
+    observation = infer_passage_observation(
+        np.zeros(cfg.state_dim, dtype=np.float32),
+        np.zeros(cfg.state_dim, dtype=np.float32),
+        actions[0],
+        passage,
+        0,
+        cfg,
+    )
+    posterior = prior.update(observation, cfg)
+
+    assert prior.sample_latent(np.random.default_rng(4), tone=1.0).spacing < 0.0
+    assert posterior.mean[4] < 0.0
+    assert observation.mean[2] == pytest.approx(passage.direction)
+    assert observation.mean[3] == pytest.approx(passage.length)
+
+
+def test_polyline_belief_samples_report_the_same_edge_fitted_geometry_they_decode() -> None:
+    config = PainterConfig()
+    passage = PassageLatent("polyline", 0.03, 0.03, 3.9, 0.72, 0.8, 4, 0.08, 0.5, 1.0)
+    belief = PassageBelief.from_latent(passage, config)
+
+    latent = belief.mean_latent()
+    vertices = polyline_vertices(latent)
+
+    assert latent.center_x > passage.center_x or latent.center_y > passage.center_y
+    assert np.all(vertices >= 0.03 - 1e-12)
+    assert np.all(vertices <= 0.97 + 1e-12)
+
+
 def test_local_passage_candidates_include_immediate_stop_and_paired_tone_consequences() -> None:
     cfg = PainterConfig(
         candidate_policies=4,
@@ -65,6 +101,8 @@ def test_local_passage_candidates_include_immediate_stop_and_paired_tone_consequ
     assert policies[0].actions == (StrokeAction.stop_action(),)
     assert len(policies) == len(log_priors) == cfg.passage_local_candidate_policies
     assert all(policy.actions[-1].stop for policy in policies)
+    assert all(policy.passage is not None for policy in policies[1:])
+    assert all(policy.passage_start_index == 1 for policy in policies[1:])
     assert {policy.actions[0].tone for policy in policies[1:3]} == {0.0, 1.0}
     assert log_priors[0] == np.log1p(-cfg.passage_continuation_probability)
 

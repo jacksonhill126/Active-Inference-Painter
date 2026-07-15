@@ -110,6 +110,7 @@ class SpatialTransitionMember(nn.Module):
         residual_blocks: int,
         thickness_scale: float,
         ground_tone: float,
+        paint_presence_threshold: float = 0.0001,
     ) -> None:
         super().__init__()
         input_channels = material_channels + action_channels
@@ -128,6 +129,7 @@ class SpatialTransitionMember(nn.Module):
         self.material_channels = material_channels
         self.thickness_scale = thickness_scale
         self.ground_tone = ground_tone
+        self.paint_presence_threshold = paint_presence_threshold
 
     def forward(self, material: torch.Tensor, action_raster: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         raw = self.net(torch.cat([material, action_raster], dim=1))
@@ -155,7 +157,13 @@ class SpatialTransitionMember(nn.Module):
         raw: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         delta_mean, raw_logvar = raw.chunk(2, dim=1)
-        next_mean = self._project_material_support(material, material + delta_mean, self.thickness_scale, self.ground_tone)
+        next_mean = self._project_material_support(
+            material,
+            material + delta_mean,
+            self.thickness_scale,
+            self.ground_tone,
+            self.paint_presence_threshold,
+        )
         logvar = -11.0 + 6.0 * torch.sigmoid(raw_logvar)
         return next_mean, logvar
 
@@ -165,8 +173,15 @@ class SpatialTransitionMember(nn.Module):
         proposed: torch.Tensor,
         thickness_scale: float = 0.005,
         ground_tone: float = 0.34,
+        paint_presence_threshold: float = 0.0001,
     ) -> torch.Tensor:
-        return project_material_support(current, proposed, thickness_scale, ground_tone)
+        return project_material_support(
+            current,
+            proposed,
+            thickness_scale,
+            ground_tone,
+            paint_presence_threshold,
+        )
 
 
 class SpatialDynamicsEnsemble(nn.Module):
@@ -190,6 +205,7 @@ class SpatialDynamicsEnsemble(nn.Module):
                     config.spatial_residual_blocks,
                     config.thickness_scale,
                     config.canvas_ground_tone,
+                    config.paint_presence_threshold,
                 )
                 for _ in range(config.spatial_ensemble_size)
             ]

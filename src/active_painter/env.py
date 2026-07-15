@@ -45,7 +45,8 @@ class PaintCanvasEnv:
 
     The hidden physical canvas separates thickness, persistent wetness,
     conserved bulk pigment, and top-layer surface tone. Material coverage is
-    derived from thickness and is therefore not visible black/white tone.
+    the area whose thickness exceeds the paint-presence threshold and is
+    therefore independent of visible black/white tone and additional layers.
     """
 
     STATE_NAMES: Final[tuple[str, ...]] = (
@@ -79,15 +80,20 @@ class PaintCanvasEnv:
         return self.observe()
 
     def coverage_field(self) -> np.ndarray:
+        """Binary material occupancy; additional layers do not add coverage."""
+
+        return (self.thickness >= self.cfg.paint_presence_threshold).astype(np.float32)
+
+    def surface_opacity_field(self) -> np.ndarray:
         return 1.0 - np.exp(-self.thickness / self.cfg.thickness_scale)
 
     def visible_tone(self) -> np.ndarray:
         return np.clip(self.surface_tone, 0.0, 1.0)
 
     def observed_tone(self) -> np.ndarray:
-        coverage = self.coverage_field()
+        opacity = self.surface_opacity_field()
         return np.clip(
-            (1.0 - coverage) * self.cfg.canvas_ground_tone + coverage * self.visible_tone(),
+            (1.0 - opacity) * self.cfg.canvas_ground_tone + opacity * self.visible_tone(),
             0.0,
             1.0,
         )

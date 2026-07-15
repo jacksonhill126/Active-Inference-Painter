@@ -10,7 +10,13 @@ from .policies import MotorPrimitiveLatent
 
 BASE_STROKE_ACTION_DIM = 7
 BASE_SPATIAL_ACTION_CHANNELS = 6
-DEFAULT_MOTOR_KINDS = ("cartesian_ik", "joint_spline", "elbow_pivot")
+DEFAULT_MOTOR_KINDS = (
+    "cartesian_ik",
+    "joint_spline",
+    "elbow_pivot",
+    "upper_arm_roll_positive",
+    "upper_arm_roll_negative",
+)
 
 
 def motor_kind(motor_primitive: MotorPrimitiveLatent | None) -> str:

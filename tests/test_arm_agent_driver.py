@@ -20,6 +20,7 @@ from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
 from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
+from active_painter.spatial_agent import SpatialActiveInferencePainter
 from active_painter.spatial_state import SpatialCanvasState
 from active_painter.stroke_execution import ExecutionForecast, StrokeTiming, adaptive_stroke_timing
 
@@ -212,7 +213,7 @@ def test_summary_driver_replay_stores_selected_motor_realization_condition() -> 
 
     stored_action = driver.agent.replay.data[-1][1]
     assert stored_action.shape == (cfg.action_dim,)
-    assert np.allclose(stored_action[7:], [0.0, 0.0, 1.0])
+    assert np.allclose(stored_action[7:], [0.0, 0.0, 1.0, 0.0, 0.0])
 
 
 def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
@@ -310,6 +311,15 @@ def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
     execute_stroke_action(sim, action, dt=1.0 / 120.0)
     after = driver._planner_state(sim)
     driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+    assert isinstance(driver.agent, SpatialActiveInferencePainter)
+    assert isinstance(before, SpatialCanvasState)
+    assert isinstance(after, SpatialCanvasState)
+    driver.agent.add_passage_transition(before, (action,), after)
+    passage = PassageLatent("band", 0.45, 0.4, 0.0, 0.3, 0.08, 2, 0.08, 0.5, 1.0)
+    driver.agent.add_passage_step_transition(before, passage, 0, after)
+    assert driver.agent.composition is not None
+    driver.agent.composition.mark_transition_update()
+    driver.agent.composition.mark_passage_trajectory_update()
     driver.trained_transitions = 1
     with torch.no_grad():
         for parameter in driver.agent.dynamics.parameters():
@@ -329,10 +339,53 @@ def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
         assert restored.trained_transitions == 1
         assert len(restored.agent.replay) == 1
         assert len(restored.agent.composition_replay) == 1
+        assert len(restored.agent.passage_replay) == 1
+        assert len(restored.agent.passage_step_replay) == 1
+        assert restored.agent.composition is not None
+        assert int(restored.agent.composition.transition_update_count.item()) == 1
+        assert int(restored.agent.composition.passage_trajectory_update_count.item()) == 1
         for expected_parameter, restored_parameter in zip(expected, restored.agent.dynamics.parameters()):
             assert torch.allclose(expected_parameter, restored_parameter)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_driver_updates_persistent_hierarchy_at_passage_boundary() -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        planner_state_kind="spatial_material",
+        spatial_grid_size=8,
+        spatial_hidden_channels=4,
+        spatial_residual_blocks=1,
+        spatial_ensemble_size=2,
+        composition_hidden_channels=4,
+        canvas_latent_channels=4,
+        relational_latent_dim=6,
+        hierarchy_hidden_dim=12,
+        batch_size=2,
+    )
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    action = StrokeAction(0.2, 0.3, 0.7, 0.5, 0.08, 0.7, 1.0)
+    before = driver._planner_state(sim)
+    execute_stroke_action(sim, action, dt=1.0 / 120.0)
+    after = driver._planner_state(sim)
+    assert isinstance(before, SpatialCanvasState)
+    assert isinstance(after, SpatialCanvasState)
+    assert isinstance(driver.agent, SpatialActiveInferencePainter)
+    assert driver.agent.composition is not None
+    driver._hierarchy_passage_initial_state = before
+    driver._hierarchy_passage_actions = [action]
+
+    driver._complete_hierarchy_passage(after, None)
+
+    assert len(driver.agent.passage_replay) == 1
+    assert driver.agent.composition.canvas_belief is not None
+    assert driver.agent.composition.canvas_belief.update_count == 1
+    assert driver.agent.composition.relational_belief is not None
+    assert driver.agent.composition.relational_belief.update_count == 1
+    assert driver._hierarchy_passage_initial_state is None
+    assert driver._hierarchy_passage_actions == []
 
 
 def test_spatial_material_driver_can_use_dense_grid_transition_mode() -> None:
@@ -372,9 +425,11 @@ def test_spatial_execution_forecast_covariance_propagates_to_material_variance()
     next_material[0] = np.linspace(0.0, 0.02, 8, dtype=np.float32)[None, :]
     next_material[1] = 0.5 * next_material[0]
     next_material[2] = 0.25 * next_material[0]
-    coverage = 1.0 - np.exp(-np.clip(next_material[0], 0.0, None) / cfg.thickness_scale)
+    thickness = np.clip(next_material[0], 0.0, None)
+    opacity = 1.0 - np.exp(-thickness / cfg.thickness_scale)
+    coverage = (thickness >= cfg.paint_presence_threshold).astype(np.float32)
     next_material[3] = 0.25
-    observed_tone = (1.0 - coverage) * cfg.canvas_ground_tone + coverage * next_material[3]
+    observed_tone = (1.0 - opacity) * cfg.canvas_ground_tone + opacity * next_material[3]
     next_material[4] = np.abs(observed_tone - cfg.canvas_ground_tone)
     next_material[5] = coverage
     belief = SpatialCanvasState(material=material, logvar=np.full_like(material, -8.0))
@@ -561,6 +616,8 @@ def test_background_planning_reports_phase_profile() -> None:
     assert profile["policyCount"] == 4
     assert "baseEFESeconds" in profile
     assert "motorForecastSeconds" in profile
+    assert "motorForecastBatchCount" in profile
+    assert "motorForecastWorkers" in profile
     assert "motorEFERescoreSeconds" in profile
     assert "trailingTrainingSeconds" in profile
     assert profile["beliefUpdateRequiredBeforeInference"] is False

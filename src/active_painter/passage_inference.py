@@ -7,7 +7,7 @@ import numpy as np
 from .config import PainterConfig
 from .env import StrokeAction
 from .local_spatial import pixel_material_from_state
-from .policies import PassageLatent
+from .policies import PassageLatent, fit_polyline_latent, polyline_vertices
 from .spatial_state import SpatialCanvasState
 
 
@@ -82,9 +82,7 @@ class PassageBelief:
         innovation = observation.mean - self.mean
         innovation[2] = _wrapped_angle(innovation[2])
         posterior_mean = self.mean + posterior_variance * likelihood_precision * innovation
-        posterior_mean[0:2] = np.clip(posterior_mean[0:2], 0.03, 0.97)
-        posterior_mean[2] = posterior_mean[2] % (2.0 * np.pi)
-        posterior_mean[3:] = np.clip(posterior_mean[3:], 0.01, 1.0)
+        posterior_mean = _clip_latent_values(posterior_mean, self.template.kind)
         tone_weight = max(0.0, float(observation.tone_precision))
         alpha = self.black_alpha + tone_weight * float(np.clip(observation.black_probability, 0.0, 1.0))
         beta = self.black_beta + tone_weight * (1.0 - float(np.clip(observation.black_probability, 0.0, 1.0)))
@@ -98,15 +96,15 @@ class PassageBelief:
         )
 
     def mean_latent(self) -> PassageLatent:
-        return _vector_to_latent(self.mean, self.template, float(self.black_probability >= 0.5))
+        return fit_polyline_latent(
+            _vector_to_latent(self.mean, self.template, float(self.black_probability >= 0.5))
+        )
 
     def sample_latent(self, rng: np.random.Generator, tone: float | None = None) -> PassageLatent:
         sample = rng.normal(self.mean, np.sqrt(np.maximum(self.variance, 1e-8)))
-        sample[0:2] = np.clip(sample[0:2], 0.03, 0.97)
-        sample[2] %= 2.0 * np.pi
-        sample[3:] = np.clip(sample[3:], 0.01, 1.0)
+        sample = _clip_latent_values(sample, self.template.kind)
         sampled_tone = float(rng.uniform() < self.black_probability) if tone is None else float(tone)
-        return _vector_to_latent(sample, self.template, sampled_tone)
+        return fit_polyline_latent(_vector_to_latent(sample, self.template, sampled_tone))
 
     def transition_log_prior(self, latent: PassageLatent) -> float:
         difference = _latent_vector(latent) - self.mean
@@ -163,18 +161,33 @@ def infer_passage_observation(
             center_variance = max(1e-6, config.passage_belief_observation_std**2 / (1.0 + mass))
             approximation = "pixel thickness-delta centroid and surface-tone likelihood; geometry uses executed mark"
 
-    midpoint = 0.5 * (passage.stroke_count - 1)
-    offset = float(stroke_index - midpoint) * passage.spacing
-    passage_direction = np.asarray([np.cos(direction), np.sin(direction)])
-    passage_normal = np.asarray([-passage_direction[1], passage_direction[0]])
-    offset_direction = passage_direction if passage.kind == "chain" else passage_normal
-    inferred_center = mark_center - offset * offset_direction
+    if passage.kind == "polyline":
+        vertices = polyline_vertices(passage)
+        index = int(np.clip(stroke_index, 0, len(vertices) - 2))
+        expected_segment = vertices[index + 1] - vertices[index]
+        expected_direction = float(np.arctan2(expected_segment[1], expected_segment[0]))
+        direction_offset = _wrapped_angle(expected_direction - passage.direction)
+        inferred_direction = float((direction - direction_offset) % (2.0 * np.pi))
+        segment_centers = 0.5 * (vertices[:-1] + vertices[1:])
+        expected_center = segment_centers.mean(axis=0)
+        segment_offset = segment_centers[index] - expected_center
+        inferred_center = mark_center - segment_offset
+        inferred_length = length * max(2, int(passage.stroke_count))
+    else:
+        midpoint = 0.5 * (passage.stroke_count - 1)
+        offset = float(stroke_index - midpoint) * passage.spacing
+        passage_direction = np.asarray([np.cos(direction), np.sin(direction)])
+        passage_normal = np.asarray([-passage_direction[1], passage_direction[0]])
+        offset_direction = passage_direction if passage.kind == "chain" else passage_normal
+        inferred_center = mark_center - offset * offset_direction
+        inferred_direction = direction
+        inferred_length = length
     mean = np.asarray(
         [
             inferred_center[0],
             inferred_center[1],
-            direction,
-            length,
+            inferred_direction,
+            inferred_length,
             passage.spacing,
             action.width,
             action.amount,
@@ -225,6 +238,20 @@ def _vector_to_latent(values: np.ndarray, template: PassageLatent, tone: float) 
         amount=float(values[6]),
         tone=float(tone),
     )
+
+
+def _clip_latent_values(values: np.ndarray, kind: str) -> np.ndarray:
+    clipped = np.asarray(values, dtype=np.float64).copy()
+    clipped[0:2] = np.clip(clipped[0:2], 0.03, 0.97)
+    clipped[2] %= 2.0 * np.pi
+    clipped[3] = np.clip(clipped[3], 0.04, 0.86 if kind == "polyline" else 1.0)
+    clipped[4] = (
+        np.clip(clipped[4], -1.2, 1.2)
+        if kind == "polyline"
+        else np.clip(clipped[4], 0.01, 1.0)
+    )
+    clipped[5:] = np.clip(clipped[5:], 0.01, 1.0)
+    return clipped
 
 
 def _wrapped_angle(value: float) -> float:

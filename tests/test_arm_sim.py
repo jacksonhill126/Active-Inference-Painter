@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 
 from active_painter.arm_control import ik_pose_for_canvas_point
-from active_painter.arm_sim import ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, clip_scalar, safe_home_pose
+from active_painter.arm_sim import Brush, ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, clip_scalar, safe_home_pose
 from active_painter.config import PainterConfig
 
 
@@ -10,6 +10,41 @@ def test_arm_kinematics_home_reaches_forward() -> None:
     sim = ArmPainterSim(PainterConfig())
     tip = sim.kinematics.tip(ArmPose())
     assert np.allclose(tip, np.asarray([0.0, 26.0, 0.0]))
+
+
+def test_upper_arm_roll_rotates_elbow_hinge_without_moving_upper_arm() -> None:
+    sim = ArmPainterSim(PainterConfig())
+    negative = ArmPose(yaw=14.0, pitch=-38.0, roll=-32.0, elbow=92.0)
+    positive = ArmPose(yaw=14.0, pitch=-38.0, roll=32.0, elbow=92.0)
+
+    negative_points = sim.kinematics.joint_points(negative)
+    positive_points = sim.kinematics.joint_points(positive)
+    upper_axis = sim.kinematics.upper_arm_axis(positive)
+    negative_hinge = sim.kinematics.elbow_hinge_axis(negative)
+    positive_hinge = sim.kinematics.elbow_hinge_axis(positive)
+
+    assert np.allclose(negative_points[1], positive_points[1])
+    assert not np.allclose(negative_points[2], positive_points[2])
+    assert np.linalg.norm(upper_axis) == pytest.approx(1.0)
+    assert np.dot(upper_axis, negative_hinge) == pytest.approx(0.0, abs=1e-12)
+    assert np.dot(upper_axis, positive_hinge) == pytest.approx(0.0, abs=1e-12)
+    assert not np.allclose(negative_hinge, positive_hinge)
+
+
+@pytest.mark.parametrize("roll_deg", [-32.0, 0.0, 32.0])
+def test_fixed_roll_ik_reaches_the_same_canvas_target(roll_deg: float) -> None:
+    sim = ArmPainterSim(PainterConfig())
+    target = np.asarray([4.0, 17.0, -3.0])
+
+    pose = ik_pose_for_canvas_point(
+        float(target[0]),
+        float(target[2]),
+        float(target[1]),
+        upper_arm_roll_deg=roll_deg,
+    )
+
+    assert pose.roll == pytest.approx(roll_deg)
+    assert sim.kinematics.tip(pose) == pytest.approx(target, abs=1e-10)
 
 
 def test_scalar_clip_matches_bounded_semantics_and_preserves_nan() -> None:
@@ -46,6 +81,18 @@ def test_vertical_canvas_white_paint_increases_material_coverage() -> None:
     assert canvas.visible_tone().mean() < 0.01
 
 
+def test_vertical_canvas_layering_does_not_increase_covered_area() -> None:
+    cfg = PainterConfig(canvas_size=16)
+    canvas = VerticalCanvas(cfg)
+    canvas.thickness[4:12, 3:9] = 2.0 * cfg.paint_presence_threshold
+
+    first_coat_coverage = canvas.material_coverage()
+    canvas.thickness[4:12, 3:9] *= 20.0
+
+    assert canvas.material_coverage() == first_coat_coverage
+    assert first_coat_coverage == pytest.approx(48.0 / 256.0)
+
+
 def test_vertical_canvas_observed_tone_composites_paint_against_gray_ground() -> None:
     canvas = VerticalCanvas(PainterConfig(canvas_size=32, canvas_ground_tone=0.34))
     blank_tone = canvas.observed_tone()
@@ -75,7 +122,7 @@ def test_vertical_canvas_default_paint_deposition_is_more_opaque_than_old_rate()
     old_canvas.paint_at(point, pressure=0.55, tone=1.0, dt=1.0 / 240.0)
     opaque_canvas.paint_at(point, pressure=0.55, tone=1.0, dt=1.0 / 240.0)
 
-    assert opaque_canvas.material_coverage() > old_canvas.material_coverage() * 2.0
+    assert opaque_canvas.surface_opacity_field().mean() > old_canvas.surface_opacity_field().mean() * 2.0
     assert opaque_canvas.thickness.max() > old_canvas.thickness.max() * 2.0
 
 
@@ -146,6 +193,227 @@ def test_oil_paint_wetness_persists_while_brush_is_lifted() -> None:
         sim.step(1.0 / 240.0)
 
     assert np.array_equal(sim.canvas.wetness, wetness_after_paint)
+
+
+def _drag(canvas: VerticalCanvas, brush: Brush | None, x0: float, x1: float, z: float,
+          pressure: float, tone: float, steps: int, dt: float = 1.0 / 90.0) -> None:
+    """Deposit a straight horizontal drag as swept stamps, mirroring how
+    ArmPainterSim.step feeds motion + brush into paint_at."""
+    prev = None
+    for x in np.linspace(x0, x1, steps):
+        point = np.asarray([x, canvas.distance, z])
+        motion = None if (brush is None or prev is None) else (point - prev)
+        canvas.paint_at(point, pressure, tone, dt, motion=motion, brush=brush)
+        prev = point
+
+
+def test_paint_at_legacy_call_is_isotropic_with_unit_deposition() -> None:
+    # The bare 4-arg call (used by other tests and any legacy caller) must stay
+    # an isotropic disc that never runs out.
+    cfg = PainterConfig(canvas_size=64)
+    canvas = VerticalCanvas(cfg)
+    point = np.asarray([0.0, canvas.distance, 0.0])
+    for _ in range(200):
+        canvas.paint_at(point, pressure=0.7, tone=1.0, dt=1.0 / 90.0)
+    mask = canvas.thickness > 0
+    x_span = np.ptp(np.nonzero(mask.any(axis=0))[0])
+    y_span = np.ptp(np.nonzero(mask.any(axis=1))[0])
+    assert abs(x_span - y_span) <= 1  # isotropic
+    # Never runs out: the 200th stamp still deposits as much as the first.
+    single = VerticalCanvas(cfg)
+    single.paint_at(point, pressure=0.7, tone=1.0, dt=1.0 / 90.0)
+    assert canvas.thickness.max() > 100.0 * single.thickness.max()
+
+
+def test_brush_oil_does_not_dry_thickness_holds_along_a_long_stroke() -> None:
+    # Oil: a loaded brush lays paint at a consistent rate; the mark must not
+    # fade/thin from start to end of even a long stroke.
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    brush = Brush(cfg, np.random.default_rng(0))
+    brush.reload(amount=0.5, tone=1.0)
+    _drag(canvas, brush, x0=-8.0, x1=8.0, z=0.0, pressure=0.6, tone=1.0, steps=160)
+    row = int(round(canvas.world_to_pixel(0.0, 0.0)[1]))
+    profile = canvas.thickness[row]
+    nz = np.nonzero(profile)[0]
+    start = profile[nz[0] + len(nz) // 6:nz[0] + len(nz) // 3].mean()
+    end = profile[nz[-1] - len(nz) // 3:nz[-1] - len(nz) // 6].mean()
+    assert end > 0.7 * start  # no drying out toward the end
+
+
+def test_brush_loading_from_amount_scales_deposited_thickness() -> None:
+    # `amount` sets brush loading -> more paint means thicker, more opaque
+    # deposition, uniformly (not faster depletion).
+    cfg = PainterConfig(canvas_size=64)
+    thin_canvas = VerticalCanvas(cfg)
+    thick_canvas = VerticalCanvas(cfg)
+    point = np.asarray([0.0, thin_canvas.distance, 0.0])
+    light = Brush(cfg, np.random.default_rng(0)); light.reload(amount=0.1, tone=1.0)
+    heavy = Brush(cfg, np.random.default_rng(0)); heavy.reload(amount=1.0, tone=1.0)
+    thin_canvas.paint_at(point, 0.6, 1.0, 1.0 / 90.0, brush=light)
+    thick_canvas.paint_at(point, 0.6, 1.0, 1.0 / 90.0, brush=heavy)
+    assert thick_canvas.thickness.max() > 1.5 * thin_canvas.thickness.max()
+
+
+def test_brush_travel_direction_elongates_the_footprint() -> None:
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    brush = Brush(cfg, np.random.default_rng(0))
+    brush.reload(amount=1.0, tone=1.0)
+    point = np.asarray([0.0, canvas.distance, 0.0])
+    canvas.paint_at(point, 0.7, 1.0, 1.0 / 90.0, motion=np.asarray([4.0, 0.0, 0.0]), brush=brush)
+    mask = canvas.thickness > 0
+    x_span = np.ptp(np.nonzero(mask.any(axis=0))[0])
+    y_span = np.ptp(np.nonzero(mask.any(axis=1))[0])
+    assert x_span > y_span + 3  # swept along the travel (x) axis
+
+
+def test_brush_bristles_streak_across_the_stroke_width() -> None:
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    brush = Brush(cfg, np.random.default_rng(3))
+    brush.reload(amount=1.0, tone=1.0)
+    _drag(canvas, brush, x0=-6.0, x1=6.0, z=0.0, pressure=0.6, tone=1.0, steps=60)
+    mid_col = int(round(canvas.world_to_pixel(0.0, 0.0)[0]))
+    cross = canvas.thickness[:, mid_col]
+    cross = cross[cross > 0]
+    # A flat (bristle-free) disc drag would be near-uniform across its width.
+    assert cross.std() / cross.mean() > 0.02
+
+
+def test_brush_flow_taper_narrows_the_mark_toward_stroke_ends() -> None:
+    # A low flow (stroke end) must lay a narrower mark than full flow (middle).
+    cfg = PainterConfig(canvas_size=96)
+    point = np.asarray([0.0, 17.0, 0.0])
+    full = VerticalCanvas(cfg)
+    tip = VerticalCanvas(cfg)
+    bf = Brush(cfg, np.random.default_rng(0)); bf.reload(1.0, 1.0)
+    bt = Brush(cfg, np.random.default_rng(0)); bt.reload(1.0, 1.0)
+    full.paint_at(point, 0.7, 1.0, 1.0 / 90.0, brush=bf, flow=1.0)
+    tip.paint_at(point, 0.7, 1.0, 1.0 / 90.0, brush=bt, flow=0.1)
+    full_w = np.ptp(np.nonzero((full.thickness > 0).any(axis=1))[0]) if full.thickness.any() else 0
+    tip_w = np.ptp(np.nonzero((tip.thickness > 0).any(axis=1))[0]) if tip.thickness.any() else 0
+    assert tip_w < full_w
+
+
+def test_canvas_grain_lets_light_pressure_leave_bare_tooth() -> None:
+    # Under grain at full strength (the default), a light-pressure stroke must
+    # NOT fully cover its footprint: unreached valleys stay genuinely bare.
+    cfg = PainterConfig(canvas_size=96)
+    assert cfg.canvas_grain_strength == 1.0
+    grained = VerticalCanvas(cfg)
+    b = Brush(cfg, np.random.default_rng(0)); b.reload(1.0, 1.0)
+    prev = None
+    for x in np.linspace(-3.0, 3.0, 60):
+        p = np.asarray([x, 17.0, 0.0])
+        m = None if prev is None else p - prev
+        grained.paint_at(p, 0.2, 1.0, 1.0 / 90.0, motion=m, brush=b)  # light pressure
+        prev = p
+    # Within the mark's bounding box there are both painted and bare cells.
+    rows = np.nonzero((grained.thickness > 0).any(axis=1))[0]
+    cols = np.nonzero((grained.thickness > 0).any(axis=0))[0]
+    box = grained.thickness[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    painted_fraction = float((box > 0).mean())
+    assert 0.05 < painted_fraction < 0.95  # textured, not solid
+
+
+def test_bristle_furrows_do_not_split_a_stroke_end_to_end() -> None:
+    # Dry-hair gaps must open and close along the path: no lane of the mark may
+    # stay unpainted for the whole stroke length (that reads as a split stroke).
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    brush = Brush(cfg, np.random.default_rng(5))
+    brush.reload(amount=1.0, tone=1.0)
+    _drag(canvas, brush, x0=-8.0, x1=8.0, z=0.0, pressure=0.6, tone=1.0, steps=200)
+    mask = canvas.thickness > 0
+    rows = np.nonzero(mask.any(axis=1))[0]
+    cols = np.nonzero(mask.any(axis=0))[0]
+    # middle 60% of the stroke, interior lanes only
+    c_lo = cols.min() + int(0.2 * len(cols))
+    c_hi = cols.max() - int(0.2 * len(cols))
+    interior = mask[rows.min() + 1:rows.max(), c_lo:c_hi]
+    lane_has_paint = interior.any(axis=1)
+    assert lane_has_paint.all()
+
+
+def test_brush_dab_is_not_a_perfect_circle() -> None:
+    # The per-stroke edge wobble must make even a stationary dab irregular
+    # (tested at the web canvas resolution, where the brush spans real pixels).
+    cfg = PainterConfig(canvas_size=256)
+    from dataclasses import replace as dc_replace
+    round_cfg = dc_replace(cfg, brush_edge_wobble=0.0)
+    point = np.asarray([0.0, 17.0, 0.0])
+    wobbled = VerticalCanvas(cfg)
+    perfect = VerticalCanvas(round_cfg)
+    bw = Brush(cfg, np.random.default_rng(3)); bw.reload(1.0, 1.0)
+    bp = Brush(round_cfg, np.random.default_rng(3)); bp.reload(1.0, 1.0)
+    for _ in range(30):
+        wobbled.paint_at(point, 0.8, 1.0, 1.0 / 90.0, brush=bw)
+        perfect.paint_at(point, 0.8, 1.0, 1.0 / 90.0, brush=bp)
+    assert not np.array_equal(wobbled.thickness > 0, perfect.thickness > 0)
+
+
+def test_stroke_sampler_never_collapses_edge_strokes_into_dabs() -> None:
+    # Clipping endpoints used to fold edge strokes onto their start point; the
+    # sampler must now preserve the sampled length by shifting inward.
+    from active_painter.policies import PolicySampler
+    cfg = PainterConfig()
+    sampler = PolicySampler(cfg, seed=0)
+    for _ in range(500):
+        action = sampler._stroke()
+        length = float(np.hypot(action.x1 - action.x0, action.y1 - action.y0))
+        assert length > 0.19
+
+
+def test_brush_pickup_conserves_pigment_between_canvas_and_brush() -> None:
+    # The dirty-brush transfer moves pigment between the canvas ledger and the
+    # held reservoir; a white brush adds volume but zero black, so total black
+    # (canvas + brush head) must be exactly conserved through the drag.
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    black = Brush(cfg, np.random.default_rng(1))
+    black.reload(amount=1.0, tone=1.0)
+    _drag(canvas, black, x0=-6.0, x1=-1.0, z=0.0, pressure=0.8, tone=1.0, steps=60)
+    # Paint still held by the black brush leaves the system at pen-up (the
+    # per-stroke reset is a brush clean), so conservation is over the white
+    # drag alone: canvas black before = canvas black after + white brush head.
+    canvas_black_before = float(canvas.black_mass.sum())
+    white = Brush(cfg, np.random.default_rng(2))
+    white.reload(amount=1.0, tone=0.0)
+    _drag(canvas, white, x0=-5.0, x1=6.0, z=0.0, pressure=0.7, tone=0.0, steps=80)
+    canvas_black_after = float(canvas.black_mass.sum())
+    assert canvas_black_after + white.held_black == pytest.approx(canvas_black_before, rel=1e-5)
+
+
+def test_brush_drags_picked_up_paint_beyond_the_wet_patch() -> None:
+    # Blending is transport, not tinting: black picked up inside the patch must
+    # be redeposited past the patch's original right edge.
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    black = Brush(cfg, np.random.default_rng(1))
+    black.reload(amount=1.0, tone=1.0)
+    _drag(canvas, black, x0=-6.0, x1=-2.0, z=0.0, pressure=0.8, tone=1.0, steps=60)
+    edge_col = int(round(canvas.world_to_pixel(-2.0, 0.0)[0]))
+    beyond = np.s_[:, edge_col + 8:]
+    black_beyond_before = float(canvas.black_mass[beyond].sum())
+    white = Brush(cfg, np.random.default_rng(2))
+    white.reload(amount=1.0, tone=0.0)
+    _drag(canvas, white, x0=-5.0, x1=6.0, z=0.0, pressure=0.7, tone=0.0, steps=80)
+    black_beyond_after = float(canvas.black_mass[beyond].sum())
+    assert black_beyond_after > black_beyond_before + 1e-6
+
+
+def test_brush_wet_smear_bleeds_carried_tone_along_the_stroke() -> None:
+    cfg = PainterConfig(canvas_size=96)
+    canvas = VerticalCanvas(cfg)
+    black = Brush(cfg, np.random.default_rng(1))
+    black.reload(amount=1.0, tone=1.0)
+    _drag(canvas, black, x0=-7.0, x1=-3.0, z=0.0, pressure=0.8, tone=1.0, steps=40)
+    white = Brush(cfg, np.random.default_rng(2))
+    white.reload(amount=1.0, tone=0.0)
+    assert white.carried_tone == 0.0
+    _drag(canvas, white, x0=-6.0, x1=6.0, z=0.0, pressure=0.7, tone=0.0, steps=60)
+    assert white.carried_tone > 0.0  # picked up wet black it dragged through
 
 
 def test_joint_plant_moves_actual_pose_toward_target_without_selecting_policy() -> None:

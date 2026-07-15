@@ -5,24 +5,61 @@ import numpy as np
 from .arm_sim import ArmPose, clip_scalar
 
 
-def ik_pose_for_canvas_point(x: float, z: float, depth: float, elbow_up: bool = True) -> ArmPose:
-    """Conventional 2-link IK that realizes a Cartesian canvas contact target."""
+def ik_pose_for_canvas_point(
+    x: float,
+    z: float,
+    depth: float,
+    elbow_up: bool = True,
+    *,
+    upper_arm_roll_deg: float = 0.0,
+) -> ArmPose:
+    """Conventional fixed-roll IK for a Cartesian canvas contact target.
+
+    Roll is redundant with respect to tip position. Fixing it first leaves an
+    analytic three-joint solve for yaw, pitch, and elbow, giving the motor
+    planner a family of exact contact poses rather than a visual-only roll.
+    """
     l1 = 13.0
     l2 = 13.0
-    yaw = np.rad2deg(np.arctan2(-x, depth))
     radial = float(np.hypot(x, depth))
     dist2 = radial * radial + z * z
     cos_elbow = clip_scalar((dist2 - l1 * l1 - l2 * l2) / (2.0 * l1 * l2), -1.0, 1.0)
     elbow = float(np.arccos(cos_elbow))
     if not elbow_up:
         elbow = -elbow
-    pitch = float(np.arctan2(z, radial) - np.arctan2(l2 * np.sin(elbow), l1 + l2 * np.cos(elbow)))
-    return ArmPose(
-        yaw=clip_scalar(yaw, -90.0, 90.0),
-        pitch=clip_scalar(np.rad2deg(pitch), -90.0, 90.0),
-        roll=0.0,
-        elbow=clip_scalar(np.rad2deg(elbow), 0.0, 150.0),
-    )
+    roll = np.deg2rad(clip_scalar(upper_arm_roll_deg, -180.0, 180.0))
+
+    # In the rolled shoulder frame, the bent forearm has a fixed lateral
+    # component. Yaw chooses the plane containing that component; pitch then
+    # aligns the remaining in-plane vector with the target height/depth.
+    lateral = l2 * np.sin(roll) * np.sin(elbow)
+    if radial <= 1e-9 or abs(lateral) > radial + 1e-7:
+        raise ValueError("Canvas target is unreachable at the requested upper-arm roll.")
+    target_angle = float(np.arctan2(depth, x))
+    yaw_offset = float(np.arccos(clip_scalar(lateral / radial, -1.0, 1.0)))
+    yaw_candidates = (target_angle - yaw_offset, target_angle + yaw_offset)
+    legacy_yaw = float(np.arctan2(-x, depth))
+    poses: list[tuple[float, ArmPose]] = []
+    for yaw in yaw_candidates:
+        in_plane_depth = -x * np.sin(yaw) + depth * np.cos(yaw)
+        shoulder_depth = l1 + l2 * np.cos(elbow)
+        shoulder_height = l2 * np.cos(roll) * np.sin(elbow)
+        pitch = float(
+            np.arctan2(z, in_plane_depth)
+            - np.arctan2(shoulder_height, shoulder_depth)
+        )
+        raw_yaw_deg = float(np.rad2deg(yaw))
+        raw_pitch_deg = float(np.rad2deg(pitch))
+        pose = ArmPose(
+            yaw=clip_scalar(raw_yaw_deg, -90.0, 90.0),
+            pitch=clip_scalar(raw_pitch_deg, -90.0, 90.0),
+            roll=float(np.rad2deg(roll)),
+            elbow=clip_scalar(np.rad2deg(elbow), 0.0, 150.0),
+        )
+        limit_clipping = abs(raw_yaw_deg - pose.yaw) + abs(raw_pitch_deg - pose.pitch)
+        branch_distance = abs(float(np.arctan2(np.sin(yaw - legacy_yaw), np.cos(yaw - legacy_yaw))))
+        poses.append((1e4 * limit_clipping + branch_distance, pose))
+    return min(poses, key=lambda item: item[0])[1]
 
 
 def scripted_pose(t: float) -> ArmPose:

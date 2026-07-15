@@ -22,6 +22,8 @@ class MotorPrimitiveLatent:
     scope: str = "first_stroke"
     pivot_joint: str = ""
     description: str = ""
+    roll_start_deg: float = 0.0
+    roll_end_deg: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +32,10 @@ class PassageLatent:
 
     This is not an outcome preference or reward. It is a transition prior over
     mark trajectories: a latent passage generates several strokes that share a
-    coarse region, direction, scale, tone, and amount. EFE still evaluates the
-    predicted consequences of the completed policy, including terminal stop.
+    coarse region, direction, scale, tone, and amount. For `polyline`, length is
+    total path length and spacing is the signed turn in radians between
+    connected straight segments. EFE still evaluates every predicted segment
+    consequence and the completed policy, including terminal stop.
     """
 
     kind: str
@@ -44,6 +48,49 @@ class PassageLatent:
     width: float
     amount: float
     tone: float
+
+    @property
+    def turn(self) -> float:
+        return float(self.spacing) if self.kind == "polyline" else 0.0
+
+
+def _polyline_relative_vertices(latent: PassageLatent) -> np.ndarray:
+    segment_count = max(2, int(latent.stroke_count))
+    total_length = float(np.clip(latent.length, 0.04, 0.86))
+    turn = float(np.clip(latent.spacing, -1.2, 1.2))
+    center_index = 0.5 * (segment_count - 1)
+    angles = latent.direction + (np.arange(segment_count, dtype=np.float64) - center_index) * turn
+    segment_length = total_length / segment_count
+    vertices = np.zeros((segment_count + 1, 2), dtype=np.float64)
+    for index, angle in enumerate(angles):
+        vertices[index + 1] = vertices[index] + segment_length * np.asarray(
+            [np.cos(angle), np.sin(angle)], dtype=np.float64
+        )
+    segment_centers = 0.5 * (vertices[:-1] + vertices[1:])
+    return vertices - segment_centers.mean(axis=0, keepdims=True)
+
+
+def fit_polyline_latent(latent: PassageLatent, margin: float = 0.03) -> PassageLatent:
+    """Shift a polyline center inward while preserving all segment geometry."""
+
+    if latent.kind != "polyline":
+        return latent
+    relative = _polyline_relative_vertices(latent)
+    lower = float(margin) - relative.min(axis=0)
+    upper = 1.0 - float(margin) - relative.max(axis=0)
+    requested = np.asarray([latent.center_x, latent.center_y], dtype=np.float64)
+    center = np.clip(requested, lower, upper)
+    return replace(latent, center_x=float(center[0]), center_y=float(center[1]))
+
+
+def polyline_vertices(latent: PassageLatent, margin: float = 0.03) -> np.ndarray:
+    """Decode one low-dimensional passage latent into connected vertices."""
+
+    if latent.kind != "polyline":
+        raise ValueError("Polyline vertices require a polyline passage latent.")
+    fitted = fit_polyline_latent(latent, margin)
+    center = np.asarray([fitted.center_x, fitted.center_y], dtype=np.float64)
+    return _polyline_relative_vertices(fitted) + center
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +122,9 @@ class Policy:
     passage: PassageLatent | None = None
     passage_plan: PassagePlanLatent | None = None
     motor_primitive: MotorPrimitiveLatent | None = None
+    # Local receding-horizon inference can begin partway through a persistent
+    # passage. Zero denotes a globally proposed complete passage.
+    passage_start_index: int = 0
 
     def __post_init__(self) -> None:
         if not self.actions or not self.actions[-1].stop:
@@ -83,8 +133,19 @@ class Policy:
             raise ValueError("Stop may appear only as the final painting policy action.")
         if self.passage is not None and self.passage_plan is not None:
             raise ValueError("A policy may carry either passage or passage-plan metadata, not both.")
-        if self.passage is not None and len(self.actions) < 3:
+        if self.passage_start_index < 0:
+            raise ValueError("Passage start index must be non-negative.")
+        if self.passage is None and self.passage_start_index != 0:
+            raise ValueError("Passage start index requires passage metadata.")
+        if self.passage_plan is not None and self.passage_start_index != 0:
+            raise ValueError("Passage-plan policies must begin at their first passage.")
+        if self.passage is not None and len(self.actions) < 3 and self.passage_start_index == 0:
             raise ValueError("A passage policy must contain multiple marks before stop.")
+        if self.passage is not None:
+            mark_count = len(self.actions) - 1
+            remaining = self.passage.stroke_count - self.passage_start_index
+            if remaining < mark_count:
+                raise ValueError("Passage metadata does not contain all policy marks.")
         if self.motor_primitive is not None and self.actions[0].stop:
             raise ValueError("A motor realization latent requires a non-stop first action.")
         if self.passage_plan is not None:
@@ -98,7 +159,7 @@ class Policy:
         """Half-open mark-index ranges generated by each passage latent."""
 
         if self.passage is not None:
-            return ((0, self.passage.stroke_count),)
+            return ((0, len(self.actions) - 1),)
         if self.passage_plan is None:
             return ()
         boundaries: list[tuple[int, int]] = []
@@ -173,15 +234,20 @@ class PolicySampler:
     def _action_with_tone(action: StrokeAction, tone: float) -> StrokeAction:
         if action.stop:
             return action
-        return StrokeAction(
-            action.x0,
-            action.y0,
-            action.x1,
-            action.y1,
-            action.width,
-            action.amount,
-            float(tone),
-        )
+        return replace(action, tone=float(tone))
+
+    def _passage_kind(self, *, band_probability: float) -> str:
+        if self.rng.uniform() < np.clip(self.cfg.passage_polyline_mix, 0.0, 1.0):
+            return "polyline"
+        return "band" if self.rng.uniform() < band_probability else "chain"
+
+    def _passage_geometry(self, kind: str) -> tuple[float, float]:
+        if kind == "polyline":
+            total_length = float(self.rng.uniform(0.30, 0.72))
+            turn_magnitude = float(self.rng.uniform(0.18, 0.85))
+            turn = turn_magnitude if self.rng.uniform() < 0.5 else -turn_magnitude
+            return total_length, turn
+        return float(self.rng.uniform(0.16, 0.54)), float(self.rng.uniform(0.045, 0.15))
 
     def _policy_tone_alternatives(self, policy: Policy) -> list[Policy]:
         alternatives: list[Policy] = []
@@ -195,6 +261,7 @@ class PolicySampler:
                     passage=passage,
                     passage_plan=passage_plan,
                     motor_primitive=policy.motor_primitive,
+                    passage_start_index=policy.passage_start_index,
                 )
             )
         return alternatives
@@ -221,6 +288,11 @@ class PolicySampler:
     ) -> StrokeAction:
         dx = 0.5 * length * np.cos(angle)
         dy = 0.5 * length * np.sin(angle)
+        # Shift the center inward so the full sampled length fits: clipping the
+        # endpoints instead collapses edge strokes into dwell-dabs, which paint
+        # as solid discs no real brush could make.
+        x = np.clip(x, 0.03 + abs(dx), 0.97 - abs(dx))
+        y = np.clip(y, 0.03 + abs(dy), 0.97 - abs(dy))
         x0 = np.clip(x - dx, 0.03, 0.97)
         y0 = np.clip(y - dy, 0.03, 0.97)
         x1 = np.clip(x + dx, 0.03, 0.97)
@@ -238,9 +310,18 @@ class PolicySampler:
     def _stroke(self, coverage_field: np.ndarray | None = None) -> StrokeAction:
         x0, y0 = self._start_point(coverage_field)
         angle = self.rng.uniform(0, 2 * np.pi)
-        length = self.rng.uniform(0.08, 0.48)
-        x1 = np.clip(x0 + length * np.cos(angle), 0.03, 0.97)
-        y1 = np.clip(y0 + length * np.sin(angle), 0.03, 0.97)
+        # Bias the proposal prior toward longer sweeps: short marks read as dabs
+        # (a round brush over a short span is a blob), so the candidate set now
+        # favours strokes long enough to show brush character.
+        length = self.rng.uniform(0.20, 0.60)
+        dxv = length * np.cos(angle)
+        dyv = length * np.sin(angle)
+        # Shift the start inward so the full length fits on canvas; clipping the
+        # endpoint instead collapses edge strokes into dwell-dabs (solid discs).
+        x0 = float(np.clip(x0, 0.03 + max(0.0, -dxv), 0.97 - max(0.0, dxv)))
+        y0 = float(np.clip(y0, 0.03 + max(0.0, -dyv), 0.97 - max(0.0, dyv)))
+        x1 = np.clip(x0 + dxv, 0.03, 0.97)
+        y1 = np.clip(y0 + dyv, 0.03, 0.97)
         # Log-uniform width: mostly fine marks with a heavy tail of broad ones,
         # so candidate policies span a real range of mark scales.
         width = float(np.exp(self.rng.uniform(np.log(0.03), np.log(0.30))))
@@ -254,12 +335,11 @@ class PolicySampler:
         stroke_count = int(self.rng.integers(min_strokes, max_strokes + 1))
         center_x, center_y = self._start_point(coverage_field)
         direction = float(self.rng.uniform(0, 2 * np.pi))
-        length = float(self.rng.uniform(0.16, 0.54))
-        spacing = float(self.rng.uniform(0.045, 0.15))
+        kind = self._passage_kind(band_probability=0.65)
+        length, spacing = self._passage_geometry(kind)
         width = float(np.exp(self.rng.uniform(np.log(0.035), np.log(0.24))))
         amount = float(self.rng.uniform(0.16, 0.7))
         tone = self._tone()
-        kind = "band" if self.rng.uniform() < 0.65 else "chain"
         latent = PassageLatent(
             kind=kind,
             center_x=float(center_x),
@@ -272,6 +352,7 @@ class PolicySampler:
             amount=amount,
             tone=tone,
         )
+        latent = fit_polyline_latent(latent)
         actions = self._passage_actions(latent)
         return Policy(tuple(actions) + (StrokeAction.stop_action(),), passage=latent)
 
@@ -279,6 +360,22 @@ class PolicySampler:
         return self._passage_actions(latent, start_index=start_index)
 
     def _passage_actions(self, latent: PassageLatent, start_index: int = 0) -> list[StrokeAction]:
+        if latent.kind == "polyline":
+            fitted = fit_polyline_latent(latent)
+            vertices = polyline_vertices(fitted)
+            return [
+                StrokeAction(
+                    float(vertices[index, 0]),
+                    float(vertices[index, 1]),
+                    float(vertices[index + 1, 0]),
+                    float(vertices[index + 1, 1]),
+                    float(np.clip(fitted.width, 0.02, 0.34)),
+                    float(np.clip(fitted.amount, 0.05, 0.95)),
+                    float(fitted.tone),
+                )
+                for index in range(max(0, int(start_index)), fitted.stroke_count)
+            ]
+
         direction = np.asarray([np.cos(latent.direction), np.sin(latent.direction)], dtype=np.float64)
         normal = np.asarray([-direction[1], direction[0]], dtype=np.float64)
         midpoint = 0.5 * (latent.stroke_count - 1)
@@ -348,7 +445,7 @@ class PolicySampler:
         for index, stroke_count in enumerate(stroke_counts):
             offset = index - midpoint
             passage_direction = direction + turn * offset
-            passage_kind = "band" if self.rng.uniform() < 0.55 else "chain"
+            passage_kind = self._passage_kind(band_probability=0.55)
             jitter = (
                 direction_vec * self.rng.normal(0.0, self.cfg.passage_plan_center_jitter)
                 + normal * self.rng.normal(0.0, self.cfg.passage_plan_center_jitter)
@@ -358,18 +455,20 @@ class PolicySampler:
                 + direction_vec * offset * self.cfg.passage_plan_spacing
                 + jitter
             )
+            passage_length, passage_spacing = self._passage_geometry(passage_kind)
             latent = PassageLatent(
                 kind=passage_kind,
                 center_x=float(np.clip(center[0], 0.05, 0.95)),
                 center_y=float(np.clip(center[1], 0.05, 0.95)),
                 direction=float(passage_direction),
-                length=float(self.rng.uniform(0.14, 0.48)),
-                spacing=float(self.rng.uniform(0.045, 0.13)),
+                length=passage_length,
+                spacing=passage_spacing,
                 stroke_count=int(stroke_count),
                 width=float(width * np.exp(self.rng.normal(0.0, 0.16))),
                 amount=float(amount * np.exp(self.rng.normal(0.0, 0.12))),
                 tone=tone,
             )
+            latent = fit_polyline_latent(latent)
             passages.append(latent)
             actions.extend(self._passage_actions(latent))
 

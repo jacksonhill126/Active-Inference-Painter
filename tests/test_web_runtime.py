@@ -67,6 +67,14 @@ def test_web_runtime_can_enable_spatial_material_planner() -> None:
     assert state["agent"]["spatialBelief"]["materialPyramid"][0]["name"] == "pixel"
     assert state["agent"]["spatialBelief"]["materialPyramid"][-1]["name"] == "planner"
     assert state["agent"]["markEvents"]["activeCount"] >= 0
+    hierarchy = state["agent"]["composition"]["hierarchy"]
+    assert hierarchy["canvas"]["dimensions"] == 32
+    assert hierarchy["relational"]["dimensions"] == 24
+    assert hierarchy["markSlots"] == 8
+    assert hierarchy["passageTrajectory"]["enabled"] is True
+    assert hierarchy["passageTrajectory"]["descriptorDimensions"] == 14
+    assert state["agent"]["composition"]["passageReplaySize"] == 0
+    assert state["agent"]["composition"]["passageStepReplaySize"] == 0
 
 
 def test_web_runtime_uses_bounded_passage_planning_budget() -> None:
@@ -192,6 +200,17 @@ def test_web_runtime_commands_update_modes_and_canvas_png() -> None:
     assert png.startswith(b"\x89PNG")
 
 
+def test_web_runtime_exposes_upper_arm_and_rolled_elbow_axes() -> None:
+    runtime = WebSimRuntime(canvas_size=32)
+    runtime.sim.actual_pose.roll = 31.0
+
+    state = runtime.state()
+
+    assert np.linalg.norm(state["upperArmAxis"]) == pytest.approx(1.0)
+    assert np.linalg.norm(state["elbowHingeAxis"]) == pytest.approx(1.0)
+    assert np.dot(state["upperArmAxis"], state["elbowHingeAxis"]) == pytest.approx(0.0, abs=1e-12)
+
+
 def test_web_canvas_png_renders_gray_ground_with_visible_white_and_black_paint() -> None:
     runtime = WebSimRuntime(
         canvas_size=32,
@@ -295,6 +314,10 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "VFE F" in main_js
     assert "Checkpoint" in main_js
     assert "retentionPolicy" in main_js
+    assert "Canvas transition risk" in main_js
+    assert "Relational transition risk" in main_js
+    assert "Relational observation" in main_js
+    assert "Passage kind support" in main_js
 
 
 def test_web_server_renders_literal_fallback_version_before_javascript_runs() -> None:
@@ -372,6 +395,35 @@ def test_web_runtime_max_speed_releases_state_lock_between_physics_steps() -> No
 
     assert state["maxSpeed"]
     assert elapsed < 0.5
+
+
+def test_spatial_replay_capacity_is_bounded_for_long_runs() -> None:
+    # Spatial transitions hold full-resolution material patches (~200 KB each),
+    # so the 50k default would grow the three replays to ~15-20 GB over a long
+    # run. The spatial driver must cap them well below that; summary mode (tiny
+    # 6-float states) keeps the large default.
+    spatial = WebSimRuntime(
+        canvas_size=64,
+        planner_state_kind="spatial_material",
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    agent = spatial.agent_driver.agent
+    for replay in (
+        agent.replay,
+        agent.composition_replay,
+        agent.passage_replay,
+        agent.passage_step_replay,
+    ):
+        assert replay.data.maxlen is not None and replay.data.maxlen <= 8_000
+
+    summary = WebSimRuntime(
+        canvas_size=64,
+        planner_state_kind="summary",
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    assert summary.agent_driver.agent.replay.data.maxlen == 50_000
 
 
 def test_web_runtime_retains_learned_training_across_new_painting() -> None:
