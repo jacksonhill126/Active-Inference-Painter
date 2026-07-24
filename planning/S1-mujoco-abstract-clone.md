@@ -1,13 +1,13 @@
-# M2: MuJoCo Abstract Clone
+# S1: MuJoCo Abstract Clone
 
 ## Summary
 
-M2 makes MuJoCo match the current Python arm simulator at the abstract
+S1 makes MuJoCo match the current Python arm simulator at the abstract
 kinematic and canvas-frame level. This milestone is not a calibrated hardware
 model. It exists so the controller can later swap plants without changing the
 painting policy.
 
-The Python simulator remains authoritative in M2. MuJoCo must match it before
+The Python simulator remains authoritative in S1. MuJoCo must match it before
 physical motor offsets, joint housings, hard stops, CAD geometry, or hardware
 constraints are introduced.
 
@@ -153,7 +153,7 @@ Suggested command:
 simulate "C:\Users\jxnhi\Documents\Active Inference Painter\models\active_inference_painter.xml"
 ```
 
-### T-209 M2 lock decision
+### T-209 S1 lock decision
 
 Status: `Backlog`  
 Track: Validation  
@@ -163,14 +163,14 @@ Estimate: 0.5 day
 
 Acceptance:
 
-- M2 is locked only if XML tests pass, MuJoCo load succeeds or is explicitly
+- S1 is locked only if XML tests pass, MuJoCo load succeeds or is explicitly
   blocked by missing optional dependency, and manual viewer issues are triaged.
-- M3 backend work may begin only after the tip-site coordinate contract is
+- S2 backend work may begin only after the tip-site coordinate contract is
   accepted.
 
 ## Validation Gate
 
-M2 is complete when:
+S1 is complete when:
 
 - MuJoCo XML constants match the Python simulator.
 - Forward kinematics parity is tested for representative poses.
@@ -187,11 +187,10 @@ M2 is complete when:
   actually misaligned.
 - Viewer aesthetics get mistaken for measured robot geometry.
 
-## M2 Output Artifacts
+## S1 Output Artifacts
 
 - MuJoCo abstract XML model.
 - XML constant and optional compile tests.
 - Model documentation for exact versus approximate fields.
 - Forward-kinematics parity result.
-- M2 lock note or blocker list.
-
+- S1 lock note or blocker list.

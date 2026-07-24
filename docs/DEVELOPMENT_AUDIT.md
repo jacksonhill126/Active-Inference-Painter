@@ -1,4 +1,7 @@
-# Active-Inference Painter Audit Notes
+# Active-Inference Painter Development Audit
+
+This is the historical engineering audit and change record for the early
+prototype. Current milestone status is maintained in `planning/`.
 
 ## 2026-07-06 third pass (reachability and stroke realization)
 

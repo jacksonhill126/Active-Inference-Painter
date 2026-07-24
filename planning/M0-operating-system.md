@@ -20,7 +20,7 @@ runtime behavior.
 
 ### T-001 Define tracker conventions
 
-Status: `Ready`  
+Status: `Done`  
 Track: Operations  
 Depends on: none  
 Owner: Jackson/Codex  
@@ -36,10 +36,12 @@ Acceptance:
 Notes:
 
 - The first implementation lives in `planning/PROJECT_TRACKER.md`.
+- Accepted 2026-07-23. The tracker now defines required fields, dependency
+  semantics, status transitions, validation evidence, and gate acceptance.
 
 ### T-002 Define versioning scheme
 
-Status: `Ready`  
+Status: `Done`  
 Track: Operations  
 Depends on: T-001  
 Owner: Jackson/Codex  
@@ -51,9 +53,14 @@ Acceptance:
 - Define how versions are recorded in run outputs.
 - Include examples such as `mujoco-abstract-v0`, `cad-proto-a`, `calib-none`, and `hardware-none`.
 
+Notes:
+
+- Accepted 2026-07-23 in `planning/VERSIONING.md` and
+  `planning/templates/version-manifest.example.json`.
+
 ### T-003 Define experiment manifest requirements
 
-Status: `Ready`  
+Status: `Done`  
 Track: Research Ops  
 Depends on: T-001, T-002  
 Owner: Jackson/Codex  
@@ -65,9 +72,14 @@ Acceptance:
 - List required traces: VFE, EFE, policy posterior, telemetry, canvas snapshots, and failure notes.
 - State that manifests must distinguish active-inference terms from conventional support engineering.
 
+Notes:
+
+- Accepted 2026-07-23 in `planning/EXPERIMENT_MANIFEST.md` and
+  `planning/templates/experiment-manifest.example.json`.
+
 ### T-004 Define failure-mode log
 
-Status: `Ready`  
+Status: `Done`  
 Track: Validation  
 Depends on: T-001  
 Owner: Jackson/Codex  
@@ -79,9 +91,14 @@ Acceptance:
 - Define fields: symptom, reproduction, suspected cause, severity, mitigation, status, and linked task.
 - Include the rule that failures are preserved as evidence unless they are irrelevant environment noise.
 
+Notes:
+
+- Accepted 2026-07-23 in `planning/FAILURE_LOG.md` and
+  `planning/templates/failure-log.example.jsonl`.
+
 ### T-005 Define validation gates
 
-Status: `Backlog`  
+Status: `Ready`  
 Track: Validation  
 Depends on: T-003, T-004  
 Owner: Jackson/Codex  
@@ -95,7 +112,7 @@ Acceptance:
 
 ### T-006 Create milestone index
 
-Status: `Backlog`  
+Status: `Done`  
 Track: Operations  
 Depends on: T-001  
 Owner: Jackson/Codex  
@@ -104,8 +121,12 @@ Estimate: 0.5 day
 Acceptance:
 
 - List all milestone planner files to be created later.
-- Include status summary for M0-M8.
+- Include status summaries for M0-M8 and S0-S2.
 - Include dependency map from M0 through hardware research runs.
+
+Notes:
+
+- Accepted 2026-07-23 in `planning/MILESTONE_INDEX.md`.
 
 ## Validation
 
@@ -118,4 +139,3 @@ Acceptance:
 - `planning/` is the canonical folder for planning artifacts.
 - `PROJECT_TRACKER.md` is the current source of task status.
 - The Python simulator remains canonical until a measured physical model exists.
-

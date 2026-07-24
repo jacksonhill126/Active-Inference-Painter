@@ -1,8 +1,8 @@
-# M3: MuJoCo Backend Adapter
+# S2: MuJoCo Backend Adapter
 
 ## Summary
 
-M3 connects the existing controller and painting loop to MuJoCo without changing
+S2 connects the existing controller and painting loop to MuJoCo without changing
 painting-policy semantics. The backend adapter should let the current runtime
 drive either the native Python simulator or MuJoCo through the same controller
 surface.
@@ -29,7 +29,7 @@ owns paint deposition and canvas state.
 
 Status: `Backlog`  
 Track: Architecture  
-Depends on: M1, M2  
+Depends on: S0, S1  
 Owner: TBD  
 Estimate: 1-2 days
 
@@ -188,7 +188,7 @@ Acceptance:
   coverage.
 - Differences are recorded as calibration needs, not hidden as test noise.
 
-### T-310 M3 lock decision
+### T-310 S2 lock decision
 
 Status: `Backlog`  
 Track: Validation  
@@ -198,13 +198,13 @@ Estimate: 0.5 day
 
 Acceptance:
 
-- M3 is locked only if the controller can drive MuJoCo through the backend
+- S2 is locked only if the controller can drive MuJoCo through the backend
   interface and live paint updates through the existing material model.
 - Any deferred forecasting or telemetry gaps are documented before M4.
 
 ## Validation Gate
 
-M3 is complete when:
+S2 is complete when:
 
 - Controller-facing backend surface exists and is used by native and MuJoCo
   paths.
@@ -222,12 +222,11 @@ M3 is complete when:
   condition.
 - Motor forecast rollouts are added before copy/reset determinism is solved.
 
-## M3 Output Artifacts
+## S2 Output Artifacts
 
 - Backend interface or protocol documentation.
 - MuJoCo backend implementation plan result.
 - Scripted-stroke smoke test result.
 - Web backend-selection behavior.
 - Telemetry compatibility note.
-- M3 lock note or blocker list.
-
+- S2 lock note or blocker list.

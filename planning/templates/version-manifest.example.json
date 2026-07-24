@@ -1,0 +1,53 @@
+{
+  "schema_version": "version-manifest-v1",
+  "run_id": "2026-07-23T153000Z_dev_0001",
+  "created_at_utc": "2026-07-23T15:30:00Z",
+  "code": {
+    "package_version": "0.1.0",
+    "viewer_build": "0.1.0+code.41",
+    "git_commit": "0123456789abcdef0123456789abcdef01234567",
+    "git_dirty": true,
+    "source_fingerprint_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "artifacts": {
+    "native_plant": {
+      "label": "native-abstract-v0",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "mujoco_model": {
+      "label": "mujoco-none",
+      "sha256": null
+    },
+    "agent_model": {
+      "label": "agent-spatial-v0",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "cad": {
+      "label": "cad-none",
+      "sha256": null
+    },
+    "calibration": {
+      "label": "calib-none",
+      "sha256": null
+    },
+    "hardware": {
+      "label": "hardware-none",
+      "sha256": null
+    },
+    "experiment_config": {
+      "label": "experiment-dev-default-v0",
+      "path": "config/resolved-config.json",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "checkpoint": {
+      "label": "checkpoint-none",
+      "path": null,
+      "sha256": null,
+      "load_status": "not_requested"
+    }
+  },
+  "related_files": {
+    "experiment_manifest": "experiment-manifest.json",
+    "failure_log": "failure-log.jsonl"
+  }
+}

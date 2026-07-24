@@ -1,17 +1,19 @@
-# M1: Baseline Lock
+# S0: Plant Reference Contract
 
 ## Summary
 
-M1 establishes the current Python implementation as the canonical abstract
-baseline before MuJoCo, CAD, or hardware become authoritative. The goal is to
-make the existing simulator, material model, controller boundary, telemetry,
-and tests explicit enough that later robotics work can be compared against a
-stable reference.
+S0 establishes the current Python implementation as a versioned abstract
+reference while MuJoCo, CAD, control, and active-inference work continue in
+parallel. The goal is to make the simulator, material model, command and
+observation schemas, controller boundary, telemetry, and tests explicit enough
+that later implementations can be compared against a reproducible reference.
 
-This milestone does not add new robotics capability. It freezes assumptions,
-documents known shortcuts, and records a passing baseline.
+This milestone does not freeze controller gains, trajectory algorithms,
+dynamics fidelity, geometry estimates, or mechanical design. Those may change
+under new versions. S0 stabilizes interfaces and provenance, documents known
+shortcuts, and records a passing reference baseline.
 
-## Baseline Contracts
+## Reference Contracts
 
 - The Python `ArmPainterSim` is the abstract reference plant until measured
   hardware geometry exists.
@@ -29,7 +31,7 @@ documents known shortcuts, and records a passing baseline.
 
 ### T-101 Confirm Python arm sim as canonical abstract reference
 
-Status: `Ready`  
+Status: `Backlog`  
 Track: Simulation  
 Depends on: M0  
 Owner: Jackson/Codex  
@@ -41,7 +43,7 @@ Acceptance:
   canvas frame, contact depth, and brush radius behavior.
 - Identify which fields are abstract simulator truth versus representative
   placeholders.
-- Record that MuJoCo M2 should match these constants before introducing
+- Record that MuJoCo S1 should match these constants before introducing
   measured physical offsets.
 
 Implementation notes:
@@ -50,9 +52,9 @@ Implementation notes:
   `src/active_painter/arm_control.py`, `models/README.md`.
 - Relevant tests: `tests/test_arm_sim.py`, `tests/test_mujoco_model.py`.
 
-### T-102 Lock canvas material invariants
+### T-102 Version and protect canvas material invariants
 
-Status: `Ready`  
+Status: `Backlog`  
 Track: Painting Model  
 Depends on: M0  
 Owner: Jackson/Codex  
@@ -74,9 +76,9 @@ Implementation notes:
 - Relevant tests: `tests/test_canvas.py`, `tests/test_arm_sim.py`,
   `tests/test_spatial_state.py`.
 
-### T-103 Lock controller and policy boundary
+### T-103 Define controller, plant, and policy interfaces
 
-Status: `Ready`  
+Status: `Backlog`  
 Track: Control  
 Depends on: T-101  
 Owner: Jackson/Codex  
@@ -91,6 +93,9 @@ Acceptance:
   not an aesthetic or motor-ease reward.
 - Confirm hard joint/current/workspace/watchdog limits remain external safety
   constraints.
+- Define the backend-neutral command, sensor, timestamp, and capability fields
+  needed by native, MuJoCo, and eventual hardware implementations.
+- State explicitly that low-level control laws and gains remain replaceable.
 
 Implementation notes:
 
@@ -103,7 +108,7 @@ Implementation notes:
 
 ### T-104 Record full baseline test result
 
-Status: `Ready`  
+Status: `Backlog`  
 Track: Validation  
 Depends on: T-101, T-102, T-103  
 Owner: Jackson/Codex  
@@ -174,9 +179,9 @@ Acceptance:
 
 Suggested sources:
 
-- `AUDIT.md`
+- `docs/DEVELOPMENT_AUDIT.md`
 - `README.md`
-- `RESEARCH_CHARTER.md`
+- `docs/RESEARCH_CHARTER.md`
 
 ### T-107 Define baseline artifact bundle
 
@@ -194,7 +199,7 @@ Acceptance:
 - Bundle records code version, backend, planner mode, canvas size, and random
   seeds where available.
 
-### T-108 Baseline lock decision
+### T-108 S0 reference-contract decision
 
 Status: `Backlog`  
 Track: Validation  
@@ -204,14 +209,16 @@ Estimate: 0.5 day
 
 Acceptance:
 
-- Mark M1 as locked only if baseline tests pass or failures are documented and
-  judged non-blocking.
-- State whether M2 MuJoCo work may use the current Python sim as reference.
-- Record any blocking issues as tracker tasks before moving to M2/M3.
+- Accept the S0 reference contract only if baseline tests pass or failures are
+  documented and judged non-blocking for the intended comparison.
+- State whether S1 MuJoCo work may use the current Python sim as reference.
+- List which fields are stable interfaces and which plant/controller details
+  remain provisional.
+- Record any blocking issues as tracker tasks before moving to S1/S2.
 
-## Validation Gate
+## Reference Gate
 
-M1 is complete when:
+S0 is complete when:
 
 - The current Python simulator is explicitly documented as the abstract
   reference.
@@ -220,21 +227,25 @@ M1 is complete when:
 - A baseline test result is recorded.
 - Web runtime and telemetry behavior have a known reference.
 - Known shortcuts are documented rather than hidden.
+- Subsequent controller, geometry, or dynamics revisions can be represented by
+  new versions without changing the painting-policy boundary.
 
 ## Failure Modes To Watch
 
 - A MuJoCo or CAD model becomes treated as more authoritative than the current
   Python baseline before measurement.
+- Treating the reference contract as a permanent controller or mechanical
+  design freeze.
 - A controller change silently chooses painting policies instead of realizing
   selected `StrokeAction`s.
 - Coverage is inferred from visible tone instead of material thickness.
 - Simulator-only observations leak into claims about real robot perception.
 - Baseline failures are hand-waved instead of logged with reproduction steps.
 
-## M1 Output Artifacts
+## S0 Output Artifacts
 
 - Baseline notes in planning or audit documentation.
 - Passing or explicitly triaged test result.
 - Optional `runs/baseline/` artifact bundle.
+- Versioned plant, command, observation, and capability schemas.
 - Tracker updates for any blockers discovered during baseline validation.
-

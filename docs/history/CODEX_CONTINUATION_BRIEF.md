@@ -1,4 +1,7 @@
-# Codex continuation brief
+# Historical Codex Continuation Brief
+
+This brief captures an earlier continuation target. It is retained for project
+history and does not override the current research charter or milestone plans.
 
 ## Non-negotiable architecture
 

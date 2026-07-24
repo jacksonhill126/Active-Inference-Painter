@@ -343,6 +343,13 @@ transfer answers a research question that the existing process cannot answer.
 Treat simulator fidelity, calibration, and hardware safety as necessary
 engineering work rather than evidence for active inference by themselves.
 
+This does not require simulator, mechanical, and safety preparation to wait
+for a completed cognitive architecture. Versioned interfaces, MuJoCo support,
+geometry studies, CAD, risk-reduction prototypes, and safety design may proceed
+in parallel. The constraint applies to scientific interpretation and to
+allowing transfer requirements to dictate unvalidated painting cognition, not
+to responsible engineering preparation.
+
 ## 13. Current open questions
 
 - What slow latent variables are both discoverable and predictively necessary?

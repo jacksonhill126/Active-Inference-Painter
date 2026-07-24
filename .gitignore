@@ -2,10 +2,15 @@
 .claude/
 .pytest_cache/
 .mplconfig/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 *.log
 *.pid
+build/
+dist/
+htmlcov/
+outputs/
 runs/
 src/*.egg-info/

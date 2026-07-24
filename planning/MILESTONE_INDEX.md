@@ -1,0 +1,67 @@
+# Milestone Index
+
+This is the compact index for project milestones and simulation-support
+milestones. Detailed task state remains authoritative in
+`planning/PROJECT_TRACKER.md`; this file summarizes milestone-level readiness.
+
+Status snapshot: 2026-07-23.
+
+## Research And Delivery Milestones
+
+| ID | Milestone | Planner | Status | Entry dependency | Exit decision |
+| --- | --- | --- | --- | --- | --- |
+| M0 | Project Operating System | `M0-operating-system.md` | `Active` | none | all T-001 through T-006 `Done` |
+| M1 | Formal Baseline And Inference Audit | `M1-formal-baseline-and-inference-audit.md` | `Blocked` | M0 | AI-115 |
+| M2 | Calibrated Multiscale Generative Model | `M2-calibrated-multiscale-generative-model.md` | `Blocked` | M1 | AI-216 |
+| M3 | Foveated Hierarchical Policy Inference | `M3-foveated-hierarchical-policy-inference.md` | `Blocked` | M2 | AI-316 |
+| M4 | Experimental Observatory And Digital Twin | `M4-experimental-observatory-and-digital-twin.md` | `Blocked` | T-003, T-103, T-105 | T-412 |
+| M5 | Versioned Geometry, Actuation, And Calibration | `M5-versioned-geometry-actuation-and-calibration.md` | `Blocked` | T-101, T-103 | T-514 |
+| M6 | CAD And Prototype Iteration | `M6-cad-and-prototype-iteration.md` | `Blocked` | selected M5 interfaces and measurements | T-615 |
+| M7 | Safety And Staged Hardware Bring-Up | `M7-safety-and-staged-hardware-bring-up.md` | `Blocked` | selected M5/M6 hardware artifacts | T-718 |
+| M8 | Research Experiment Program | `M8-research-experiment-program.md` | `Blocked` | AI-115 for study registry; study-specific gates thereafter | T-817 |
+
+## Simulation Support Milestones
+
+| ID | Milestone | Planner | Status | Entry dependency | Exit decision |
+| --- | --- | --- | --- | --- | --- |
+| S0 | Plant Reference Contract | `S0-plant-reference-contract.md` | `Blocked` | M0 | T-108 |
+| S1 | MuJoCo Abstract Clone | `S1-mujoco-abstract-clone.md` | `Blocked` | T-101; may overlap later S0 work | T-209 |
+| S2 | MuJoCo Backend Adapter | `S2-mujoco-backend-adapter.md` | `Blocked` | S0, S1 | T-310 |
+
+## Dependency Map
+
+The project has a research spine and a supporting embodiment spine. They may
+proceed concurrently where their exact task dependencies permit.
+
+```text
+M0 -> M1 -> M2 -> M3
+ |      |     |     |
+ |      +-----+-----+---------------------> M8 research studies
+ |
+ +-> S0 -> S1 -> S2 ----------------------> M4 backend parity
+ |    |                 \                  /
+ |    +-----------------> M4 observatory -+
+ |    |
+ |    +-> M5 -> M6 -> M7 -----------------> M8 hardware transfer
+ |              \     ^
+ +---------------\----+  M0 safety/gate rules
+```
+
+This diagram is deliberately not a claim that every milestone must finish
+before the next begins:
+
+- M1 and S0 may begin together after M0.
+- S1 may start once T-101 supplies the versioned native reference; it need not
+  wait for every S0 archival task.
+- M4 contract work may begin when T-003, T-103, and T-105 are complete. Only
+  cross-backend parity work waits for S2 outputs.
+- M5 and targeted M6 risk-reduction work may proceed alongside M1-M3 when their
+  named geometry and interface dependencies are satisfied.
+- M8 infrastructure starts after M1, but each study is released by its own
+  capability gates. Hardware-transfer studies additionally require M7 evidence.
+
+## Updating This Index
+
+Update the status snapshot when a milestone enters `Active`, reaches its exit
+decision, or becomes blocked for a materially different reason. A summary
+status never overrides a task status in `PROJECT_TRACKER.md`.

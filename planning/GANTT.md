@@ -1,60 +1,96 @@
 # Rough Gantt Chart
 
-Assumption: schedule starts Monday, August 3, 2026. This is a rough planning
-chart for a single-investigator pace. It should be revised after each milestone
-gate.
+Assumption: schedule starts Monday, August 3, 2026. This is a planning envelope
+for one investigator, not a staffing plan. Overlapping bars indicate work that
+can be interleaved; they do not assume two full-time people. Dates must be
+revised after each capability gate.
 
 ```mermaid
 gantt
-    title Active-Inference Painter Robotics Roadmap
+    title Active-Inference Painter Research And Robotics Roadmap
     dateFormat  YYYY-MM-DD
     axisFormat  %b %Y
 
     section Operating System
-    Project tracker, manifests, versioning        :m0, 2026-08-03, 2w
-    Failure-mode log and validation gates         :m0b, after m0, 2w
+    M0 manifests, versions, failure logs          :m0, 2026-08-03, 2w
 
-    section Baseline Lock
-    Python sim and canvas invariants              :m1, 2026-08-17, 3w
-    Planner/controller boundary validation        :m1b, 2026-08-24, 3w
+    section Active-Inference Research Spine
+    M1 formal baseline and inference audit        :m1, after m0, 6w
+    M2 calibrated multiscale generative model     :m2, after m1, 11w
+    M3 foveated hierarchical policy inference     :m3, after m2, 18w
+    M8 protocol and analysis infrastructure       :m8a, after m1, 6w
+    M8 mechanism and interaction studies          :m8b, after m3, 18w
 
-    section MuJoCo Simulation
-    Abstract MuJoCo arm clone                     :m2, 2026-09-07, 3w
-    MuJoCo backend adapter                        :m3, after m2, 4w
-    JS digital twin with painted canvas           :m4, after m3, 3w
+    section Simulation Support
+    S0 native plant reference contract            :s0, 2026-08-03, 3w
+    S1 MuJoCo abstract clone                      :s1, after s0, 3w
+    S2 MuJoCo backend adapter                     :s2, after s1, 4w
+    M4 native observatory core                    :m4a, 2026-09-07, 5w
+    M4 MuJoCo parity and observatory gate         :m4b, after s2, 3w
 
-    section Geometry and CAD
-    Calibration-ready geometry spec               :m5, 2026-09-21, 4w
-    CAD frame and joint model                     :m6, after m5, 6w
-    Prototype design revision 1                   :m6b, after m6, 4w
+    section Geometry And Hardware Support
+    M5 calibration-ready geometry                 :m5, 2026-09-14, 7w
+    M6 CAD and risk-reduction prototypes          :m6, after m5, 16w
+    M7 safety architecture and procedures         :m7a, 2026-10-05, 6w
+    M7 staged physical hardware bring-up          :m7b, after m6, 20w
 
-    section Control and Safety
-    Safety envelope and watchdog design           :m7, 2026-10-19, 4w
-    Bench validation protocol                     :m7b, after m7, 4w
-
-    section Hardware
-    Single-joint and two-link bring-up            :h1, 2026-12-14, 6w
-    Brush/contact calibration rig                 :h2, 2027-01-11, 6w
-    Full-arm dry strokes                          :h3, after h2, 4w
-    Full-arm wet painting                         :h4, after h3, 4w
-
-    section Research Experiments
-    Sim ablations and predictive validation       :r1, 2026-11-09, 8w
-    Sim-to-real comparison protocol               :r2, 2027-02-08, 6w
-    Hardware research runs                        :r3, after h4, 8w
+    section Transfer
+    Fixed-camera sim-to-real protocol             :r2, after m2, 6w
+    Foveated camera transfer                      :r3, after m3, 8w
+    Hardware research runs                        :r4, after m7, 10w
 ```
 
 ## Phase Reading
 
-- August-September 2026: organize the project and lock the current simulator baseline.
-- September-November 2026: get MuJoCo to clone the current arm and drive the existing paint/controller loop.
-- October-December 2026: define measured geometry, CAD conventions, and safety systems in parallel.
-- December 2026-March 2027: hardware bring-up from single joint to wet painting.
-- November 2026 onward: run research validation in simulation first, then compare against hardware.
+- August-September 2026: establish project operations and the native plant
+  reference contract while completing the formal inference audit.
+- September-December 2026: build and validate the sensor-equivalent multiscale
+  generative model. MuJoCo support may be interleaved when it does not delay
+  capability blockers.
+- December 2026-April 2027: implement and test foveated hierarchical policy
+  inference.
+- September 2026 onward: progress geometry, CAD, safety architecture, and
+  risk-reduction prototypes as their partial dependencies become available.
+- After each capability gate: begin the corresponding M8 pilot or mechanism
+  study; interaction studies wait for M3 single-mechanism results.
 
-## Dependency Rule
+The previous schedule placed MuJoCo before unresolved inference validity and
+was too optimistic for one investigator. The revised schedule makes research
+gates primary and treats simulator/CAD work as bounded support.
 
-Do not let hardware/CAD detail block MuJoCo integration. The first MuJoCo target
-is the abstract Python arm clone; calibrated physical geometry comes after
-measurement.
+## Dependency Rules
 
+- M2 requires the M1 inference and calibration gate.
+- M3 requires the M2 sensor-equivalent belief interface.
+- M1 and S0 run concurrently; only plant-dependent M1 tasks wait on the
+  specific S0 reference artifacts they consume.
+- S1 requires the S0 native plant contract, not a permanent controller freeze.
+- S2 requires the S1 coordinate and tip-site contract.
+- M4 contract and native-view work may begin before S2; final cross-backend
+  parity requires S2, not M3.
+- M5 schema and preliminary mechanical work may proceed alongside M1-M3.
+- M6 CAD begins from stable frames and operating envelopes, not from a final
+  M5 design freeze.
+- M7 safety architecture begins during M5/M6; powered stages wait on the exact
+  prototype and safety artifacts they consume.
+- M8 infrastructure begins after M1; each study waits on its own capability
+  gate rather than all of M3.
+- Hardware/CAD detail must not block the abstract MuJoCo clone.
+- MuJoCo completion must not be treated as evidence that active inference is
+  valid.
+- No high-level negative result is interpreted until its lower capability
+  gates pass.
+
+## Budget Envelope
+
+- M1 target compute: under USD 100.
+- M2 target training compute: USD 100-250.
+- M3 target incremental training compute: USD 250-400.
+- M8 target paid confirmatory compute: no more than USD 200 without a new
+  budget decision.
+- Preserve at least USD 200 of the USD 1,000 model-training budget for failed
+  runs, final replicas, and the optional pretrained comparison until an M8
+  study plan explicitly allocates it.
+
+These are ceilings for planning, not spending targets. Local or already-owned
+compute should be used when it does not materially slow the research.

@@ -1,0 +1,203 @@
+{
+  "schema_version": "experiment-manifest-v1",
+  "manifest_revision": 1,
+  "supersedes_revision": null,
+  "run": {
+    "run_id": "2026-07-23T160000Z_dev_0001",
+    "study_id": null,
+    "run_kind": "development",
+    "evidence_level": "provisional",
+    "replica_id": "dev-0001",
+    "parent_run_id": null,
+    "status": "completed",
+    "started_at_utc": "2026-07-23T16:00:00Z",
+    "ended_at_utc": "2026-07-23T16:10:00Z",
+    "termination_reason": "immediate_stop_policy_selected",
+    "stop_source": "painting_policy",
+    "failure_ids": []
+  },
+  "versions": {
+    "version_manifest": "version-manifest.json"
+  },
+  "configuration": {
+    "resolved_config_path": "config/resolved-config.json",
+    "resolved_config_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "planner_mode": "spatial",
+    "spatial_transition_mode": "local_patch",
+    "backend": "native",
+    "compute_device": "cpu",
+    "canvas": {
+      "width_px": 128,
+      "height_px": 128,
+      "material_pixel_scale": 1.0
+    }
+  },
+  "random_seeds": {
+    "agent": 17,
+    "policy_proposal": 17,
+    "numpy_global": 17,
+    "torch": 17,
+    "plant_process": 0,
+    "brush": 0,
+    "canvas_grain": 0
+  },
+  "sensor_access": {
+    "mode": "privileged_simulation",
+    "permitted_observations": [
+      "joint_encoder_position",
+      "joint_velocity",
+      "motor_current",
+      "contact",
+      "simulated_canvas_observation"
+    ],
+    "derived_observations": [
+      "material_coverage_summary"
+    ],
+    "evaluation_only_process_truth": [
+      "canvas_thickness",
+      "canvas_pigment_mass",
+      "plant_internal_state"
+    ],
+    "known_real_platform_unavailable": []
+  },
+  "learning_state": {
+    "online_learning_enabled": true,
+    "checkpoint_load_status": "not_requested",
+    "inherited_parameter_groups": [],
+    "reset_beliefs": [
+      "canvas_belief",
+      "passage_state"
+    ],
+    "optimizer_state_inherited": false,
+    "replay_state_inherited": false,
+    "training_data_manifests": []
+  },
+  "active_inference": {
+    "generative_model_spec": null,
+    "variational_family_spec": null,
+    "terms": [
+      {
+        "name": "observation_negative_log_likelihood",
+        "grounding": "likelihood",
+        "reported_in": "vfe",
+        "factor_reference": "provisional_until_AI-101",
+        "units": "nats_per_reported_element",
+        "reduction": "implementation_defined_provisional",
+        "trace": "traces/vfe.jsonl",
+        "implementation_status": "provisional"
+      },
+      {
+        "name": "terminal_coverage_risk",
+        "grounding": "prior_preference",
+        "reported_in": "efe",
+        "factor_reference": "terminal_coverage_conditional_on_stop",
+        "units": "nats",
+        "reduction": "terminal_only",
+        "trace": "traces/efe.jsonl",
+        "implementation_status": "approximate"
+      },
+      {
+        "name": "policy_posterior",
+        "grounding": "policy_posterior",
+        "reported_in": "policy_posterior",
+        "factor_reference": "provisional_until_AI-105_and_AI-111",
+        "units": "probability",
+        "reduction": "normalized_over_sampled_candidates",
+        "trace": "traces/policy-posterior.jsonl",
+        "implementation_status": "provisional"
+      }
+    ]
+  },
+  "approximations": [
+    {
+      "name": "finite_policy_proposal_set",
+      "status": "unresolved",
+      "effect": "sampled_candidate_frequency_may_differ_from_declared_policy_prior",
+      "decision_task": "AI-111"
+    },
+    {
+      "name": "privileged_material_observation",
+      "status": "accepted_for_M1_only",
+      "effect": "not_representative_of_real_camera_access",
+      "decision_task": "AI-102"
+    }
+  ],
+  "conventional_support": [
+    {
+      "name": "inverse_kinematics",
+      "role": "realizes_selected_cartesian_painting_policy"
+    },
+    {
+      "name": "motor_control_and_hard_safety",
+      "role": "execution_and_external_veto"
+    },
+    {
+      "name": "gradient_optimizer",
+      "role": "variational_and_transition_model_parameter_optimization"
+    }
+  ],
+  "timing": {
+    "wall_time_s": 600.0,
+    "state_inference_s": null,
+    "policy_inference_s": null,
+    "execution_s": null,
+    "learning_s": null,
+    "serialization_s": null,
+    "rendering_s": null
+  },
+  "artifacts": {
+    "resolved_config": {
+      "path": "config/resolved-config.json",
+      "format": "json",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "vfe_trace": {
+      "path": "traces/vfe.jsonl",
+      "format": "jsonl",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "efe_trace": {
+      "path": "traces/efe.jsonl",
+      "format": "jsonl",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "policy_posterior_trace": {
+      "path": "traces/policy-posterior.jsonl",
+      "format": "jsonl",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "telemetry": {
+      "path": "traces/telemetry.jsonl",
+      "format": "jsonl",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "canvas_initial": {
+      "path": "canvas/initial.png",
+      "format": "png",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "canvas_revision": 0,
+      "view": "process_truth"
+    },
+    "canvas_terminal": {
+      "path": "canvas/terminal.png",
+      "format": "png",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "canvas_revision": 42,
+      "view": "process_truth"
+    },
+    "failure_log": {
+      "path": "failure-log.jsonl",
+      "format": "jsonl",
+      "status": "present",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  },
+  "safety_events": []
+}
