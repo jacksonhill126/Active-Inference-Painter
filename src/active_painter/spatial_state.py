@@ -12,6 +12,8 @@ from .policies import MotorPrimitiveLatent
 
 
 MATERIAL_CHANNELS = ("thickness", "wetness", "black_mass", "surface_tone", "ground_contrast", "material_coverage")
+INDEPENDENT_MATERIAL_CHANNELS = MATERIAL_CHANNELS[:4]
+DERIVED_MATERIAL_CHANNELS = MATERIAL_CHANNELS[4:]
 ACTION_CHANNELS = (
     "footprint",
     "start",
@@ -21,6 +23,12 @@ ACTION_CHANNELS = (
     "tone",
     *(f"motor_{kind}" for kind in DEFAULT_MOTOR_KINDS),
 )
+
+
+def independent_material_channel_count(channel_count: int) -> int:
+    """Number of non-deterministic material factors in a configured field."""
+
+    return min(max(0, int(channel_count)), len(INDEPENDENT_MATERIAL_CHANNELS))
 
 
 @dataclass(frozen=True, slots=True)

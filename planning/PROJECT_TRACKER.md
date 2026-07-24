@@ -78,7 +78,7 @@ acceptance even when implementation and automated checks are complete.
 
 ### T-001 Define tracker conventions
 
-Status: `Done`  
+Status: `Done`
 Track: Operations  
 Depends on: none  
 Owner: Jackson/Codex  
@@ -88,7 +88,7 @@ Notes: Accepted in this tracker on 2026-07-23; field, dependency, transition, an
 
 ### T-002 Define versioning scheme
 
-Status: `Done`  
+Status: `Done`
 Track: Operations  
 Depends on: T-001  
 Owner: Jackson/Codex  
@@ -118,12 +118,13 @@ Notes: Accepted on 2026-07-23 in `planning/FAILURE_LOG.md` with an append-only J
 
 ### T-005 Define validation gates
 
-Status: `Ready`  
+Status: `Done`
 Track: Validation  
 Depends on: T-003, T-004  
 Owner: Jackson/Codex  
 Estimate: 1 day  
 Acceptance: Each project gate lists required tests, logs, and stop conditions.
+Notes: Accepted 2026-07-24 in `planning/VALIDATION_GATES.md`; it defines evidence, pass conditions, and stop conditions for native, inference, MuJoCo, observatory, geometry, dry/wet hardware, and research gates.
 
 ### T-006 Create milestone index
 
@@ -139,34 +140,37 @@ Notes: Accepted on 2026-07-23 in `planning/MILESTONE_INDEX.md`; the index distin
 
 ### AI-101 Write the executable generative-model specification
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Formalization  
 Depends on: M0  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Every implemented belief, likelihood, transition, preference, precision, policy prior, proposal, VFE term, and EFE term maps to a declared factor or named approximation.
+Notes: Accepted 2026-07-24 in `docs/GENERATIVE_MODEL_SPEC.md` as `baseline-oracle-v0`; current privileged observations and unresolved proposal/composition semantics are explicitly recorded.
 
 ### AI-102 Create the variable and sensor-access ledger
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Sensors  
 Depends on: AI-101  
 Owner: Jackson/Codex  
 Estimate: 1-2 days  
 Acceptance: Every simulator-to-agent value is classified as physical observation, derived observation, hidden state, evaluation label, or execution-only state.
+Notes: Accepted 2026-07-24 in `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md` and `planning/variable-sensor-access-ledger.json`; contract tests enforce dataclass field coverage and the runtime oracle-baseline declaration.
 
 ### AI-103 Audit observation independence and units
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Observation Model  
 Depends on: AI-101, AI-102  
 Owner: Jackson/Codex  
 Estimate: 1-2 days  
 Acceptance: Derived material channels, likelihood independence, units, normalization, and provisional observation terms are explicitly decided.
+Notes: Accepted 2026-07-24 in `docs/OBSERVATION_FACTOR_AUDIT.md`; contrast and coverage are deterministic views rather than separate spatial likelihood evidence, spatial VFE reports nats per independent cell-channel, and eight focused tests pass.
 
 ### AI-104 Verify VFE against tractable reference models
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-103  
 Owner: Jackson/Codex  
@@ -193,7 +197,7 @@ Acceptance: Beta moment matching, clamps, alternatives, terminal-only applicatio
 
 ### AI-108 Build a leakage-resistant baseline corpus
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Data/Validation  
 Depends on: AI-102, T-101, T-102  
 Owner: Jackson/Codex  
@@ -568,43 +572,47 @@ Acceptance: The core foveated hierarchical active-inference model and ablations 
 
 ### T-101 Confirm Python arm sim as canonical abstract reference
 
-Status: `Backlog`  
+Status: `Done`
 Track: Simulation  
 Depends on: M0  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: Native simulator constants, limits, home pose, canvas frame, and known shortcuts are documented.
+Notes: Accepted 2026-07-24 as `native-abstract-v0` in `docs/NATIVE_PLANT_REFERENCE.md`; protected by `tests/test_native_contract.py` and existing arm tests.
 
 ### T-102 Version and protect canvas material invariants
 
-Status: `Backlog`  
+Status: `Done`
 Track: Painting Model  
 Depends on: M0  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Tests confirm thickness, wetness, pigment mass, visible tone, white-on-white coverage, and material coverage behavior.
+Notes: Accepted 2026-07-24 with added repeated-layer, tone-independence, clear, configurability, and native-contract tests; focused native contract/canvas/arm suite passed 55 tests.
 
 ### T-103 Define controller, plant, and policy interfaces
 
-Status: `Backlog`  
+Status: `Done`
 Track: Control  
 Depends on: T-101  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day  
-Acceptance: `StrokeAction` remains Cartesian/contact intent and IK remains below policy selection.
+Acceptance: `StrokeAction` remains Cartesian/contact intent, IK remains below policy selection, and the backend boundary separates commands, physical observations, inferred state, and simulator-only truth.
+Notes: Accepted 2026-07-24 as `plant-interface-v1` in `docs/CONTROL_PLANT_POLICY_BOUNDARY.md` and `src/active_painter/plant_interface.py`; four focused tests pass. The native runtime remains an explicitly nonconforming oracle path until T-109.
 
 ### T-104 Record full baseline test result
 
-Status: `Backlog`  
+Status: `Done`
 Track: Validation  
 Depends on: T-101, T-102, T-103  
 Owner: TBD  
 Estimate: 0.5 day  
 Acceptance: Current planner, arm, canvas, and web tests have a recorded baseline result.
+Notes: Accepted 2026-07-24 in `docs/BASELINE_TEST_RESULT_2026-07-24.md`; the complete suite passed 252 tests in 349.09 seconds with exit status 0.
 
 ### T-105 Capture baseline telemetry and web-runtime behavior
 
-Status: `Backlog`  
+Status: `Ready`
 Track: Web/Telemetry  
 Depends on: T-101, T-103  
 Owner: TBD  
@@ -613,7 +621,7 @@ Acceptance: Default web runtime endpoints, frontend state, canvas image, and tel
 
 ### T-106 Document known simulator shortcuts and limitations
 
-Status: `Backlog`  
+Status: `Ready`
 Track: Documentation  
 Depends on: T-101, T-102, T-103  
 Owner: TBD  
@@ -622,7 +630,7 @@ Acceptance: Simulator shortcuts are categorized as acceptable baseline, MuJoCo c
 
 ### T-107 Define baseline artifact bundle
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Research Ops  
 Depends on: T-003, T-104, T-105  
 Owner: TBD  
@@ -631,18 +639,27 @@ Acceptance: Baseline bundle contents and location are defined, including test su
 
 ### T-108 S0 reference-contract decision
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-104, T-105, T-106, T-107  
 Owner: Jackson  
 Estimate: 0.5 day  
 Acceptance: S0 is marked locked only if baseline tests pass or failures are documented and judged non-blocking.
 
+### T-109 Migrate native execution to `plant-interface-v1`
+
+Status: `Blocked`
+Track: Control/Inference Boundary
+Depends on: T-103, AI-201, AI-203, AI-204
+Owner: Jackson/Codex
+Estimate: 3-5 days
+Acceptance: Native execution and motor forecasts consume physical sensor packets and posterior snapshots without copied live simulator or process-RNG state.
+
 ## S1: MuJoCo Abstract Clone
 
 ### T-201 Match native arm constants in MuJoCo XML
 
-Status: `Active`  
+Status: `Ready`
 Track: MuJoCo  
 Depends on: T-101  
 Owner: Jackson/Codex  
@@ -651,7 +668,7 @@ Acceptance: XML matches native joint order, axes, ranges, home pose, link length
 
 ### T-202 Add XML constant tests
 
-Status: `Validate`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-201  
 Owner: Jackson/Codex  
@@ -678,7 +695,7 @@ Acceptance: Base and joint geometry do not accidentally constrain the abstract c
 
 ### T-205 Document exact versus approximate model fields
 
-Status: `Validate`  
+Status: `Blocked`
 Track: Documentation  
 Depends on: T-201  
 Owner: Jackson/Codex  

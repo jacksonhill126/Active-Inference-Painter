@@ -20,7 +20,7 @@ runtime behavior.
 
 ### T-001 Define tracker conventions
 
-Status: `Done`  
+Status: `Done`
 Track: Operations  
 Depends on: none  
 Owner: Jackson/Codex  
@@ -98,7 +98,7 @@ Notes:
 
 ### T-005 Define validation gates
 
-Status: `Ready`  
+Status: `Done`
 Track: Validation  
 Depends on: T-003, T-004  
 Owner: Jackson/Codex  
@@ -109,6 +109,13 @@ Acceptance:
 - Define gates for baseline sim, MuJoCo clone, MuJoCo backend, digital twin, calibrated geometry, hardware dry run, hardware wet run, and research-grade experiment.
 - Each gate has required tests, logs, and stop conditions.
 - Safety gates remain external to active-inference policy selection.
+
+Notes:
+
+- Accepted 2026-07-24 in `planning/VALIDATION_GATES.md`.
+- The contract defines native baseline, formal active-inference, MuJoCo clone,
+  backend, observatory, geometry, dry hardware, wet hardware, and
+  research-grade gates with evidence and stop conditions.
 
 ### T-006 Create milestone index
 

@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Tooling
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+# uv.lock is intentionally committed; see docs/uv.md.
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Generated artifacts (docs stay visible; media/data are reproducible)
+output/figures/**/*.gif
+output/figures/**/*.mp4
+output/figures/**/*.pdf
+output/figures/**/*.png
+output/figures/**/*.svg
+output/figures/**/*.webm
+output/data/*
+!output/figures/
+!output/figures/.gitkeep
+!output/figures/AGENTS.md
+!output/figures/README.md
+!output/figures/**/
+!output/figures/**/README.md
+!output/data/
+!output/data/.gitkeep
+!output/data/AGENTS.md
+!output/data/README.md
+!output/data/**/
+!output/data/**/AGENTS.md
+!output/data/**/README.md
+output/data/**/*.csv
+output/data/**/*.json
+output/data/**/*.npz
+!output/notebooks/
+!output/notebooks/README.md
+!output/notebooks/AGENTS.md
+!output/notebooks/**/
+!output/notebooks/**/*.ipynb
+/.cursor

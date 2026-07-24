@@ -28,7 +28,7 @@ constraints are introduced.
 
 ### T-201 Match native arm constants in MuJoCo XML
 
-Status: `Active`  
+Status: `Ready`
 Track: MuJoCo  
 Depends on: T-101  
 Owner: Jackson/Codex  
@@ -44,7 +44,7 @@ Acceptance:
 
 ### T-202 Add XML constant tests
 
-Status: `Validate`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-201  
 Owner: Jackson/Codex  
@@ -91,7 +91,7 @@ Acceptance:
 
 ### T-205 Document exact versus approximate model fields
 
-Status: `Validate`  
+Status: `Blocked`
 Track: Documentation  
 Depends on: T-201  
 Owner: Jackson/Codex  

@@ -582,7 +582,9 @@ After fusion, support constraints are projected:
 - surface tone is clipped;
 - contrast and coverage are recomputed deterministically.
 
-The reported spatial VFE is the mean number of nats per cell-channel:
+The reported spatial VFE is the mean number of nats per independent
+cell-channel. Thickness, wetness, black mass, and surface tone contribute;
+deterministic contrast and coverage views do not:
 
 ```text
 VFE = KL(posterior || transition prior)

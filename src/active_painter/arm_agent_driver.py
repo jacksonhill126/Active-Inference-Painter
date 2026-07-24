@@ -47,6 +47,9 @@ from .stroke_execution import (
     stroke_reference,
 )
 
+OBSERVATION_BASELINE_ID = "baseline-oracle-v0"
+OBSERVATION_ACCESS_MODE = "oracle_material_state"
+
 
 @dataclass(slots=True)
 class StrokeExecution:
@@ -1813,6 +1816,13 @@ class ArmActiveInferenceDriver:
             "enabled": self.enabled,
             "stopped": self.stopped,
             "planning": self.planning,
+            "observationBoundary": {
+                "baseline": OBSERVATION_BASELINE_ID,
+                "mode": OBSERVATION_ACCESS_MODE,
+                "sensorEquivalent": False,
+                "materialStateAccess": "exact VerticalCanvas fields and deterministic transforms",
+                "bodyForecastInitialization": "deep copy of ArmPainterSim process state",
+            },
             "plannerError": self._pending_error,
             "lastPlanningSeconds": self.last_planning_seconds,
             "currentPlanningSeconds": self._current_planning_seconds(),

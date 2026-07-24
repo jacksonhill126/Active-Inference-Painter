@@ -6,9 +6,9 @@ has failed, and what comes next. Detailed task state remains in
 
 ## Current Snapshot
 
-Snapshot date: 2026-07-23.
+Snapshot date: 2026-07-24.
 
-Phase: M0 project operating system and portfolio foundation.
+Phase: M1 formal baseline audit with S0 native reference work in parallel.
 
 The current prototype can:
 
@@ -31,15 +31,15 @@ It has not yet demonstrated:
 
 ## Verification Snapshot
 
-Local environment: Windows, Python 3.11-compatible project configuration, CPU
-execution.
+Local environment: Windows 11, Python 3.14.3, PyTorch 2.11.0+cu126. CUDA was
+available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Deterministic smoke suite | 33 passed; 3.94-5.54 seconds observed | Suitable for per-change CI |
-| Full suite | 225 passed, 1 failed in 376.42 seconds | Broad coverage, not currently release-green |
-| Current full-suite failure | background planning exceeded a 15-second test deadline | Performance-sensitive integration test; tracked rather than hidden |
-| Suite excluding driver integration file | 190 passed in 199.70 seconds | Other model tests are also computationally expensive |
+| Deterministic smoke suite | 59 passed; 11.08 seconds observed | Includes observation-factorization, plant-interface, and sensor-access contracts |
+| Native plant/material suite | 55 passed; 2.48 seconds observed | Geometry, reset, and material contracts are green |
+| AI-103/T-103 focused contract suite | 12 passed; 3.85 seconds observed | Observation factorization/units and `plant-interface-v1` records are green |
+| Complete suite | 252 passed; 349.09 seconds observed; exit 0 | Current baseline and all new M0/AI/S0 contract tests are green |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -47,15 +47,59 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Complete M0 validation-gate definitions.
-2. Establish the M1 executable generative-model and sensor-access
-   specifications.
-3. Split deterministic unit tests from slow stochastic and integration tests.
-4. Add reproducible baseline runs with measured prediction, calibration,
+1. Verify VFE against independent analytic reference calculations in AI-104.
+2. Build the leakage-resistant live-scale baseline corpus in AI-108.
+3. Capture baseline web/telemetry behavior in T-105.
+4. Document and classify simulator shortcuts in T-106.
+5. Add reproducible baseline runs with measured prediction, calibration,
    policy, execution, and latency outputs.
-5. Stabilize the native plant contract before MuJoCo parity work.
+6. Implement the S1 MuJoCo abstract clone against `native-abstract-v0`.
 
 ## Progress Log
+
+### 2026-07-24: observation factorization and plant interface
+
+- Classified thickness, wetness, black pigment mass, and surface tone as the
+  four primary spatial material factors.
+- Removed deterministic ground contrast and material coverage from spatial
+  observation VFE, transition NLL, and EFE uncertainty/information terms.
+- Defined normalization and coordinate-unit behavior for baseline likelihoods
+  and VFE reports in `docs/OBSERVATION_FACTOR_AUDIT.md`.
+- Defined `plant-interface-v1` with separate command, physical-sensor,
+  posterior-belief, counterfactual, capability, and evaluation-truth records.
+- Kept the copied-simulator motor forecast path labeled nonconforming and
+  moved its migration to T-109 rather than claiming the oracle leak was fixed.
+- The focused AI-103/T-103 contract suite passed 12 tests.
+- The complete test suite then passed 252 tests in 349.09 seconds with exit
+  status 0; environment and source identity are recorded in
+  `docs/BASELINE_TEST_RESULT_2026-07-24.md`.
+
+### 2026-07-24: variable and sensor-access ledger
+
+- Classified every field crossing the simulator, canvas, plant, motor
+  telemetry, contact, brush, kinematics, and execution-forecast boundaries.
+- Named the live observation condition `baseline-oracle-v0` and exposed it in
+  runtime diagnostics as non-sensor-equivalent.
+- Found that motor planning copies true body, material, contact, brush,
+  parameter, and RNG state; this blocks non-oracle embodiment claims.
+- Added contract tests requiring privileged entries to carry explicit
+  blockers and requiring future boundary fields to be added to the ledger.
+
+### 2026-07-24: M0 gate contract and formal baseline specification
+
+- Completed the project-wide validation-gate contract with explicit evidence,
+  pass conditions, and stop conditions.
+- Added the `baseline-oracle-v0` generative-model specification, including
+  factorization, variational families, VFE/EFE mapping, policy/proposal
+  separation, and an approximation register.
+- Versioned the Python arm and material process as `native-abstract-v0`.
+- Added native geometry and material invariant tests; the focused
+  native-contract, canvas, and arm suite passed 55 tests.
+- The complete suite reported 235 passing tests; the outer command deadline
+  fired immediately after pytest printed the summary, so clean process exit
+  remains to be repeated with a longer harness deadline.
+- Corrected MuJoCo tracker statuses: the clone is ready to implement, but no
+  MJCF artifact or clone tests are currently present.
 
 ### 2026-07-23: public project foundation
 

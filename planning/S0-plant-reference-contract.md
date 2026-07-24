@@ -31,7 +31,7 @@ shortcuts, and records a passing reference baseline.
 
 ### T-101 Confirm Python arm sim as canonical abstract reference
 
-Status: `Backlog`  
+Status: `Done`
 Track: Simulation  
 Depends on: M0  
 Owner: Jackson/Codex  
@@ -50,11 +50,17 @@ Implementation notes:
 
 - Primary files: `src/active_painter/arm_sim.py`,
   `src/active_painter/arm_control.py`, `models/README.md`.
-- Relevant tests: `tests/test_arm_sim.py`, `tests/test_mujoco_model.py`.
+- Relevant tests: `tests/test_native_contract.py`, `tests/test_arm_sim.py`.
+
+Notes:
+
+- Accepted 2026-07-24 in `docs/NATIVE_PLANT_REFERENCE.md` as
+  `native-abstract-v0`.
+- Focused native contract, canvas, and arm tests passed: 55 tests.
 
 ### T-102 Version and protect canvas material invariants
 
-Status: `Backlog`  
+Status: `Done`
 Track: Painting Model  
 Depends on: M0  
 Owner: Jackson/Codex  
@@ -76,9 +82,17 @@ Implementation notes:
 - Relevant tests: `tests/test_canvas.py`, `tests/test_arm_sim.py`,
   `tests/test_spatial_state.py`.
 
+Notes:
+
+- Accepted 2026-07-24 in `docs/NATIVE_PLANT_REFERENCE.md`.
+- Added direct tests for repeated-layer coverage, black/white-equivalent
+  occupancy, visible-tone independence, clear semantics, configurable
+  presence/contact parameters, and the native geometry contract.
+- Focused native contract, canvas, and arm tests passed: 55 tests.
+
 ### T-103 Define controller, plant, and policy interfaces
 
-Status: `Backlog`  
+Status: `Done`
 Track: Control  
 Depends on: T-101  
 Owner: Jackson/Codex  
@@ -95,6 +109,11 @@ Acceptance:
   constraints.
 - Define the backend-neutral command, sensor, timestamp, and capability fields
   needed by native, MuJoCo, and eventual hardware implementations.
+- Separate commanded values, physical sensor samples, inferred state, and
+  simulator-only evaluation truth in the interface types.
+- Define a conforming forecast interface that cannot accept a live process
+  object or copied process RNG state. Counterfactual requests start from a
+  declared belief/model snapshot and an independent future-noise seed.
 - State explicitly that low-level control laws and gains remain replaceable.
 
 Implementation notes:
@@ -105,10 +124,24 @@ Implementation notes:
 - Relevant tests: `tests/test_stroke_execution.py`,
   `tests/test_arm_agent_driver.py`, `tests/test_motor_telemetry.py`,
   `tests/test_motor_reliability.py`.
+- Boundary input: `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`, especially the
+  true-pose/contact and forecast snapshot leakage findings.
+
+Notes:
+
+- Accepted 2026-07-24 as `plant-interface-v1` in
+  `docs/CONTROL_PLANT_POLICY_BOUNDARY.md`.
+- `src/active_painter/plant_interface.py` defines separate SI-unit command,
+  physical-sensor, posterior-belief, counterfactual, capability, and
+  evaluation-truth records.
+- Four focused interface tests pass.
+- The current native runtime has not migrated to this interface and remains a
+  documented oracle baseline. T-109 tracks removal of live simulator and RNG
+  state from motor forecasts.
 
 ### T-104 Record full baseline test result
 
-Status: `Backlog`  
+Status: `Done`
 Track: Validation  
 Depends on: T-101, T-102, T-103  
 Owner: Jackson/Codex  
@@ -136,9 +169,16 @@ python -m pytest tests\test_arm_agent_driver.py tests\test_motor_telemetry.py te
 python -m pytest tests\test_mujoco_model.py
 ```
 
+Notes:
+
+- Accepted 2026-07-24 in
+  `docs/BASELINE_TEST_RESULT_2026-07-24.md`.
+- `python -m pytest -q` completed with 252 passing tests in 349.09 seconds and
+  exit status 0 on Python 3.14.3.
+
 ### T-105 Capture baseline telemetry and web-runtime behavior
 
-Status: `Backlog`  
+Status: `Ready`
 Track: Web/Telemetry  
 Depends on: T-101, T-103  
 Owner: Jackson/Codex  
@@ -160,7 +200,7 @@ python -m active_painter.web_server --driver-bootstrap-transitions 0 --driver-bo
 
 ### T-106 Document known simulator shortcuts and limitations
 
-Status: `Backlog`  
+Status: `Ready`
 Track: Documentation  
 Depends on: T-101, T-102, T-103  
 Owner: Jackson/Codex  
@@ -185,7 +225,7 @@ Suggested sources:
 
 ### T-107 Define baseline artifact bundle
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Research Ops  
 Depends on: T-003, T-104, T-105  
 Owner: Jackson/Codex  
@@ -201,7 +241,7 @@ Acceptance:
 
 ### T-108 S0 reference-contract decision
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-104, T-105, T-106, T-107  
 Owner: Jackson  
@@ -215,6 +255,27 @@ Acceptance:
 - List which fields are stable interfaces and which plant/controller details
   remain provisional.
 - Record any blocking issues as tracker tasks before moving to S1/S2.
+
+### T-109 Migrate native execution to `plant-interface-v1`
+
+Status: `Blocked`
+Track: Control/Inference Boundary
+Depends on: T-103, AI-201, AI-203, AI-204
+Owner: Jackson/Codex
+Estimate: 3-5 days
+
+Acceptance:
+
+- Adapt the native command and physical-sensor paths to `PlantBackend`.
+- Build the live body posterior only from permitted sensor packets and model
+  assumptions.
+- Initialize execution forecasts from `BodyBeliefSnapshot` and an immutable
+  model snapshot, never from a copied `ArmPainterSim`.
+- Sample future process and sensor noise independently of the generative
+  process RNG continuation.
+- Keep simulator-only evaluation truth on the separate evaluation interface.
+- Demonstrate native forecast and execution behavior with boundary tests and
+  update the sensor-access ledger.
 
 ## Reference Gate
 

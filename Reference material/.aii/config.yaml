@@ -1,0 +1,56 @@
+# AII sidecar — InstituteOS metadata. Schema: instituteos.platform.aii_sidecar
+meta:
+  updated: '2026-06-30'
+repo:
+  name: fundamentals
+  slug: fundamentals
+  full_name: ActiveInferenceInstitute/fundamentals
+  description: Unofficial repo for materials and code related to "Fundamentals of
+    Active Inference" (Namjoshi 2026).
+institute:
+  category: research-software
+  maturity: released
+  steward: Active Inference Institute
+ecosystem:
+  relations:
+  - repo: ActiveInferenceInstitute/InstituteOS
+    relation: referenced-by
+    note: Federated via the InstituteOS .aii manifest.
+  - repo: ActiveInferenceInstitute/Active_Inference_Ontology
+    note: Uses Active Inference Ontology terms.
+  links:
+    github: https://github.com/ActiveInferenceInstitute/fundamentals
+    website: https://www.activeinference.org
+artifacts:
+- path: README.md
+  kind: doc
+  description: Repository overview.
+- path: src
+  kind: code
+  description: Source tree.
+- path: pyproject.toml
+  kind: code
+  description: Python package config.
+- path: LICENSE
+  kind: doc
+  description: License.
+provenance:
+  license: MIT
+  citation:
+    text: Active Inference Institute — fundamentals.
+instituteos:
+  tags:
+  - fundamentals
+  - unofficial
+  - repo
+  - materials
+  - code
+  - python
+capabilities:
+- python-package
+- tested
+- documentation
+tasks:
+  test:
+    cmd: python -m pytest
+    description: Run the test suite.

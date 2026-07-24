@@ -4,14 +4,14 @@ This is the compact index for project milestones and simulation-support
 milestones. Detailed task state remains authoritative in
 `planning/PROJECT_TRACKER.md`; this file summarizes milestone-level readiness.
 
-Status snapshot: 2026-07-23.
+Status snapshot: 2026-07-24.
 
 ## Research And Delivery Milestones
 
 | ID | Milestone | Planner | Status | Entry dependency | Exit decision |
 | --- | --- | --- | --- | --- | --- |
-| M0 | Project Operating System | `M0-operating-system.md` | `Active` | none | all T-001 through T-006 `Done` |
-| M1 | Formal Baseline And Inference Audit | `M1-formal-baseline-and-inference-audit.md` | `Blocked` | M0 | AI-115 |
+| M0 | Project Operating System | `M0-operating-system.md` | `Done` | none | all T-001 through T-006 `Done` |
+| M1 | Formal Baseline And Inference Audit | `M1-formal-baseline-and-inference-audit.md` | `Active` | M0 | AI-115 |
 | M2 | Calibrated Multiscale Generative Model | `M2-calibrated-multiscale-generative-model.md` | `Blocked` | M1 | AI-216 |
 | M3 | Foveated Hierarchical Policy Inference | `M3-foveated-hierarchical-policy-inference.md` | `Blocked` | M2 | AI-316 |
 | M4 | Experimental Observatory And Digital Twin | `M4-experimental-observatory-and-digital-twin.md` | `Blocked` | T-003, T-103, T-105 | T-412 |
@@ -24,8 +24,8 @@ Status snapshot: 2026-07-23.
 
 | ID | Milestone | Planner | Status | Entry dependency | Exit decision |
 | --- | --- | --- | --- | --- | --- |
-| S0 | Plant Reference Contract | `S0-plant-reference-contract.md` | `Blocked` | M0 | T-108 |
-| S1 | MuJoCo Abstract Clone | `S1-mujoco-abstract-clone.md` | `Blocked` | T-101; may overlap later S0 work | T-209 |
+| S0 | Plant Reference Contract | `S0-plant-reference-contract.md` | `Active` | M0 | T-108 |
+| S1 | MuJoCo Abstract Clone | `S1-mujoco-abstract-clone.md` | `Ready` | T-101; may overlap later S0 work | T-209 |
 | S2 | MuJoCo Backend Adapter | `S2-mujoco-backend-adapter.md` | `Blocked` | S0, S1 | T-310 |
 
 ## Dependency Map

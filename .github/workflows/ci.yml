@@ -34,7 +34,11 @@ jobs:
           tests/test_action_encoding.py
           tests/test_canvas.py
           tests/test_motor_reliability.py
+          tests/test_native_contract.py
+          tests/test_observation_factorization.py
+          tests/test_plant_interface.py
           tests/test_preferences.py
+          tests/test_sensor_access_contract.py
           tests/test_spatial_state.py
           tests/test_stop_policy.py
           tests/test_stop_prior.py

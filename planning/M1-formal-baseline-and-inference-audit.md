@@ -121,7 +121,7 @@ Each variable must have:
 
 ### AI-101 Write the executable generative-model specification
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Formalization  
 Depends on: M0  
 Owner: Jackson/Codex  
@@ -140,9 +140,17 @@ Acceptance:
 - State where conventional control, safety, and SGD sit outside exact active
   inference.
 
+Notes:
+
+- Accepted 2026-07-24 in `docs/GENERATIVE_MODEL_SPEC.md` as
+  `baseline-oracle-v0`.
+- The specification explicitly identifies privileged material observations,
+  uncorrected finite proposal distributions, the self-trained composition
+  preference, diagonal posterior approximations, and conventional SGD.
+
 ### AI-102 Create the variable and sensor-access ledger
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Sensors  
 Depends on: AI-101  
 Owner: Jackson/Codex  
@@ -160,9 +168,22 @@ Acceptance:
 - Produce blocking tasks for any privileged value that affects a research
   claim rather than visualization or evaluation.
 
+Notes:
+
+- Accepted 2026-07-24 in `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md` and the
+  machine-readable `planning/variable-sensor-access-ledger.json`.
+- The ledger covers every field in the simulator, canvas, plant, motor
+  telemetry, contact, brush, kinematics, and execution-forecast boundary
+  dataclasses.
+- It identifies exact material state, true pose/contact, exact process
+  parameters, and copied plant/brush RNG state as research-critical oracle
+  access.
+- `tests/test_sensor_access_contract.py` enforces field coverage, blocker
+  assignment, and the runtime `baseline-oracle-v0` declaration.
+
 ### AI-103 Audit observation independence and units
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Observation Model  
 Depends on: AI-101, AI-102  
 Owner: Jackson/Codex  
@@ -179,9 +200,19 @@ Acceptance:
   the underlying probability model is unchanged.
 - Define which observation terms remain provisional until M2.
 
+Notes:
+
+- Accepted 2026-07-24 in `docs/OBSERVATION_FACTOR_AUDIT.md`.
+- Spatial likelihood, transition NLL, VFE, and EFE uncertainty terms now use
+  thickness, wetness, black mass, and surface tone as the four independent
+  material factors.
+- Ground contrast and material coverage remain deterministic state views and
+  preference outcomes, but are not counted as separate likelihood evidence.
+- Eight focused factorization, normalization, and units tests pass.
+
 ### AI-104 Verify VFE against tractable reference models
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-103  
 Owner: Jackson/Codex  
@@ -263,7 +294,7 @@ Acceptance:
 
 ### AI-108 Build a leakage-resistant baseline corpus
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Data/Validation  
 Depends on: AI-102, T-101, T-102  
 Owner: Jackson/Codex  

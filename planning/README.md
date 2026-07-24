@@ -10,6 +10,8 @@ dependencies, validation gates, and execution tasks.
 - `PROJECT_TRACKER.md`: milestone task tracker and initial backlog.
 - `GANTT.md`: rough schedule across research, simulation, CAD, hardware, and validation.
 - `M0-operating-system.md`: detailed plan for tracker conventions, manifests, versioning, and failure logs.
+- `VALIDATION_GATES.md`: evidence, pass conditions, and stop conditions for simulation, inference, geometry, hardware, and research gates.
+- `variable-sensor-access-ledger.json`: machine-readable observation-boundary inventory.
 - `VERSIONING.md`: artifact labels, exact identities, revision rules, and run recording contract.
 - `EXPERIMENT_MANIFEST.md`: run provenance, sensor-access, active-inference boundary, and required artifact contract.
 - `FAILURE_LOG.md`: append-only failure evidence, categories, severity, reproduction, and resolution contract.

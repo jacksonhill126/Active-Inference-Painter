@@ -9,6 +9,7 @@ from torch.distributions import Normal
 from .action_encoding import coerce_action_raster, coerce_action_tensor
 from .config import PainterConfig
 from .efe_common import project_material_support
+from .spatial_state import independent_material_channel_count
 
 
 def _bootstrap_masked_nll(per_element_nll: torch.Tensor, keep_probability: float) -> torch.Tensor:
@@ -165,6 +166,18 @@ class SpatialTransitionMember(nn.Module):
             self.paint_presence_threshold,
         )
         logvar = -11.0 + 6.0 * torch.sigmoid(raw_logvar)
+        independent_channels = independent_material_channel_count(self.material_channels)
+        if independent_channels < self.material_channels:
+            # Contrast and coverage are deterministic transforms of primary
+            # material factors, so they do not carry independent conditional
+            # variance inside the transition likelihood.
+            logvar = torch.cat(
+                [
+                    logvar[:, :independent_channels],
+                    torch.full_like(logvar[:, independent_channels:], -20.0),
+                ],
+                dim=1,
+            )
         return next_mean, logvar
 
     @staticmethod
@@ -247,6 +260,10 @@ class SpatialDynamicsEnsemble(nn.Module):
     ) -> torch.Tensor:
         means, logvars = self(material, action_raster)
         target = next_material.unsqueeze(0).expand_as(means)
+        independent_channels = independent_material_channel_count(means.shape[2])
+        means = means[:, :, :independent_channels]
+        logvars = logvars[:, :, :independent_channels]
+        target = target[:, :, :independent_channels]
         nll = 0.5 * (((target - means) ** 2) / logvars.exp() + logvars)
         return _bootstrap_masked_nll(nll.mean(dim=(2, 3, 4)), self.bootstrap_probability)
 
@@ -286,6 +303,10 @@ class LocalSpatialDynamicsEnsemble(SpatialDynamicsEnsemble):
         next_material = next_material * mask
         means, logvars = self.forward_masked(material, action_raster, mask)
         target = next_material.unsqueeze(0).expand_as(means)
+        independent_channels = independent_material_channel_count(means.shape[2])
+        means = means[:, :, :independent_channels]
+        logvars = logvars[:, :, :independent_channels]
+        target = target[:, :, :independent_channels]
         nll = 0.5 * (((target - means) ** 2) / logvars.exp() + logvars)
         valid = mask.to(nll.dtype).unsqueeze(0)
         if valid.ndim == 5 and valid.shape[2] == 1:

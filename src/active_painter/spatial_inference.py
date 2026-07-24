@@ -12,7 +12,12 @@ from .inference import VFEComponents
 from .local_spatial import local_patch_bounds_for_raster, pixel_logvar_from_state, pixel_material_from_state
 from .models import LocalSpatialDynamicsEnsemble
 from .policies import MotorPrimitiveLatent
-from .spatial_state import SpatialCanvasState, rasterize_stroke_action, spatial_state_from_pixel_posterior
+from .spatial_state import (
+    SpatialCanvasState,
+    independent_material_channel_count,
+    rasterize_stroke_action,
+    spatial_state_from_pixel_posterior,
+)
 
 
 class SpatialTransitionModel(Protocol):
@@ -45,19 +50,24 @@ class SpatialVariationalStateEstimator:
         observed = pixel_material_from_state(observation)
         observation_variance = spatial_observation_variance(observed, self.cfg)
         posterior = spatial_state_from_pixel_posterior(observed, observation_variance, self.cfg)
+        independent_channels = independent_material_channel_count(observed.shape[0])
         negative_log_likelihood = _expected_negative_log_likelihood(
-            observed,
-            observation_variance,
-            observed,
-            observation_variance,
+            observed[:independent_channels],
+            observation_variance[:independent_channels],
+            observed[:independent_channels],
+            observation_variance[:independent_channels],
         )
         self.last_vfe = VFEComponents(
             total=negative_log_likelihood,
             complexity=0.0,
             negative_log_likelihood=negative_log_likelihood,
             expected_log_likelihood=-negative_log_likelihood,
-            units="nats_per_cell_channel",
-            approximation="Initial spatial posterior is anchored to the first material observation; no transition prior is available.",
+            units="nats_per_independent_cell_channel",
+            approximation=(
+                "Initial spatial posterior is anchored to the first oracle material observation; "
+                "no transition prior is available, and deterministic contrast/coverage channels "
+                "do not contribute separate likelihood evidence."
+            ),
         )
         return posterior
 
@@ -111,33 +121,41 @@ class SpatialVariationalStateEstimator:
         observed = pixel_material_from_state(observation)
         observation_variance = spatial_observation_variance(observed, self.cfg)
         prior_variance = np.clip(prior_variance, 1e-12, 1e6)
-        posterior_precision = 1.0 / prior_variance + 1.0 / observation_variance
-        posterior_variance = 1.0 / posterior_precision
-        posterior_mean = posterior_variance * (
-            prior_mean / prior_variance + observed / observation_variance
+        independent_channels = independent_material_channel_count(observed.shape[0])
+        independent = slice(0, independent_channels)
+        posterior_mean = prior_mean.copy()
+        posterior_variance = prior_variance.copy()
+        posterior_precision = (
+            1.0 / prior_variance[independent] + 1.0 / observation_variance[independent]
+        )
+        posterior_variance[independent] = 1.0 / posterior_precision
+        posterior_mean[independent] = posterior_variance[independent] * (
+            prior_mean[independent] / prior_variance[independent]
+            + observed[independent] / observation_variance[independent]
         )
 
         complexity = _diagonal_gaussian_kl(
-            posterior_mean,
-            posterior_variance,
-            prior_mean,
-            prior_variance,
+            posterior_mean[independent],
+            posterior_variance[independent],
+            prior_mean[independent],
+            prior_variance[independent],
         )
         negative_log_likelihood = _expected_negative_log_likelihood(
-            posterior_mean,
-            posterior_variance,
-            observed,
-            observation_variance,
+            posterior_mean[independent],
+            posterior_variance[independent],
+            observed[independent],
+            observation_variance[independent],
         )
         self.last_vfe = VFEComponents(
             total=complexity + negative_log_likelihood,
             complexity=complexity,
             negative_log_likelihood=negative_log_likelihood,
             expected_log_likelihood=-negative_log_likelihood,
-            units="nats_per_cell_channel",
+            units="nats_per_independent_cell_channel",
             approximation=(
                 "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, "
-                "and deterministic derived material channels are projected after Gaussian fusion."
+                "only primary material factors enter VFE, and deterministic contrast/coverage channels are projected "
+                "after Gaussian fusion with provisional propagated variance."
             ),
         )
         return spatial_state_from_pixel_posterior(posterior_mean, posterior_variance, self.cfg)

@@ -11,7 +11,6 @@ from torch.distributions import Normal
 
 from .config import PainterConfig
 from .efe_common import project_material_support, terminal_preference_terms
-from .inference import normal_entropy_from_variance
 from .local_spatial import (
     LocalPatchBounds,
     local_patch_bounds_for_raster,
@@ -22,7 +21,11 @@ from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
 from .canvas_hierarchy import policy_descriptor
 from .policies import Policy
 from .preferences import TerminalCoveragePreference
-from .spatial_state import SpatialCanvasState, rasterize_stroke_action
+from .spatial_state import (
+    SpatialCanvasState,
+    independent_material_channel_count,
+    rasterize_stroke_action,
+)
 
 
 SpatialFirstTransition = (
@@ -1154,11 +1157,13 @@ class SpatialExpectedFreeEnergy:
         return F.interpolate(fields, size=(target, target), mode="area")
 
     def _scaled_normal_entropy(self, variance: torch.Tensor, full_area: float) -> torch.Tensor:
+        variance = self._independent_material_fields(variance)
         entropy = 0.5 * torch.log(2.0 * math.pi * math.e * torch.clamp(variance, min=1e-9))
         channel_count = float(max(1, variance.shape[-3]))
         return entropy.sum(dim=(-3, -2, -1)) / max(1.0, channel_count * full_area)
 
     def _observation_ambiguity_scaled(self, material_mean: torch.Tensor, full_area: float) -> torch.Tensor:
+        material_mean = self._independent_material_fields(material_mean)
         thickness = torch.clamp(material_mean[:, 0], min=0.0)
         wetness = torch.clamp(material_mean[:, 1], min=0.0)
         pigment = torch.clamp(material_mean[:, 2], min=0.0)
@@ -1172,6 +1177,16 @@ class SpatialExpectedFreeEnergy:
         channel_count = float(max(1, material_mean.shape[1]))
         excess = torch.clamp(entropy - base_entropy, min=0.0)
         return excess.sum(dim=(1, 2, 3)) / max(1.0, channel_count * full_area)
+
+    @staticmethod
+    def _independent_material_fields(field: torch.Tensor) -> torch.Tensor:
+        channel_count = independent_material_channel_count(field.shape[-3])
+        return field.narrow(-3, 0, channel_count)
+
+    def _material_entropy_per_cell_channel(self, variance: torch.Tensor) -> torch.Tensor:
+        variance = self._independent_material_fields(variance)
+        entropy = 0.5 * torch.log(2.0 * math.pi * math.e * torch.clamp(variance, min=1e-9))
+        return entropy.mean(dim=(-3, -2, -1))
 
     def _local_identity_approximation(self, local_steps: int) -> str:
         if local_steps <= 0:
@@ -1274,12 +1289,12 @@ class SpatialExpectedFreeEnergy:
 
                 aleatoric = selected_within.mean(dim=1)
                 epistemic_variance = selected_means.var(dim=1, unbiased=False)
-                marginal_entropy = normal_entropy_from_variance(
+                marginal_entropy = self._material_entropy_per_cell_channel(
                     torch.clamp(aleatoric + epistemic_variance, min=1e-8)
-                ).mean(dim=(1, 2))
-                conditional_entropy = normal_entropy_from_variance(
+                )
+                conditional_entropy = self._material_entropy_per_cell_channel(
                     torch.clamp(selected_within, min=1e-8)
-                ).mean(dim=(1, 2, 3))
+                ).mean(dim=1)
                 transition_risk[active_t] = transition_risk[active_t] - marginal_entropy
                 transition_ambiguity[active_t] = transition_ambiguity[active_t] + conditional_entropy
                 epistemic_value[active_t] = epistemic_value[active_t] + torch.clamp(
@@ -1633,8 +1648,10 @@ class SpatialExpectedFreeEnergy:
                 )
                 next_variance = torch.clamp(aleatoric + epistemic, min=1e-8)
 
-                marginal_entropy = normal_entropy_from_variance(next_variance).mean()
-                conditional_entropy = normal_entropy_from_variance(torch.clamp(aleatoric, min=1e-8)).mean()
+                marginal_entropy = self._material_entropy_per_cell_channel(next_variance).mean()
+                conditional_entropy = self._material_entropy_per_cell_channel(
+                    torch.clamp(aleatoric, min=1e-8)
+                ).mean()
                 transition_risk = transition_risk - marginal_entropy
                 transition_ambiguity = transition_ambiguity + conditional_entropy
                 epistemic_value = epistemic_value + torch.clamp(marginal_entropy - conditional_entropy, min=0.0)
@@ -1755,6 +1772,7 @@ class SpatialExpectedFreeEnergy:
         return coverage_mean.mean(), coverage_variance.mean()
 
     def _observation_ambiguity(self, material_mean: torch.Tensor) -> torch.Tensor:
+        material_mean = self._independent_material_fields(material_mean)
         thickness = torch.clamp(material_mean[:, 0], min=0.0)
         wetness = torch.clamp(material_mean[:, 1], min=0.0)
         pigment = torch.clamp(material_mean[:, 2], min=0.0)

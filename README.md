@@ -36,7 +36,9 @@ python -m pytest -q \
   tests/test_action_encoding.py \
   tests/test_canvas.py \
   tests/test_motor_reliability.py \
+  tests/test_native_contract.py \
   tests/test_preferences.py \
+  tests/test_sensor_access_contract.py \
   tests/test_spatial_state.py \
   tests/test_stop_policy.py \
   tests/test_stop_prior.py
@@ -131,8 +133,14 @@ that every planned feature will be built.
 ## Documentation
 
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): current evidence, known failures, and public progress log.
+- [`docs/BASELINE_TEST_RESULT_2026-07-24.md`](docs/BASELINE_TEST_RESULT_2026-07-24.md): latest complete-suite environment and result.
 - [`docs/RESEARCH_CHARTER.md`](docs/RESEARCH_CHARTER.md): scientific intent and scope.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): long-form architecture brief.
+- [`docs/GENERATIVE_MODEL_SPEC.md`](docs/GENERATIVE_MODEL_SPEC.md): implemented probabilistic factorization, VFE/EFE map, and approximation register.
+- [`docs/OBSERVATION_FACTOR_AUDIT.md`](docs/OBSERVATION_FACTOR_AUDIT.md): independent material factors, units, normalization, and provisional likelihoods.
+- [`docs/NATIVE_PLANT_REFERENCE.md`](docs/NATIVE_PLANT_REFERENCE.md): versioned native arm, canvas, contact, and material contract.
+- [`docs/CONTROL_PLANT_POLICY_BOUNDARY.md`](docs/CONTROL_PLANT_POLICY_BOUNDARY.md): backend-neutral command, sensor, belief, forecast, and evaluation interfaces.
+- [`docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`](docs/VARIABLE_SENSOR_ACCESS_LEDGER.md): simulator-to-agent values, physical accessibility, and research blockers.
 - [`docs/CURRENT_IMPLEMENTATION.md`](docs/CURRENT_IMPLEMENTATION.md): detailed prototype implementation notes.
 - [`docs/DEVELOPMENT_AUDIT.md`](docs/DEVELOPMENT_AUDIT.md): historical engineering audit.
 - [`planning/README.md`](planning/README.md): milestone planning system.

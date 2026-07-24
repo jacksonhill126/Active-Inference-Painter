@@ -143,6 +143,8 @@ Acceptance:
 - Map material state to visible surface observations without exposing hidden
   thickness, wetness, or pigment arrays to inference.
 - Keep observation noise separate from hidden-state process noise.
+- Never seed agent forecasts by copying the generative process RNG or future
+  sensor-noise continuation.
 - Version camera geometry, ground tone, and sensor parameters.
 - Add deterministic fixtures for blank, black, white, overlap, and wet-
   blending cases.
@@ -184,6 +186,8 @@ Acceptance:
   approximation is documented.
 - Fuse transition priors and observations without reading ground-truth
   material state.
+- Provide the inferred initial-state distribution used by counterfactual body
+  and material rollouts; do not initialize them from a live process object.
 - Preserve uncertainty in unobserved or visually ambiguous material.
 - Compare posterior estimates against hidden simulator labels only for
   evaluation.

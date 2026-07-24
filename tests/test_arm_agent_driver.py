@@ -168,7 +168,7 @@ def test_spatial_material_driver_reports_spatial_planner_state() -> None:
     assert diagnostics["efe"]["execution_forecast_used"] is True
     assert diagnostics["efe"]["rollout_mode"] == "local_patch"
     assert diagnostics["efe"]["rollout_grid_size"] == cfg.canvas_size
-    assert diagnostics["vfe"]["units"] == "nats_per_cell_channel"
+    assert diagnostics["vfe"]["units"] == "nats_per_independent_cell_channel"
     assert diagnostics["topPolicies"][0]["motorFeasible"] is True
 
 
