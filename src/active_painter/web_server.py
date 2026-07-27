@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .version import code_version
+from .web_robot_model import load_robot_visual_model
 from .web_runtime import WebSimRuntime
 
 
@@ -98,6 +99,9 @@ class PainterRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             self._send_json(self.server.runtime.state())
             return
+        if parsed.path == "/api/robot-model":
+            self._send_json(load_robot_visual_model())
+            return
         if parsed.path == "/api/canvas.png":
             self._send_bytes(self.server.runtime.canvas_png(), "image/png")
             return
@@ -158,6 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-path", default=None)
     parser.add_argument("--checkpoint-save-every-transitions", type=int, default=10)
     parser.add_argument("--device", default=None, help="torch device for the planner, e.g. cuda, cuda:0, cpu (default: cuda if available)")
+    parser.add_argument(
+        "--plant-backend",
+        choices=("native", "mujoco"),
+        default="native",
+        help="realized arm dynamics/contact backend; painting remains in VerticalCanvas",
+    )
     return parser
 
 
@@ -203,6 +213,7 @@ def main() -> None:
         checkpoint_path=args.checkpoint_path,
         checkpoint_save_every_transitions=args.checkpoint_save_every_transitions,
         device=args.device,
+        plant_backend=args.plant_backend,
     )
     print(f"Planner device: {runtime.agent_driver.agent.device}", flush=True)
     server = bind_server(args.host, args.port, PainterRequestHandler)

@@ -604,7 +604,7 @@ class ArmActiveInferenceDriver:
         sim.plant.reset_state(sim.actual_pose)
         sim.intended_contact_pressure = 0.0
         sim.paint_enabled = False
-        sim.contact = sim.canvas.contact_from_tip(release_tip, sim.intended_contact_pressure)
+        sim.refresh_contact()
         self._contact_release_count += 1
 
     def _contact_escape_pose(self, sim: ArmPainterSim, scope: str) -> ArmPose | None:

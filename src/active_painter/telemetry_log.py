@@ -84,7 +84,22 @@ class ArmTelemetryLog:
         tip = sim.kinematics.tip(pose)
         target_tip = sim.kinematics.tip(target)
         telemetry = sim.plant.telemetry
-        max_target_error = max(abs(float(getattr(target, name) - getattr(pose, name))) for name in JOINT_NAMES)
+        position_provider = getattr(sim.plant, "telemetry_joint_position_deg", None)
+        target_provider = getattr(sim.plant, "telemetry_joint_target_deg", None)
+        joint_positions = (
+            position_provider()
+            if callable(position_provider)
+            else {name: float(getattr(pose, name)) for name in JOINT_NAMES}
+        )
+        joint_targets = (
+            target_provider()
+            if callable(target_provider)
+            else {name: float(getattr(target, name)) for name in JOINT_NAMES}
+        )
+        max_target_error = max(
+            abs(float(joint_targets[name] - joint_positions[name]))
+            for name in JOINT_NAMES
+        )
         row: dict[str, Any] = {
             "sim_time_s": float(sim_time),
             "painting_count": int(painting_count),
@@ -108,8 +123,8 @@ class ArmTelemetryLog:
         }
         for name in JOINT_NAMES:
             velocity = float(sim.plant.velocity[name])
-            row[f"position_{name}_deg"] = float(getattr(pose, name))
-            row[f"target_{name}_deg"] = float(getattr(target, name))
+            row[f"position_{name}_deg"] = float(joint_positions[name])
+            row[f"target_{name}_deg"] = float(joint_targets[name])
             row[f"velocity_{name}_rad_s"] = velocity
             row[f"velocity_{name}_deg_s"] = float(np.rad2deg(velocity))
             row[f"current_{name}_a"] = float(telemetry.current[name])

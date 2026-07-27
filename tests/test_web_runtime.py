@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler
+from xml.etree import ElementTree
 
 from PIL import Image
 import pytest
@@ -21,6 +22,12 @@ from active_painter.web_server import (
     resolved_bootstrap,
 )
 from active_painter.web_runtime import WebSimRuntime
+from active_painter.web_robot_model import (
+    legacy_tip_to_physical_target,
+    load_robot_visual_model,
+    physical_tip,
+    retarget_legacy_robot_state,
+)
 
 
 def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
@@ -32,6 +39,10 @@ def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
     assert state["contact"]["touching"] is False
     assert state["contact"]["projectedOnCanvas"] == state["contact"]["onCanvas"]
     assert "yaw" in state["pose"]
+    assert state["robot"]["mode"] == "legacy_canvas_cartesian_retarget"
+    assert list(state["robot"]["jointPositionDeg"]) == ["yaw", "pitch", "roll", "elbow"]
+    assert state["robot"]["alignmentErrorM"] < 1e-5
+    assert len(state["robot"]["tipM"]) == 3
     assert state["telemetryLog"]["sampleCount"] >= 1
     assert state["telemetryLog"]["csvEndpoint"] == "/api/telemetry.csv"
     assert "velocityRadS" in state["motor"]["yaw"]
@@ -116,6 +127,8 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert summary.telemetry_sample_hz == 15.0
     assert summary.checkpoint_path is None
     assert summary.checkpoint_save_every_transitions == 10
+    assert summary.plant_backend == "native"
+    assert parser.parse_args(["--plant-backend", "mujoco"]).plant_backend == "mujoco"
 
 
 def test_web_server_exposes_checkpoint_options() -> None:
@@ -318,6 +331,102 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "Relational transition risk" in main_js
     assert "Relational observation" in main_js
     assert "Passage kind support" in main_js
+    assert "/api/robot-model" in main_js
+    assert "buildBody" in main_js
+    assert "updateRobot(state.robot" in main_js
+    assert "canvasTexture" in main_js
+    assert "mujoco-robstride-direct-v3" not in main_js
+
+
+def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
+    model = load_robot_visual_model()
+
+    assert model["version"] == "mujoco-robstride-direct-v3"
+    assert model["jointOrder"] == ["yaw", "pitch", "roll", "elbow"]
+    assert model["kinematicConvention"] == "Rz_yaw_Rx_pitch_Ry_roll_Rx_elbow"
+    assert model["kinematics"]["yawOrigin"] == pytest.approx([0.0, 0.0, 0.285])
+    assert model["kinematics"]["pitchAnchorAtZero"] == pytest.approx([0.075, 0.0, 0.391])
+    assert model["kinematics"]["upperArmLength"] == pytest.approx(0.3302)
+    assert model["kinematics"]["lowerArmLength"] == pytest.approx(0.3302)
+    assert model["canvas"]["center"] == pytest.approx([0.075, 0.4826, 0.350])
+    assert model["brush"]["diameter"] == pytest.approx(0.0127)
+    assert model["motors"]["yaw"]["model"] == "RobStride 03"
+    assert model["motors"]["elbow"]["model"] == "RobStride 02"
+
+    world_body_names = [body["name"] for body in model["world"]["bodies"]]
+    assert world_body_names == ["canvas", "base"]
+
+
+def test_web_robot_payload_tracks_physical_xml_edits() -> None:
+    source = Path("models/active_inference_painter.xml")
+    root_dir = Path("runs/test_web_robot_payload")
+    edited = root_dir / "edited_robot.xml"
+    shutil.rmtree(root_dir, ignore_errors=True)
+    root_dir.mkdir(parents=True)
+    try:
+        tree = ElementTree.parse(source)
+        root = tree.getroot()
+
+        root.find(".//body[@name='pitch_output']").set("pos", "0.080 0 0.120")
+        root.find(".//joint[@name='elbow']").set("range", "-1.0 2.0")
+        root.find(".//body[@name='canvas']").set("pos", "0.090 0.50635 0.400")
+        root.find(".//geom[@name='canvas_surface']").set(
+            "size",
+            "0.300 0.00635 0.200",
+        )
+        root.find(".//geom[@name='bristle_contact']").set(
+            "fromto",
+            "0 0 0 0 0.040 0",
+        )
+        root.find(".//geom[@name='bristle_contact']").set("size", "0.007")
+        root.find(".//joint[@name='brush_compression']").set("range", "-0.020 0")
+        tree.write(edited, encoding="utf-8", xml_declaration=True)
+
+        model = load_robot_visual_model(edited)
+
+        assert model["kinematics"]["yawToPitch"] == pytest.approx([0.080, 0.0, 0.120])
+        assert model["kinematics"]["pitchAnchorAtZero"] == pytest.approx(
+            [0.080, 0.0, 0.405]
+        )
+        assert model["jointRangeDeg"]["elbow"] == pytest.approx(
+            np.rad2deg([-1.0, 2.0])
+        )
+        assert model["canvas"]["center"] == pytest.approx([0.090, 0.500, 0.400])
+        assert model["canvas"]["width"] == pytest.approx(0.600)
+        assert model["canvas"]["height"] == pytest.approx(0.400)
+        assert model["brush"]["diameter"] == pytest.approx(0.014)
+        assert model["brush"]["bristleLength"] == pytest.approx(0.040)
+        assert model["brush"]["compressionTravel"] == pytest.approx(0.020)
+    finally:
+        shutil.rmtree(root_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    ("legacy_tip", "expected_target"),
+    [
+        ([0.0, 17.0, 0.0], [0.075, 0.4826, 0.350]),
+        ([-10.0, 17.0, -10.0], [-0.179, 0.4826, 0.096]),
+        ([10.0, 17.0, 10.0], [0.329, 0.4826, 0.604]),
+        ([0.0, 16.5, 0.0], [0.075, 0.4699, 0.350]),
+    ],
+)
+def test_legacy_canvas_points_retarget_to_the_physical_robot(
+    legacy_tip: list[float],
+    expected_target: list[float],
+) -> None:
+    model = load_robot_visual_model()
+    source_pose = {"yaw": 0.0, "pitch": -50.0, "roll": 0.0, "elbow": 100.0}
+
+    target = legacy_tip_to_physical_target(model, np.asarray(legacy_tip))
+    state = retarget_legacy_robot_state(model, source_pose, np.asarray(legacy_tip))
+
+    assert target == pytest.approx(expected_target)
+    assert state["mappedCartesianTargetM"] == pytest.approx(expected_target)
+    assert state["alignmentErrorM"] < 1e-5
+    assert physical_tip(model, state["jointPositionDeg"]) == pytest.approx(
+        expected_target,
+        abs=1e-5,
+    )
 
 
 def test_web_server_renders_literal_fallback_version_before_javascript_runs() -> None:
@@ -333,21 +442,34 @@ def test_code_build_info_increments_when_source_fingerprint_changes() -> None:
         package = root / "pyproject.toml"
         source = root / "src" / "active_painter"
         web = root / "web"
+        models = root / "models"
         source.mkdir(parents=True)
         web.mkdir()
+        models.mkdir()
         package.write_text('[project]\nversion = "0.1.0"\n', encoding="utf-8")
         (source / "versioned.py").write_text("VALUE = 1\n", encoding="utf-8")
         (web / "main.js").write_text("console.log('one');\n", encoding="utf-8")
+        (models / "active_inference_painter.xml").write_text(
+            '<mujoco model="one"/>\n',
+            encoding="utf-8",
+        )
         stamp = root / ".stamp.json"
 
         first = code_build_info(root=root, metadata_path=stamp)
         second = code_build_info(root=root, metadata_path=stamp)
         (web / "main.js").write_text("console.log('two');\n", encoding="utf-8")
         third = code_build_info(root=root, metadata_path=stamp)
+        (models / "active_inference_painter.xml").write_text(
+            '<mujoco model="two"/>\n',
+            encoding="utf-8",
+        )
+        fourth = code_build_info(root=root, metadata_path=stamp)
 
         assert first.build == second.build
         assert third.build == second.build + 1
+        assert fourth.build == third.build + 1
         assert first.fingerprint != third.fingerprint
+        assert third.fingerprint != fourth.fingerprint
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

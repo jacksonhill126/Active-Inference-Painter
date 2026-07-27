@@ -16,6 +16,7 @@ from .arm_sim import ArmPainterSim, JOINT_NAMES
 from .config import PainterConfig
 from .telemetry_log import ArmTelemetryLog
 from .version import CodeBuildInfo, code_build_info
+from .web_robot_model import load_robot_visual_model, retarget_legacy_robot_state
 
 
 @dataclass(slots=True)
@@ -34,10 +35,12 @@ class WebSimRuntime:
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
     device: str | None = None
+    plant_backend: str = "native"
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)
     code_build: CodeBuildInfo = field(init=False)
+    robot_model: dict[str, Any] = field(init=False)
     sim_time: float = field(default=0.0, init=False)
     painting_count: int = field(default=0, init=False)
     last_saved_canvas: str | None = field(default=None, init=False)
@@ -48,9 +51,11 @@ class WebSimRuntime:
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _next_telemetry_time: float = field(default=0.0, init=False)
+    _last_robot_joint_position_deg: dict[str, float] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.code_build = code_build_info()
+        self.robot_model = load_robot_visual_model()
         sim_config = PainterConfig(
             canvas_size=self.canvas_size,
             planner_state_kind=self.planner_state_kind,
@@ -80,6 +85,13 @@ class WebSimRuntime:
             replay_capacity=replay_capacity,
         )
         self.sim = ArmPainterSim(sim_config)
+        if self.plant_backend == "mujoco":
+            from .mujoco_backend import MujocoJointPlant
+
+            self.sim.plant = MujocoJointPlant()
+            self.sim.reset_pose()
+        elif self.plant_backend != "native":
+            raise ValueError(f"unsupported plant backend: {self.plant_backend}")
         self.agent_driver = ArmActiveInferenceDriver(
             config=driver_config,
             bootstrap_transitions=self.driver_bootstrap_transitions,
@@ -103,6 +115,9 @@ class WebSimRuntime:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        close = getattr(self.sim.plant, "close", None)
+        if callable(close):
+            close()
 
     def _run(self) -> None:
         last = time.perf_counter()
@@ -209,6 +224,21 @@ class WebSimRuntime:
             target = self.sim.target_pose
             contact = self.sim.contact
             telemetry = self.sim.plant.telemetry
+            direct_robot_state = getattr(self.sim.plant, "web_robot_state", None)
+            if callable(direct_robot_state):
+                robot_state = direct_robot_state(pose, target)
+            else:
+                robot_state = retarget_legacy_robot_state(
+                    self.robot_model,
+                    {name: float(getattr(pose, name)) for name in JOINT_NAMES},
+                    render_points[-1],
+                    self._last_robot_joint_position_deg,
+                )
+                self._last_robot_joint_position_deg = robot_state["jointPositionDeg"]
+                robot_state["brushCompressionM"] = min(
+                    self.robot_model["brush"]["compressionTravel"],
+                    max(0.0, float(contact.deflection) * 0.0254),
+                )
             return {
                 "simTime": self.sim_time,
                 "codeVersion": self.code_build.version,
@@ -221,6 +251,12 @@ class WebSimRuntime:
                 "telemetryLog": self.telemetry_log.summary(self.sim_time),
                 "agent": self.agent_driver.diagnostics(),
                 "paintEnabled": self.sim.paint_enabled,
+                "plantBackend": self.plant_backend,
+                "counterfactualPlantBackend": getattr(
+                    self.sim.plant,
+                    "counterfactual_backend_id",
+                    self.plant_backend,
+                ),
                 "brushTone": "black" if self.sim.brush_tone >= 0.5 else "white",
                 "canvas": {
                     "width": self.sim.canvas.width,
@@ -235,6 +271,7 @@ class WebSimRuntime:
                 "renderPoints": render_points.astype(float).tolist(),
                 "tip": points[-1].astype(float).tolist(),
                 "renderTip": render_points[-1].astype(float).tolist(),
+                "robot": robot_state,
                 "upperArmAxis": self.sim.kinematics.upper_arm_axis(pose).astype(float).tolist(),
                 "elbowHingeAxis": self.sim.kinematics.elbow_hinge_axis(pose).astype(float).tolist(),
                 "contact": {
@@ -297,10 +334,7 @@ class WebSimRuntime:
         self.sim.canvas.clear()
         self.sim.paint_enabled = False
         self.sim.intended_contact_pressure = 0.0
-        self.sim.contact = self.sim.canvas.contact_from_tip(
-            self.sim.kinematics.tip(self.sim.actual_pose),
-            self.sim.intended_contact_pressure,
-        )
+        self.sim.refresh_contact()
         self.agent_driver.reset(self.sim)
 
     def _save_canvas_snapshot(self, painting_index: int) -> Path:

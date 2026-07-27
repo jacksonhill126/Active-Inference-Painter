@@ -362,7 +362,40 @@ python -m active_painter.web_server
 ```
 
 Then open `http://127.0.0.1:8017`. Python owns the simulation state and active
-inference core; Three.js only renders the arm, canvas, controls, and telemetry.
+inference core. Three.js builds the direct-drive robot body hierarchy from
+`models/active_inference_painter.xml` through `/api/robot-model`, and renders
+the arm, controls, telemetry, and the Python material image from
+`/api/canvas.png`. MuJoCo is not used as a paint renderer.
+
+The current controller still emits `native-abstract-v0` Cartesian motion. With
+the native plant, a named `legacy_canvas_cartesian_retarget` adapter uses
+conventional visualization-only IK to register that motion with the physical
+MJCF canvas. With the MuJoCo plant, the same below-policy mapping generates
+physical joint commands; realized joint telemetry, tip motion, compliance, and
+contact then come directly from MuJoCo. Neither mapping selects or scores
+painting policies.
+
+The realized plant is selectable:
+
+```bash
+python -m active_painter.web_server --plant-backend native
+python -m active_painter.web_server --plant-backend mujoco
+```
+
+`native` remains the default accepted reference. In `mujoco` mode, position
+commands use the stable `yaw`, `pitch`, `roll`, `elbow` joint order in radians.
+MuJoCo supplies encoder position/velocity, actuator force and derived current,
+tip position, brush compression, and exact brush/canvas contact. Realized
+contact drives deposition into the existing `VerticalCanvas`; MuJoCo does not
+represent paint.
+
+The current painting controllers still operate in the
+`native-abstract-v0` canvas frame. A conventional execution adapter maps their
+Cartesian targets into the hardware-oriented MJCF workspace and maps the
+realized tip back to the material canvas. Counterfactual motor forecasts still
+use a deep-copied native plant for tractability and are reported as
+`native-abstract-v0 approximation`. Direct MuJoCo counterfactual forecasting
+and sensor-only body-state inference remain future work.
 When the active-inference driver selects `stop`, the web runtime automatically
 starts a fresh painting. Every fifth completed painting is saved by default to
 `runs/web/painting_####.png`; use `--save-every-paintings` and `--archive-dir`

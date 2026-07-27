@@ -927,7 +927,7 @@ class ArmPainterSim:
         self.brush = Brush(self.config, np.random.default_rng(int(self.config.brush_seed)))
         self._painting = False
         self._previous_brush_world = None
-        self.contact = self.canvas.contact_from_tip(self.kinematics.tip(self.actual_pose), self.intended_contact_pressure)
+        self.refresh_contact()
 
     def reset_pose(self) -> None:
         self.actual_pose = safe_home_pose()
@@ -939,6 +939,7 @@ class ArmPainterSim:
         self._painting = False
         self._previous_brush_world = None
         self._tip_lag_world = None
+        self.refresh_contact()
 
     def set_target(self, pose: ArmPose) -> None:
         self.target_pose = pose.clipped()
@@ -956,13 +957,19 @@ class ArmPainterSim:
         )
         tip = self.kinematics.tip(self.actual_pose)
         previous_tip = self.kinematics.tip(previous_pose)
-        if self.canvas.too_deep(tip) and self.canvas.overtravel_depth(tip) >= self.canvas.overtravel_depth(previous_tip):
+        plant_handles_contact = bool(getattr(self.plant, "handles_contact", False))
+        if (
+            not plant_handles_contact
+            and self.canvas.too_deep(tip)
+            and self.canvas.overtravel_depth(tip)
+            >= self.canvas.overtravel_depth(previous_tip)
+        ):
             self.actual_pose = previous_pose
             self.plant.restore_state(previous_plant_state)
             if self.canvas.too_deep(self.kinematics.tip(target_pose)):
                 self.target_pose = self.actual_pose
             tip = self.kinematics.tip(self.actual_pose)
-        self.contact = self.canvas.contact_from_tip(tip, self.intended_contact_pressure)
+        self.refresh_contact()
         painting = self.paint_enabled and self.contact.pressure > 0.001 and self.contact.on_canvas
         if painting:
             if not self._painting:
@@ -1000,6 +1007,16 @@ class ArmPainterSim:
             )
             self._previous_brush_world = brush_world.copy()
         self._painting = painting
+
+    def refresh_contact(self) -> None:
+        provider = getattr(self.plant, "contact_state", None)
+        if callable(provider):
+            self.contact = provider(self.canvas, self.intended_contact_pressure)
+            return
+        self.contact = self.canvas.contact_from_tip(
+            self.kinematics.tip(self.actual_pose),
+            self.intended_contact_pressure,
+        )
 
     def render_points(self) -> np.ndarray:
         points = self.kinematics.joint_points(self.actual_pose).copy()

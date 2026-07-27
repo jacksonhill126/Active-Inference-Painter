@@ -10,10 +10,11 @@ extended spatial organization through perception, prediction, action, and
 belief revision without reference images, aesthetic rewards, demonstrated
 painting policies, or fine-tuning on a painting corpus.
 
-> **Status:** early research prototype. The current system runs in a custom
-> Python simulator and web viewer. It is not validated for physical hardware,
-> and its present visual output should not be treated as evidence of learned
-> composition.
+> **Status:** early research prototype. Paint material remains in the custom
+> Python process; realized arm dynamics and contact can use either the native
+> reference plant or the hardware-oriented MuJoCo model. It is not validated
+> for physical hardware, and its present visual output should not be treated as
+> evidence of learned composition.
 
 ## Quick Start
 
@@ -28,6 +29,14 @@ python -m active_painter.web_server
 ```
 
 Open `http://127.0.0.1:8017`.
+
+To use MuJoCo for realized arm dynamics, actuator limits, brush compliance,
+and contact while retaining the Python paint-material process:
+
+```bash
+python -m pip install -e ".[dev,mujoco]"
+python -m active_painter.web_server --plant-backend mujoco
+```
 
 Run the deterministic smoke suite:
 
@@ -84,7 +93,12 @@ policy below that boundary.
 - Hierarchical mark, polyline, passage, and passage-plan proposals.
 - Motor-realization forecasts over Cartesian, joint-space, elbow-pivot, and
   upper-arm-roll alternatives.
-- Checkpointing, replay, telemetry export, and a Python-backed Three.js viewer.
+- Checkpointing, replay, telemetry export, and a Python-backed Three.js viewer
+  that builds its robot hierarchy from the MuJoCo XML while retaining the
+  Python material-canvas display.
+- Selectable native and MuJoCo realized-execution backends behind the SI-unit
+  plant contract. MuJoCo execution currently retains the native abstract body
+  as an explicitly labeled counterfactual motor-forecast approximation.
 - Broad deterministic and integration test coverage across material,
   inference, hierarchy, arm, execution, and runtime behavior.
 

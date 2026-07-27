@@ -1291,7 +1291,8 @@ The runtime has:
 - a Python physics thread;
 - background planning/training threads;
 - an HTTP server;
-- a Three.js client that polls state and canvas images.
+- a Three.js client that polls state and canvas images and builds its robot
+  hierarchy from the hardware-oriented MuJoCo XML.
 
 The simulator advances at a fixed 240 Hz step. "Max speed" runs many fixed
 steps per wall-clock loop; it does not increase the integration timestep.
@@ -1302,9 +1303,32 @@ state, compliance, backlash, friction/load torque, contact, and canvas
 coverage. Old telemetry rows are overwritten.
 
 The viewer reports VFE and EFE separately, including hierarchy and motor
-decompositions. The code-version counter fingerprints files under
-`src/active_painter`, `web`, and `pyproject.toml`; it does not currently include
-this architecture document.
+decompositions. `/api/robot-model` exposes the body tree, material definitions,
+joint contract, canvas pose, brush geometry, and RobStride metadata parsed from
+`models/active_inference_painter.xml`. `/api/canvas.png` remains the external
+material-process image and is mapped onto the physical canvas face in Three.js.
+
+The legacy Python controller is currently registered to the physical canvas by
+conventional visualization-only IK, labeled
+`legacy_canvas_cartesian_retarget` in state. This adapter is below policy
+selection.
+
+When the web runtime is launched with `--plant-backend mujoco`, the formal
+`PlantBackend` is implemented by the MJCF model in SI units. MuJoCo owns
+realized joint dynamics, actuator saturation, brush compliance, tip pose, and
+contact. `VerticalCanvas` still owns paint thickness, wetness, pigment,
+coverage, and visible tone. A compatibility facade maps the current abstract
+controller frame to and from the physical plant.
+
+Actual MuJoCo execution and counterfactual policy prediction are deliberately
+separate in this first integration. Deep-copied planning rollouts use
+`native-abstract-v0` as an explicit approximation; they do not receive MuJoCo
+evaluation truth. Moving counterfactuals onto a calibrated MuJoCo generative
+model requires separate likelihood validation and performance work.
+
+The code-version counter fingerprints files under `src/active_painter`, `web`,
+`models/active_inference_painter.xml`, and `pyproject.toml`; it does not
+currently include this architecture document.
 
 ## 27. What the system can actually learn
 

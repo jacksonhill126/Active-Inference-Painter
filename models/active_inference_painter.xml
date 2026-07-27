@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  mujoco-robstride-direct-v3
+
+  Hardware-oriented 4-DOF painting-arm draft. MuJoCo owns rigid-body motion,
+  actuator limits, brush compliance, and contact sensing. Paint deposition,
+  material coverage, wetness, pigment, and surface tone remain in the Python
+  VerticalCanvas generative process.
+
+  Exact interface fields:
+    joint order/names: yaw, pitch, roll, elbow
+    joint signs/axes:  Rz(yaw) Rx(pitch) Ry(roll) Rx(elbow)
+    yaw/pitch/roll ranges: native-abstract-v0
+    elbow hardware range: -85 to +150 deg; native 0 to +150 deg is a subset
+    keyframe/site: safe_home, tip
+
+  Vendor-backed fields:
+    RS03: 106 x 106 x 56 mm, 0.880 kg, 20 Nm rated, 60 Nm peak
+    RS02: 78.5 x 78.5 x 45.5 mm, 0.405 kg, 6 Nm rated, 17 Nm peak
+
+  Prototype assumptions pending CAD or measurement:
+    bracket geometry/mass/inertia, 285 mm yaw height, yaw-to-pitch offset,
+    83 mm pitch-to-roll offset, controller gains, friction, armature,
+    brush stiffness/damping, and contact parameters.
+-->
+<mujoco model="active_inference_painter">
+  <compiler angle="radian" autolimits="true" inertiafromgeom="false"/>
+  <option timestep="0.001" gravity="0 0 -9.81" integrator="implicitfast"
+          cone="elliptic" iterations="80" noslip_iterations="4"/>
+  <size nconmax="200" njmax="1000"/>
+
+  <statistic center="0.075 0.25 0.30" extent="1.05"/>
+
+  <visual>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.65 0.65 0.65"
+               specular="0.15 0.15 0.15"/>
+    <rgba haze="0.85 0.88 0.92 1"/>
+    <global azimuth="135" elevation="-18"/>
+  </visual>
+
+  <custom>
+    <text name="model_version" data="mujoco-robstride-direct-v3"/>
+    <text name="kinematic_convention" data="Rz_yaw_Rx_pitch_Ry_roll_Rx_elbow"/>
+    <text name="actuator_assignment" data="yaw_RS03_pitch_RS03_roll_RS02_elbow_RS02"/>
+    <text name="paint_process" data="external_VerticalCanvas"/>
+    <numeric name="joint_range_rad"
+             data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 -1.483529864195 2.617993877991"/>
+    <numeric name="native_controller_joint_range_rad"
+             data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 0 2.617993877991"/>
+    <numeric name="safe_home_qpos_rad"
+             data="0 -0.872664625997 0 1.745329251994 0"/>
+    <numeric name="link_length_m" data="0.3302 0.3302"/>
+    <numeric name="post_yaw_height_m" data="0.285"/>
+    <numeric name="yaw_to_pitch_offset_m" data="0.075 0 0.106"/>
+    <numeric name="yaw_to_pitch_distance_m" data="0.129849913362"/>
+    <numeric name="pitch_to_roll_offset_m" data="0.083"/>
+    <numeric name="canvas_size_m" data="0.508 0.508"/>
+    <numeric name="native_canvas_contact_y_m" data="0.4318"/>
+    <numeric name="canvas_contact_y_m" data="0.4826"/>
+    <numeric name="canvas_center_x_m" data="0.075"/>
+    <numeric name="canvas_center_z_m" data="0.350"/>
+    <numeric name="brush_diameter_m" data="0.0127"/>
+    <numeric name="robstride_rated_torque_nm" data="20 20 6 6"/>
+    <numeric name="robstride_peak_torque_nm" data="60 60 17 17"/>
+    <numeric name="robstride_mass_kg" data="0.880 0.880 0.405 0.405"/>
+    <numeric name="robstride_reduction_ratio" data="9 9 7.75 7.75"/>
+    <numeric name="robstride_rated_voltage_v" data="48 48 48 48"/>
+    <numeric name="robstride_voltage_min_v" data="15 15 24 24"/>
+    <numeric name="robstride_voltage_max_v" data="60 60 60 60"/>
+    <numeric name="robstride_rated_power_w" data="380 380 170 170"/>
+    <numeric name="robstride_rated_speed_rad_s"
+             data="10.471975511966 10.471975511966 10.471975511966 10.471975511966"/>
+    <numeric name="robstride_no_load_speed_rad_s"
+             data="20.420352248333 20.420352248333 42.935099858269 42.935099858269"/>
+    <numeric name="robstride_rated_phase_current_apk" data="12 12 7 7"/>
+    <numeric name="robstride_peak_phase_current_apk" data="43 43 23 23"/>
+    <numeric name="robstride_torque_constant_nm_per_arms"
+             data="2.36 2.36 1.22 1.22"/>
+    <numeric name="robstride_encoder_count" data="2 2 2 2"/>
+  </custom>
+
+  <asset>
+    <texture name="ground_tex" type="2d" builtin="checker"
+             rgb1="0.18 0.20 0.22" rgb2="0.23 0.25 0.27"
+             width="256" height="256"/>
+    <material name="ground_mat" texture="ground_tex" texrepeat="4 4"
+              reflectance="0.08"/>
+    <material name="frame_mat" rgba="0.12 0.14 0.17 1"
+              specular="0.65" shininess="0.55"/>
+    <material name="motor_mat" rgba="0.18 0.20 0.23 1"
+              specular="0.8" shininess="0.72"/>
+    <material name="output_mat" rgba="0.92 0.45 0.06 1"
+              specular="0.55" shininess="0.62"/>
+    <material name="link_mat" rgba="0.82 0.84 0.87 1"
+              specular="0.72" shininess="0.65"/>
+    <material name="canvas_mat" rgba="0.88 0.86 0.79 1"
+              specular="0.05" shininess="0.1"/>
+    <material name="handle_mat" rgba="0.44 0.20 0.07 1"
+              specular="0.2" shininess="0.25"/>
+    <material name="ferrule_mat" rgba="0.68 0.71 0.74 1"
+              specular="0.9" shininess="0.82"/>
+    <material name="bristle_mat" rgba="0.35 0.20 0.08 1"
+              specular="0.08" shininess="0.12"/>
+  </asset>
+
+  <default>
+    <joint limited="true" solreflimit="0.004 1" solimplimit="0.95 0.99 0.001"
+           frictionloss="0.04"/>
+    <geom contype="0" conaffinity="0" group="1"/>
+    <site group="3"/>
+    <default class="structure">
+      <geom contype="0" conaffinity="0" group="1"/>
+    </default>
+    <default class="contact_surface">
+      <geom contype="1" conaffinity="1" condim="4" group="0"
+            margin="0.0005"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light name="key_light" pos="-0.5 -0.2 1.1" dir="0.4 0.55 -1"
+           diffuse="0.85 0.83 0.78"/>
+    <light name="fill_light" pos="0.7 0.1 0.7" dir="-0.6 0.35 -0.6"
+           diffuse="0.38 0.43 0.52"/>
+    <camera name="overview" pos="0.90 -0.82 0.72"
+            xyaxes="0.66 0.75 0 -0.24 0.21 0.95"/>
+    <camera name="canvas_view" pos="0.075 -0.72 0.35"
+            xyaxes="1 0 0 0 0 1"/>
+    <camera name="top_view" pos="0.075 0.25 1.25"
+            xyaxes="1 0 0 0 1 0"/>
+
+    <geom name="floor" type="plane" pos="0 0 -0.025" size="1.2 1.2 0.05"
+          material="ground_mat" contype="0" conaffinity="0"/>
+
+    <!-- The collision box's front face is the y=0.4826 m canvas plane. -->
+    <body name="canvas" pos="0.075 0.48895 0.350">
+      <geom name="canvas_surface" class="contact_surface" type="box"
+            size="0.254 0.00635 0.254" material="canvas_mat"
+            friction="0.85 0.02 0.001"/>
+      <geom name="canvas_back" type="box" pos="0 0.013 0"
+            size="0.275 0.008 0.275" material="frame_mat"/>
+      <site name="canvas_center" type="sphere" pos="0 -0.00635 0"
+            size="0.004" rgba="0.1 0.7 0.9 0.35"/>
+    </body>
+
+    <body name="base">
+      <geom name="base_plate" type="cylinder" fromto="0 0 -0.02 0 0 0.018"
+            size="0.09" material="frame_mat"/>
+      <geom name="base_column" type="cylinder" fromto="0 0 0.018 0 0 0.285"
+            size="0.064" material="frame_mat"/>
+
+      <!-- RS03 yaw stator: 106 mm diameter x 56 mm axial length. -->
+      <geom name="yaw_rs03_stator" type="cylinder"
+            fromto="0 0 0.257 0 0 0.313" size="0.053"
+            material="motor_mat"/>
+
+      <body name="yaw_output" pos="0 0 0.285">
+        <inertial pos="0.045 0 0.075" mass="1.18"
+                  diaginertia="0.0060 0.0060 0.0042"/>
+        <joint name="yaw" type="hinge" axis="0 0 1"
+               range="-1.570796326795 1.570796326795"
+               damping="0.85" armature="0.0030"
+               actuatorfrcrange="-60 60"/>
+        <geom name="yaw_output_flange" type="cylinder"
+              fromto="0 0 -0.008 0 0 0.012" size="0.040"
+              material="output_mat"/>
+        <geom name="shoulder_yoke" type="capsule"
+              fromto="0 0 0.012 0.075 0 0.106"
+              size="0.035" material="frame_mat"/>
+
+        <!-- RS03 pitch stator; axis is yaw-frame +x and its center is
+             translated 75 mm along +x beside the post for sweep clearance. -->
+        <geom name="pitch_rs03_stator" type="cylinder"
+              fromto="0.047 0 0.106 0.103 0 0.106" size="0.053"
+              material="motor_mat"/>
+
+        <body name="pitch_output" pos="0.075 0 0.106">
+          <inertial pos="0 0.056 0" mass="0.72"
+                    diaginertia="0.0028 0.0018 0.0028"/>
+          <joint name="pitch" type="hinge" axis="1 0 0"
+                 range="-1.570796326795 1.570796326795"
+                 damping="0.95" armature="0.0030"
+                 actuatorfrcrange="-60 60"/>
+          <geom name="pitch_output_flange" type="cylinder"
+                fromto="-0.012 0 0 0.012 0 0" size="0.041"
+                material="output_mat"/>
+          <geom name="proximal_upper_arm" type="capsule"
+                fromto="0 0.018 0 0 0.083 0" size="0.024"
+                material="link_mat"/>
+
+          <!-- RS02 roll stator; translation lies on the roll axis and does
+               not change the Rz-Rx-Ry-Rx sign/orientation convention. -->
+          <geom name="roll_rs02_stator" type="cylinder"
+                fromto="0 0.06025 0 0 0.10575 0" size="0.03925"
+                material="motor_mat"/>
+
+          <body name="roll_output" pos="0 0.083 0">
+            <inertial pos="0 0.125 0" mass="1.02"
+                      diaginertia="0.0105 0.0024 0.0105"/>
+            <joint name="roll" type="hinge" axis="0 1 0"
+                   range="-3.141592653590 3.141592653590"
+                   damping="0.28" armature="0.0007"
+                   actuatorfrcrange="-17 17"/>
+            <geom name="roll_output_flange" type="cylinder"
+                  fromto="0 -0.010 0 0 0.010 0" size="0.030"
+                  material="output_mat"/>
+            <geom name="upper_arm_link" type="capsule"
+                  fromto="0 0.020 0 0 0.2472 0" size="0.020"
+                  material="link_mat"/>
+
+            <!-- RS02 elbow stator at 0.3302 m from the pitch axis. -->
+            <geom name="elbow_rs02_stator" type="cylinder"
+                  fromto="-0.02275 0.2472 0 0.02275 0.2472 0"
+                  size="0.03925" material="motor_mat"/>
+
+            <body name="elbow_output" pos="0 0.2472 0">
+              <inertial pos="0 0.142 0" mass="0.82"
+                        diaginertia="0.0082 0.0013 0.0082"/>
+              <joint name="elbow" type="hinge" axis="1 0 0"
+                     range="-1.483529864195 2.617993877991"
+                     damping="0.42" armature="0.0007"
+                     actuatorfrcrange="-17 17"/>
+              <geom name="elbow_output_flange" type="cylinder"
+                    fromto="-0.010 0 0 0.010 0 0" size="0.030"
+                    material="output_mat"/>
+              <geom name="forearm_link" type="capsule"
+                    fromto="0 0.026 0 0 0.245 0" size="0.017"
+                    material="link_mat"/>
+
+              <!-- Brush handle and ferrule are rigid. The 35 mm bristle body
+                   below translates axially to approximate brush compression. -->
+              <geom name="brush_handle" type="capsule"
+                    fromto="0 0.222 0 0 0.278 0" size="0.0050"
+                    material="handle_mat"/>
+              <geom name="brush_ferrule" type="cylinder"
+                    fromto="0 0.278 0 0 0.2952 0" size="0.0072"
+                    material="ferrule_mat"/>
+              <site name="brush_mount" type="sphere" pos="0 0.2952 0"
+                    size="0.003" rgba="0.9 0.5 0.1 0.5"/>
+
+              <body name="brush_compliance" pos="0 0.2952 0">
+                <inertial pos="0 0.0175 0" mass="0.06"
+                          diaginertia="0.000020 0.000004 0.000020"/>
+                <joint name="brush_compression" type="slide" axis="0 1 0"
+                       range="-0.012 0" stiffness="800" damping="6"
+                       springref="0" frictionloss="0.15"/>
+                <geom name="bristle_contact" class="contact_surface"
+                      type="cylinder" fromto="0 0 0 0 0.035 0"
+                      size="0.00635" material="bristle_mat"
+                      friction="0.85 0.03 0.001"/>
+                <site name="brush_contact_zone" type="box"
+                      pos="0 0.0345 0" size="0.0065 0.0015 0.0065"
+                      rgba="0.9 0.2 0.1 0.18"/>
+                <site name="tip" type="sphere" pos="0 0.035 0"
+                      size="0.002" rgba="1 0.15 0.05 0.9"/>
+                <site name="brush_force_site" type="sphere" pos="0 0 0"
+                      size="0.0025" rgba="0.2 0.8 0.3 0.45"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <pair name="brush_canvas_contact" geom1="bristle_contact"
+          geom2="canvas_surface" condim="4"
+          friction="0.85 0.03 0.001"
+          solref="-1400 -24" solimp="0.90 0.97 0.001 0.5 2"
+          margin="0.0005"/>
+  </contact>
+
+  <!-- Position commands are joint-output radians. RobStride's internal
+       reduction is already inside each integrated actuator: gear=1 and there
+       is no external belt ratio. Peak torque is the hard actuator limit;
+       continuous/thermal limiting belongs in the hardware safety layer. -->
+  <actuator>
+    <position name="yaw_position" joint="yaw" gear="1"
+              kp="210" kv="20" ctrlrange="-1.570796326795 1.570796326795"
+              forcerange="-60 60"/>
+    <position name="pitch_position" joint="pitch" gear="1"
+              kp="260" kv="24" ctrlrange="-1.570796326795 1.570796326795"
+              forcerange="-60 60"/>
+    <position name="roll_position" joint="roll" gear="1"
+              kp="85" kv="7" ctrlrange="-3.141592653590 3.141592653590"
+              forcerange="-17 17"/>
+    <position name="elbow_position" joint="elbow" gear="1"
+              kp="125" kv="10" ctrlrange="-1.483529864195 2.617993877991"
+              forcerange="-17 17"/>
+  </actuator>
+
+  <!-- Sensor names are stable adapter keys. Painting code should consume tip
+       pose plus realized contact; it must not infer paint from MuJoCo pixels. -->
+  <sensor>
+    <jointpos name="yaw_position_sensor" joint="yaw"/>
+    <jointpos name="pitch_position_sensor" joint="pitch"/>
+    <jointpos name="roll_position_sensor" joint="roll"/>
+    <jointpos name="elbow_position_sensor" joint="elbow"/>
+    <jointvel name="yaw_velocity_sensor" joint="yaw"/>
+    <jointvel name="pitch_velocity_sensor" joint="pitch"/>
+    <jointvel name="roll_velocity_sensor" joint="roll"/>
+    <jointvel name="elbow_velocity_sensor" joint="elbow"/>
+    <jointpos name="brush_compression_sensor" joint="brush_compression"/>
+    <touch name="brush_touch_sensor" site="brush_contact_zone"/>
+    <force name="brush_force_sensor" site="brush_force_site"/>
+    <torque name="brush_torque_sensor" site="brush_force_site"/>
+    <framepos name="tip_position_sensor" objtype="site" objname="tip"/>
+    <framequat name="tip_orientation_sensor" objtype="site" objname="tip"/>
+    <velocimeter name="tip_linear_velocity_sensor" site="tip"/>
+    <actuatorfrc name="yaw_torque_sensor" actuator="yaw_position"/>
+    <actuatorfrc name="pitch_torque_sensor" actuator="pitch_position"/>
+    <actuatorfrc name="roll_torque_sensor" actuator="roll_position"/>
+    <actuatorfrc name="elbow_torque_sensor" actuator="elbow_position"/>
+  </sensor>
+
+  <keyframe>
+    <key name="safe_home"
+         qpos="0 -0.872664625997 0 1.745329251994 0"
+         ctrl="0 -0.872664625997 0 1.745329251994"/>
+    <key name="contact_probe"
+         qpos="0 -0.824069157992 0 1.479812604153 0"
+         ctrl="0 -0.824069157992 0 1.479812604153"/>
+    <key name="lower_arm_down"
+         qpos="0 0 0 -1.396263401595 0"
+         ctrl="0 0 0 -1.396263401595"/>
+    <key name="bottom_edge_probe"
+         qpos="0 0.018483091890 0 -1.097714535920 0"
+         ctrl="0 0.018483091890 0 -1.097714535920"/>
+  </keyframe>
+</mujoco>

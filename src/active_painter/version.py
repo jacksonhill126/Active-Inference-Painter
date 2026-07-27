@@ -88,6 +88,9 @@ def _source_files(root: Path) -> list[Path]:
         path = root / rel
         if path.is_file():
             candidates.append(path)
+    robot_model = root / "models" / "active_inference_painter.xml"
+    if robot_model.is_file():
+        candidates.append(robot_model)
     for folder in (root / "src" / "active_painter", root / "web"):
         if not folder.is_dir():
             continue

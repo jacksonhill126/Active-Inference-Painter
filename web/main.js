@@ -5,88 +5,262 @@ const readout = document.getElementById("readout");
 const specs = document.getElementById("specs");
 const miniCanvas = document.getElementById("miniCanvas");
 const miniCtx = miniCanvas.getContext("2d");
+const robotModel = await fetch("/api/robot-model", { cache: "no-store" }).then((response) => {
+  if (!response.ok) throw new Error(`robot model HTTP ${response.status}`);
+  return response.json();
+});
+document.getElementById("modelVersion").textContent = robotModel.version;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(sceneEl.clientWidth, sceneEl.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.12;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 sceneEl.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0c0f16);
+scene.fog = new THREE.Fog(0x0c0f16, 1.5, 3.8);
 
-const camera = new THREE.PerspectiveCamera(42, sceneEl.clientWidth / sceneEl.clientHeight, 0.1, 120);
+const camera = new THREE.PerspectiveCamera(42, sceneEl.clientWidth / sceneEl.clientHeight, 0.01, 8);
 camera.up.set(0, 0, 1);
-const camTarget = new THREE.Vector3(0, 8.5, 0.8);
-let camR = 39;
-let camTheta = -0.56;
-let camPhi = 1.08;
+const camTarget = new THREE.Vector3(0.075, 0.24, 0.32);
+let camR = 1.18;
+let camTheta = -0.62;
+let camPhi = 1.02;
+let topView = false;
 let pointerMode = null;
 let lastPointerX = 0;
 let lastPointerY = 0;
 updateCamera();
 
-scene.add(new THREE.HemisphereLight(0xf5f7ff, 0x10131d, 1.4));
+scene.add(new THREE.HemisphereLight(0xf5f7ff, 0x10131d, 1.15));
 const key = new THREE.DirectionalLight(0xffffff, 2.2);
-key.position.set(-12, -18, 22);
+key.position.set(-0.55, -0.75, 1.35);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -1.0;
+key.shadow.camera.right = 1.0;
+key.shadow.camera.top = 1.0;
+key.shadow.camera.bottom = -1.0;
 scene.add(key);
+const fill = new THREE.DirectionalLight(0xaec8ff, 0.75);
+fill.position.set(0.75, 0.1, 0.8);
+scene.add(fill);
 
-const armMat = new THREE.MeshStandardMaterial({ color: 0x9fb0d0, metalness: 0.45, roughness: 0.36 });
-const jointMat = new THREE.MeshStandardMaterial({ color: 0x5ad1c4, metalness: 0.25, roughness: 0.35, emissive: 0x103c38 });
-const tipMat = new THREE.MeshStandardMaterial({ color: 0xf0734e, roughness: 0.35, emissive: 0x331004 });
-const rollMat = new THREE.MeshStandardMaterial({ color: 0xf2c14e, metalness: 0.35, roughness: 0.3 });
-
-const joints = [0, 1, 2].map((_, i) => {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(i === 2 ? 0.45 : 0.65, 32, 16), i === 2 ? tipMat : jointMat);
-  scene.add(mesh);
-  return mesh;
-});
-
-const links = [0, 1].map(() => {
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 1, 32), armMat);
-  scene.add(mesh);
-  return mesh;
-});
-
-const elbowHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 1, 24), rollMat);
-scene.add(elbowHinge);
-
-let canvasTexture = new THREE.Texture();
+const canvasTexture = new THREE.Texture();
 canvasTexture.colorSpace = THREE.SRGBColorSpace;
-const canvasMat = new THREE.MeshBasicMaterial({ map: canvasTexture, side: THREE.DoubleSide, transparent: false });
-const canvasMesh = new THREE.Mesh(new THREE.PlaneGeometry(20, 20, 1, 1), canvasMat);
+canvasTexture.minFilter = THREE.LinearFilter;
+canvasTexture.magFilter = THREE.LinearFilter;
+const canvasMat = new THREE.MeshBasicMaterial({
+  map: canvasTexture,
+  side: THREE.DoubleSide,
+  transparent: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2,
+});
+const canvasMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(robotModel.canvas.width, robotModel.canvas.height),
+  canvasMat,
+);
 canvasMesh.rotation.x = Math.PI / 2;
-canvasMesh.position.y = 17;
+canvasMesh.position.set(
+  robotModel.canvas.center[0],
+  robotModel.canvas.contactY - 0.00015,
+  robotModel.canvas.center[2],
+);
 scene.add(canvasMesh);
 
-const frame = new THREE.LineSegments(
-  new THREE.EdgesGeometry(new THREE.PlaneGeometry(20, 20)),
-  new THREE.LineBasicMaterial({ color: 0x20242e })
+const materialCache = new Map();
+const jointNodes = new Map();
+const geometryNodes = new Map();
+const robotRoot = new THREE.Group();
+robotRoot.name = robotModel.name;
+scene.add(robotRoot);
+
+function checkerTexture() {
+  const bitmap = document.createElement("canvas");
+  bitmap.width = 256;
+  bitmap.height = 256;
+  const context = bitmap.getContext("2d");
+  const cells = 8;
+  const cell = bitmap.width / cells;
+  for (let y = 0; y < cells; y++) {
+    for (let x = 0; x < cells; x++) {
+      context.fillStyle = (x + y) % 2 ? "#30343a" : "#25292e";
+      context.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+  const texture = new THREE.CanvasTexture(bitmap);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function materialFor(geom) {
+  const key = `${geom.material || "default"}:${(geom.rgba || []).join(",")}`;
+  if (materialCache.has(key)) return materialCache.get(key);
+  const definition = robotModel.materials[geom.material] || {};
+  const rgba = geom.rgba || definition.rgba || [0.45, 0.48, 0.52, 1];
+  const parameters = {
+    color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
+    roughness: clamp(1 - 0.82 * (definition.shininess || 0.2), 0.16, 0.92),
+    metalness: clamp(0.72 * (definition.specular || 0.15), 0, 0.72),
+    transparent: rgba[3] < 0.999,
+    opacity: rgba[3],
+  };
+  if (geom.material === "ground_mat") {
+    parameters.map = checkerTexture();
+    parameters.roughness = 0.82;
+    parameters.metalness = 0.05;
+  }
+  const material = new THREE.MeshStandardMaterial(parameters);
+  materialCache.set(key, material);
+  return material;
+}
+
+function placeObjectBetween(object, startValues, endValues) {
+  const start = v3(startValues);
+  const end = v3(endValues);
+  const direction = end.clone().sub(start);
+  object.position.copy(start).add(end).multiplyScalar(0.5);
+  object.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    direction.clone().normalize(),
+  );
+}
+
+function meshBetween(geom, capsule) {
+  const [x1, y1, z1, x2, y2, z2] = geom.fromTo;
+  const start = new THREE.Vector3(x1, y1, z1);
+  const end = new THREE.Vector3(x2, y2, z2);
+  const length = start.distanceTo(end);
+  const radius = geom.size[0];
+  const group = new THREE.Group();
+  const material = materialFor(geom);
+  const cylinder = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius, length, 32),
+    material,
+  );
+  cylinder.castShadow = true;
+  cylinder.receiveShadow = true;
+  group.add(cylinder);
+  if (capsule) {
+    const sphereGeometry = new THREE.SphereGeometry(radius, 24, 16);
+    for (const sign of [-1, 1]) {
+      const cap = new THREE.Mesh(sphereGeometry, material);
+      cap.position.y = sign * length / 2;
+      cap.castShadow = true;
+      cap.receiveShadow = true;
+      group.add(cap);
+    }
+  }
+  placeObjectBetween(group, start.toArray(), end.toArray());
+  return group;
+}
+
+function createGeom(geom) {
+  let object;
+  if ((geom.type === "cylinder" || geom.type === "capsule") && geom.fromTo) {
+    object = meshBetween(geom, geom.type === "capsule");
+  } else if (geom.type === "box") {
+    object = new THREE.Mesh(
+      new THREE.BoxGeometry(2 * geom.size[0], 2 * geom.size[1], 2 * geom.size[2]),
+      materialFor(geom),
+    );
+    object.position.copy(v3(geom.position));
+  } else if (geom.type === "plane") {
+    object = new THREE.Mesh(
+      new THREE.PlaneGeometry(2 * geom.size[0], 2 * geom.size[1]),
+      materialFor(geom),
+    );
+    object.position.copy(v3(geom.position));
+  } else {
+    object = new THREE.Mesh(
+      new THREE.SphereGeometry(geom.size[0] || 0.01, 24, 16),
+      materialFor(geom),
+    );
+    object.position.copy(v3(geom.position));
+  }
+  object.name = geom.name;
+  object.castShadow = geom.type !== "plane";
+  object.receiveShadow = true;
+  geometryNodes.set(geom.name, object);
+  return object;
+}
+
+function buildBody(definition, parent) {
+  const body = new THREE.Group();
+  body.name = definition.name;
+  body.position.copy(v3(definition.position));
+  body.userData.basePosition = body.position.clone();
+  parent.add(body);
+  for (const joint of definition.joints) {
+    jointNodes.set(joint.name, { node: body, definition: joint });
+  }
+  for (const geom of definition.geoms) body.add(createGeom(geom));
+  for (const child of definition.bodies) buildBody(child, body);
+}
+
+for (const geom of robotModel.world.geoms) robotRoot.add(createGeom(geom));
+for (const body of robotModel.world.bodies) buildBody(body, robotRoot);
+
+const tipMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.0065, 24, 16),
+  new THREE.MeshStandardMaterial({
+    color: 0xf06b46,
+    emissive: 0x4b1008,
+    roughness: 0.28,
+  }),
 );
-frame.rotation.x = Math.PI / 2;
-frame.position.y = 16.99;
-scene.add(frame);
+scene.add(tipMarker);
+const contactHalo = new THREE.Mesh(
+  new THREE.RingGeometry(0.009, 0.013, 40),
+  new THREE.MeshBasicMaterial({
+    color: 0x5ad1c4,
+    transparent: true,
+    opacity: 0.9,
+    side: THREE.DoubleSide,
+  }),
+);
+contactHalo.rotation.x = Math.PI / 2;
+contactHalo.visible = false;
+scene.add(contactHalo);
+
+function applyJoint(name, value) {
+  const entry = jointNodes.get(name);
+  if (!entry) return;
+  const { node, definition } = entry;
+  const axis = v3(definition.axis).normalize();
+  node.position.copy(node.userData.basePosition);
+  node.quaternion.identity();
+  if (definition.type === "slide") {
+    node.position.addScaledVector(axis, value);
+  } else {
+    node.quaternion.setFromAxisAngle(axis, value);
+  }
+}
+
+function updateRobot(robotState, contact) {
+  const q = robotState.jointPositionDeg;
+  for (const name of robotModel.jointOrder) {
+    applyJoint(name, THREE.MathUtils.degToRad(q[name]));
+  }
+  applyJoint("brush_compression", -Math.max(0, robotState.brushCompressionM || 0));
+  tipMarker.position.copy(v3(robotState.tipM));
+  tipMarker.material.color.setHex(contact.touching ? 0x5ad1c4 : 0xf06b46);
+  contactHalo.visible = contact.touching;
+  if (contact.touching) {
+    contactHalo.position.copy(v3(robotState.mappedCartesianTargetM));
+    contactHalo.position.y = robotModel.canvas.contactY - 0.00035;
+  }
+}
 
 function v3(p) {
   return new THREE.Vector3(p[0], p[1], p[2]);
-}
-
-function placeLink(mesh, a, b) {
-  const start = v3(a);
-  const end = v3(b);
-  const mid = start.clone().add(end).multiplyScalar(0.5);
-  const dir = end.clone().sub(start);
-  const len = dir.length();
-  mesh.position.copy(mid);
-  mesh.scale.set(1, len, 1);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-}
-
-function placeAxis(mesh, center, axis, length) {
-  const direction = v3(axis).normalize();
-  mesh.position.copy(v3(center));
-  mesh.scale.set(1, length, 1);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
 }
 
 async function command(type, value = undefined) {
@@ -105,6 +279,7 @@ document.getElementById("btnPaint").onclick = () => command("toggle_paint");
 document.getElementById("btnAgent").onclick = () => command("toggle_agent");
 document.getElementById("btnHomeView").onclick = () => setHomeView();
 document.getElementById("btnFaceCanvas").onclick = () => setFaceCanvasView();
+document.getElementById("btnTopView").onclick = () => setTopView();
 document.getElementById("btnBlack").onclick = () => command("tone", "black");
 document.getElementById("btnWhite").onclick = () => command("tone", "white");
 
@@ -115,6 +290,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "c") command("clear");
   if (event.key === "h") setHomeView();
   if (event.key === "v") setFaceCanvasView();
+  if (event.key === "t") setTopView();
 });
 
 renderer.domElement.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -139,6 +315,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
   lastPointerX = event.clientX;
   lastPointerY = event.clientY;
   if (pointerMode === "orbit") {
+    topView = false;
     camTheta -= dx * 0.008;
     camPhi = clamp(camPhi - dy * 0.007, 0.18, Math.PI - 0.18);
   } else {
@@ -149,7 +326,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
 
 renderer.domElement.addEventListener("wheel", (event) => {
   event.preventDefault();
-  camR = clamp(camR + event.deltaY * 0.045, 14, 82);
+  camR = clamp(camR + event.deltaY * 0.0018, 0.34, 3.0);
   updateCamera();
 }, { passive: false });
 
@@ -162,6 +339,10 @@ function updateCamera() {
   );
   camera.up.set(0, 0, 1);
   camera.lookAt(camTarget);
+  if (topView) {
+    camera.up.set(0, 1, 0);
+    camera.lookAt(camTarget);
+  }
 }
 
 function panCamera(dx, dy) {
@@ -174,18 +355,29 @@ function panCamera(dx, dy) {
 }
 
 function setHomeView() {
-  camTarget.set(0, 8.5, 0.8);
-  camR = 39;
-  camTheta = -0.56;
-  camPhi = 1.08;
+  topView = false;
+  camTarget.set(0.075, 0.24, 0.32);
+  camR = 1.18;
+  camTheta = -0.62;
+  camPhi = 1.02;
   updateCamera();
 }
 
 function setFaceCanvasView() {
-  camTarget.set(0, canvasMesh.position.y, 0);
-  camR = 34;
+  topView = false;
+  camTarget.copy(v3(robotModel.canvas.center));
+  camR = 0.86;
   camTheta = 0;
   camPhi = Math.PI / 2;
+  updateCamera();
+}
+
+function setTopView() {
+  topView = true;
+  camTarget.set(robotModel.canvas.center[0], 0.27, 0.30);
+  camR = 1.08;
+  camTheta = 0;
+  camPhi = 0.001;
   updateCamera();
 }
 
@@ -212,14 +404,7 @@ async function pollState() {
     document.getElementById("codeVersion").textContent = versionText;
     document.title = `Active-Inference Arm Painter ${versionText}`;
   }
-  const points = state.renderPoints || state.points;
-  for (let i = 0; i < joints.length; i++) joints[i].position.copy(v3(points[i]));
-  placeLink(links[0], points[0], points[1]);
-  placeLink(links[1], points[1], points[2]);
-  placeAxis(elbowHinge, points[1], state.elbowHingeAxis || [1, 0, 0], 2.0);
-
-  canvasMesh.position.y = state.canvas.distance;
-  frame.position.y = state.canvas.distance - 0.01;
+  updateRobot(state.robot, state.contact);
 
   document.getElementById("btnMax").textContent = `Max speed: ${state.maxSpeed ? "on" : "off"}`;
   document.getElementById("btnMax").classList.toggle("active", state.maxSpeed);
@@ -258,15 +443,21 @@ async function pollState() {
   );
 
   readout.innerHTML = [
-    `tip <b>${state.tip.map((x) => x.toFixed(2)).join(", ")}</b>`,
+    `physical tip m <b>${state.robot.tipM.map((x) => x.toFixed(3)).join(", ")}</b>`,
     `coverage mean <b>${state.canvas.coverage.toFixed(4)}</b> / pressure summary <b>${state.contact.pressure.toFixed(3)}</b>`,
-    `agent <b>${state.agentEnabled ? agentPhaseLabel(state.agent) : "scripted fallback"}</b> / sim <b>${state.simTime.toFixed(1)}s</b>`,
+    `agent <b>${state.agentEnabled ? agentPhaseLabel(state.agent) : "scripted fallback"}</b> / robot view <b>${robotModeLabel(state.robot.mode)}</b> / sim <b>${state.simTime.toFixed(1)}s</b>`,
     `VFE F <b>${num(vfe.total)}</b> = complexity <b>${num(vfe.complexity)}</b> + negative log likelihood <b>${num(vfe.negative_log_likelihood)}</b>`,
     `EFE G <b>${num(efe.total)}</b> = terminal risk <b>${num(efe.terminal_risk)}</b> + ambiguity <b>${num(efe.ambiguity)}</b> + transition risk <b>${num(efe.transition_risk)}</b> + transition ambiguity <b>${num(efe.transition_ambiguity)}</b> + canvas latent risk <b>${num(efe.canvas_transition_risk)}</b> + relational risk <b>${num(efe.relational_transition_risk)}</b> + motor risk <b>${num(efe.motor_risk)}</b> + motor ambiguity <b>${num(efe.motor_ambiguity)}</b>`,
   ].join("<br>");
 
   specs.innerHTML = [
     row("Driver", state.agentEnabled ? "active inference" : "scripted IK"),
+    row("Realized plant", state.plantBackend || "native"),
+    row("Counterfactual plant", state.counterfactualPlantBackend || "native"),
+    row("Robot geometry", robotModel.version),
+    row("Robot state adapter", robotModeLabel(state.robot.mode)),
+    row("Robot target error", `${(1000 * state.robot.alignmentErrorM).toFixed(3)} mm`),
+    row("Target roll preserved", state.robot.rollPreserved ? "yes" : "no"),
     row("Code version", state.codeVersion ? `v${state.codeVersion}` : "-"),
     row("State representation", state.agent?.stateRepresentation || "-"),
     row("Material pyramid", pyramidText),
@@ -391,9 +582,18 @@ async function pollState() {
     row("Force", `${state.contact.force.toFixed(2)} N`),
     row("Brush width", `${state.contact.brushWidthPx.toFixed(2)} px`),
     row("Tone", state.brushTone),
-    row("Yaw / Pitch", `${state.pose.yaw.toFixed(1)} / ${state.pose.pitch.toFixed(1)}`),
-    row("Roll / Elbow", `${state.pose.roll.toFixed(1)} / ${state.pose.elbow.toFixed(1)}`),
-    row("Canvas distance", `${state.canvas.distance.toFixed(1)} in`),
+    row("Controller yaw / pitch", `${state.pose.yaw.toFixed(1)} / ${state.pose.pitch.toFixed(1)}`),
+    row("Controller roll / elbow", `${state.pose.roll.toFixed(1)} / ${state.pose.elbow.toFixed(1)}`),
+    row(
+      "Visual yaw / pitch",
+      `${state.robot.jointPositionDeg.yaw.toFixed(1)} / ${state.robot.jointPositionDeg.pitch.toFixed(1)}`
+    ),
+    row(
+      "Visual roll / elbow",
+      `${state.robot.jointPositionDeg.roll.toFixed(1)} / ${state.robot.jointPositionDeg.elbow.toFixed(1)}`
+    ),
+    row("Physical canvas plane", `${robotModel.canvas.contactY.toFixed(4)} m`),
+    row("Logical canvas plane", `${state.canvas.distance.toFixed(1)} in`),
   ].join("");
 
   const now = performance.now();
@@ -408,6 +608,14 @@ function policyKind(policy) {
   if (policy.passagePlan) return `passage-plan ${policy.passagePlan.kind}${motor}`;
   if (policy.passage) return `passage ${policy.passage.kind}${motor}`;
   return `mark${motor}`;
+}
+
+function robotModeLabel(mode) {
+  const labels = {
+    legacy_canvas_cartesian_retarget: "legacy Cartesian → MJCF",
+    mujoco_direct: "MuJoCo direct",
+  };
+  return labels[mode] || mode || "unknown";
 }
 
 function row(label, value) {
