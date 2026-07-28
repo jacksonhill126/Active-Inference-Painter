@@ -122,7 +122,7 @@ for every meaningful run.
 | Support milestone | Name | Purpose |
 | --- | --- | --- |
 | S0 | Plant Reference Contract | Version the Python plant, material model, command/observation schemas, controller boundary, telemetry, and web reference without freezing implementation. |
-| S1 | MuJoCo Abstract Clone | Match abstract kinematics, joint ranges, canvas frame, and brush site. |
+| S1 | MuJoCo Physical Draft And Logical Retarget | Version the physical draft, preserve the logical command subset, and test the canvas/brush retarget. |
 | S2 | MuJoCo Backend Adapter | Drive MuJoCo through the existing controller and feed contact into the material model. |
 
 Support milestones may proceed when their dependencies are satisfied, but they

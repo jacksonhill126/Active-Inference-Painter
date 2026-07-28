@@ -1,6 +1,7 @@
 {
   "schema_version": "sensor-access-ledger-v0",
   "accepted_date": "2026-07-24",
+  "updated_date": "2026-07-28",
   "baseline": {
     "id": "baseline-oracle-v0",
     "observation_mode": "oracle_material_state",
@@ -45,10 +46,8 @@
       "source_type": "ArmPainterSim",
       "values": [
         "target_pose",
-        "paint_enabled",
         "brush_tone",
         "intended_contact_pressure",
-        "intended_paint_load",
         "brush_flow",
         "control_damping_multiplier"
       ],
@@ -56,7 +55,7 @@
       "consumers": ["controller", "generative process", "motor forecast", "diagnostics"],
       "current_access": ["known command or controller state"],
       "likelihood_status": "No likelihood required for commands issued by the agent or low-level controller.",
-      "physical_analogue": "Joint targets, paint valve or loading command, and controller mode.",
+      "physical_analogue": "Joint targets, intended contact/flow state, and controller mode. Paint availability lives in the physical brush material state.",
       "research_status": "permitted_execution",
       "blockers": ["T-109"]
     },
@@ -330,6 +329,7 @@
       "values": [
         "rng",
         "load",
+        "load_amount",
         "fresh_tone",
         "held_volume",
         "held_black",

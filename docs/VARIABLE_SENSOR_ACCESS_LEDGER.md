@@ -271,11 +271,12 @@ The brush process holds load, pigment contamination, carried tone, path
 distance, bristle gains, streak phases, edge-wobble phases, and RNG state.
 These are hidden causes of visible marks.
 
-The brush is intentionally reloaded at each pen-down, which removes
-cross-stroke brush memory from the current transition model. Even so, the
-motor planner deep-copies the exact brush and its RNG. The rollout therefore
-knows a random bristle realization that a physical agent could not know before
-contact.
+The brush is intentionally loaded before each stroke action, which removes
+cross-stroke fresh-load memory from the current transition model. It then
+remains loaded continuously, and contact/pressure alone determine deposition;
+tracking error cannot toggle paint. Even so, the motor planner deep-copies the
+exact brush and its RNG. The rollout therefore knows a random bristle
+realization that a physical agent could not know before contact.
 
 Longer term, commanded paint load and nominal brush identity may be known.
 Actual loading, contamination, bristle state, and tip lag should remain latent

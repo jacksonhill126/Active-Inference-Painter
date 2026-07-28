@@ -131,10 +131,17 @@ class ArmPainterVisualizer:
             self.sim_time = 0.0
         elif event.key == "b":
             self.sim.brush_tone = 1.0
+            if self.sim.brush.loaded:
+                self.sim.load_brush(self.sim.brush.load_amount, 1.0)
         elif event.key == "w":
             self.sim.brush_tone = 0.0
+            if self.sim.brush.loaded:
+                self.sim.load_brush(self.sim.brush.load_amount, 0.0)
         elif event.key == "p":
-            self.sim.paint_enabled = not self.sim.paint_enabled
+            if self.sim.brush.loaded:
+                self.sim.unload_brush()
+            else:
+                self.sim.load_brush(1.0, self.sim.brush_tone)
 
     def toggle_max_speed(self, _event=None) -> None:  # type: ignore[no-untyped-def]
         self.max_speed = not self.max_speed
@@ -184,7 +191,8 @@ class ArmPainterVisualizer:
                 [
                     f"coverage    {self.sim.canvas.material_coverage():.3f}",
                     f"contact     {contact.pressure:.3f}  force {contact.force:.2f} N",
-                    f"brush width {contact.brush_width_px:.2f} px  tone {'black' if self.sim.brush_tone else 'white'}",
+                    f"brush width {contact.brush_width_px:.2f} px  {'loaded' if self.sim.brush.loaded else 'unloaded'}"
+                    f"  tone {'black' if self.sim.brush_tone else 'white'}",
                     f"pose deg    yaw {pose.yaw:6.1f}  pitch {pose.pitch:6.1f}",
                     f"            roll {pose.roll:6.1f}  elbow {pose.elbow:6.1f}",
                     f"current A   yaw {current['yaw']:5.2f}  pitch {current['pitch']:5.2f}",
@@ -192,7 +200,7 @@ class ArmPainterVisualizer:
                     f"sim time    {self.sim_time:6.2f} s  mode {'max' if self.max_speed else 'realtime'}",
                     f"steps/frame {simulated_steps:4d}",
                     "",
-                    "keys: space pause | f max | r reset | c clear | b/w tone | p paint",
+                    "keys: space pause | f max | r reset | c clear | b/w tone | p load/unload brush",
                 ]
             )
         )

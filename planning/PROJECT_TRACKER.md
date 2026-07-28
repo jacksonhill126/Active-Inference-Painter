@@ -612,21 +612,23 @@ Notes: Accepted 2026-07-24 in `docs/BASELINE_TEST_RESULT_2026-07-24.md`; the com
 
 ### T-105 Capture baseline telemetry and web-runtime behavior
 
-Status: `Ready`
+Status: `Active`
 Track: Web/Telemetry  
 Depends on: T-101, T-103  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: Default web runtime endpoints, frontend state, canvas image, and telemetry CSV have a recorded baseline.
+Notes: Runtime endpoint, frontend-state, canvas-render, and telemetry-schema tests are implemented and passing. A short versioned baseline CSV/canvas/config artifact still needs to be saved under the T-107 bundle convention.
 
 ### T-106 Document known simulator shortcuts and limitations
 
-Status: `Ready`
+Status: `Active`
 Track: Documentation  
 Depends on: T-101, T-102, T-103  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: Simulator shortcuts are categorized as acceptable baseline, MuJoCo calibration need, or hardware validation need.
+Notes: `docs/ARCHITECTURE.md`, `docs/CURRENT_IMPLEMENTATION.md`, `docs/DEVELOPMENT_AUDIT.md`, `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`, and `models/README.md` now identify the native forecast approximation, motor/contact assumptions, paint boundary, and uncalibrated physical fields. A consolidated three-category acceptance table remains.
 
 ### T-107 Define baseline artifact bundle
 
@@ -655,180 +657,199 @@ Owner: Jackson/Codex
 Estimate: 3-5 days
 Acceptance: Native execution and motor forecasts consume physical sensor packets and posterior snapshots without copied live simulator or process-RNG state.
 
-## S1: MuJoCo Abstract Clone
+## S1: MuJoCo Physical Draft And Logical Retarget
 
-### T-201 Match native arm constants in MuJoCo XML
+### T-201 Define the versioned physical MuJoCo draft and logical command subset
 
-Status: `Ready`
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-101  
 Owner: Jackson/Codex  
 Estimate: 1-2 days  
-Acceptance: XML matches native joint order, axes, ranges, home pose, link lengths, and canvas frame.
+Acceptance: XML defines the four-joint logical command order, explicit axes/signs/ranges, separated physical anchors, link geometry, canvas frame, brush contact reference, and safe keyframes, while intentional differences from the native logical body are named.
+Notes: Accepted 2026-07-28 in `models/active_inference_painter.xml` and `models/README.md` as `mujoco-robstride-electromechanical-v4`; the native command subset is preserved through a named physical retarget instead of hidden controller offsets.
 
-### T-202 Add XML constant tests
+### T-202 Add XML geometry, range, actuator, and contact tests
 
-Status: `Blocked`
+Status: `Done`
 Track: Validation  
 Depends on: T-201  
 Owner: Jackson/Codex  
 Estimate: 0.5 day  
-Acceptance: Tests compare XML constants against `arm_sim.py`.
+Acceptance: Tests protect joint order/axes/ranges, separated anchors, keyframes, canvas dimensions, direct-drive actuator limits, brush geometry/compliance, friction, and stable adapter names.
+Notes: Accepted 2026-07-28 in `tests/test_mujoco_model.py`; the focused XML/model suite passes with optional MuJoCo compile coverage.
 
-### T-203 Validate MuJoCo forward kinematics against native kinematics
+### T-203 Validate physical kinematics and logical retarget transforms
 
-Status: `Backlog`  
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-201, T-202  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
-Acceptance: Representative MuJoCo tip/site poses match native forward kinematics within tolerance.
+Acceptance: Representative poses verify joint signs, offset kinematics, brush-tip transforms, canvas reach, and the named logical-canvas-to-physical-target retarget within declared tolerances.
+Notes: Accepted 2026-07-28 through `test_mujoco_joint_signs_match_the_declared_offset_kinematics`, reach/keyframe tests, and `test_legacy_canvas_points_retarget_to_the_physical_robot`; the physical shoulder is intentionally not co-located like the native abstraction.
 
-### T-204 Keep physical housings visual-only
+### T-204 Separate visual, collision, and contact geometry
 
-Status: `Backlog`  
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-201  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 0.5 day  
-Acceptance: Base and joint geometry do not accidentally constrain the abstract clone.
+Acceptance: Decorative housings remain non-colliding, collision-relevant links are explicit, and canvas/brush contact remains isolated and testable.
+Notes: Accepted 2026-07-28 in the MJCF collision masks and `models/README.md`; compile/contact tests exercise the intended collision pair.
 
 ### T-205 Document exact versus approximate model fields
 
-Status: `Blocked`
+Status: `Done`
 Track: Documentation  
 Depends on: T-201  
 Owner: Jackson/Codex  
 Estimate: 0.5 day  
 Acceptance: Model documentation distinguishes simulator-truth fields from visual placeholders.
+Notes: Accepted 2026-07-28 in `models/README.md`, including provisional datasheet-derived RobStride values, lumped brush compliance, Python-owned paint, native counterfactual forecasts, and first calibration measurements.
 
 ### T-206 Add MuJoCo load/compile smoke test
 
-Status: `Backlog`  
+Status: `Done`
 Track: Validation  
 Depends on: T-201  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 0.5-1 day  
 Acceptance: Optional MuJoCo package loads the XML when installed and skips cleanly when unavailable.
+Notes: Accepted 2026-07-28 in `tests/test_mujoco_model.py`; the model compiles with stable joint/site/sensor/actuator names and the test module skips explicitly when MuJoCo is unavailable.
 
 ### T-207 Define model version label
 
-Status: `Backlog`  
+Status: `Done`
 Track: Operations  
 Depends on: T-002, T-201  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 0.5 day  
-Acceptance: Abstract model version is named and distinguished from future calibrated hardware model versions.
+Acceptance: The model has a runtime-visible version label that distinguishes the physical draft from native abstract and future calibrated hardware revisions.
+Notes: Accepted 2026-07-28 as `mujoco-robstride-electromechanical-v4` in MJCF text metadata, backend identity, runtime state, and model documentation.
 
 ### T-208 Compare model behavior in MuJoCo viewer
 
-Status: `Backlog`  
+Status: `Active`
 Track: Manual Validation  
 Depends on: T-201, T-206  
 Owner: Jackson  
 Estimate: 0.5-1 day  
 Acceptance: Manual viewer load confirms expected joint sliders, tip/canvas alignment, and triaged discrepancies.
+Notes: The XML-driven Three.js frontend has been inspected through home, canvas-facing, top, contact, lower-arm-down, and canvas-edge views. A dated standalone MuJoCo viewer inspection record and any discrepancy entries remain before acceptance.
 
 ### T-209 S1 lock decision
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-203, T-204, T-205, T-206, T-208  
 Owner: Jackson  
 Estimate: 0.5 day  
 Acceptance: S1 is locked only after XML tests, load/compile status, and viewer issues are accepted or triaged.
+Notes: Blocked only on T-208 manual acceptance and Jackson's explicit physical-draft/retarget contract decision.
 
 ## S2: MuJoCo Backend Adapter
 
 ### T-301 Define common backend surface
 
-Status: `Backlog`  
+Status: `Done`
 Track: Architecture  
-Depends on: S0, S1  
-Owner: TBD  
+Depends on: T-103, T-201, T-203
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Python sim and MuJoCo sim expose a shared controller-facing interface.
+Notes: Accepted 2026-07-28 through `plant-interface-v1`, `MujocoPlantBackend`, and `MujocoJointPlant`; backend-specific calls remain below `ArmPainterSim`, stroke execution, telemetry, and web runtime.
 
 ### T-302 Map `ArmPose` targets to MuJoCo controls
 
-Status: `Backlog`  
+Status: `Done`
 Track: Control  
 Depends on: T-301  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: Degree-based controller targets are converted correctly for MuJoCo runtime controls.
+Notes: Accepted 2026-07-28 in `MujocoJointPlant.step`; degree/radian conversion, joint order, target clipping, encoder state, and telemetry targets have focused tests.
 
 ### T-303 Read MuJoCo state into existing pose/contact structures
 
-Status: `Backlog`  
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-301, T-302  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Joint, tip, contact, and telemetry values can be consumed by current runtime code.
+Notes: Accepted 2026-07-28 with direct qpos/encoder state, physical tip/site state, exact brush-canvas contact, force/pressure/compression/bend state, and runtime payload coverage.
 
 ### T-304 Reuse `VerticalCanvas` for MuJoCo-driven paint
 
-Status: `Backlog`  
+Status: `Done`
 Track: Painting Model  
 Depends on: T-303  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: MuJoCo brush contact deposits paint through the existing material model.
+Notes: Accepted 2026-07-28: brush material is loaded before motion and deposition is driven by physical contact/pressure through `VerticalCanvas`; unloading changes material availability without changing arm motion. Python remains the declared paint-material boundary.
 
 ### T-305 Add scripted-stroke smoke tests
 
-Status: `Backlog`  
+Status: `Done`
 Track: Validation  
 Depends on: T-302, T-303, T-304  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: A scripted MuJoCo stroke reaches the canvas and updates material coverage.
+Notes: Accepted 2026-07-28 in `tests/test_mujoco_backend.py`; contact, force, pressure, coverage, deterministic snapshot/restore, and a 370-sample continuous-contact deposition stroke are covered.
 
 ### T-306 Add backend selection to web runtime
 
-Status: `Backlog`  
+Status: `Done`
 Track: Web/Runtime  
 Depends on: T-301, T-304  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Web runtime can choose native or MuJoCo backend while keeping native as the default.
+Notes: Accepted 2026-07-28 via `python -m active_painter.web_server --plant-backend {native,mujoco}`; state, canvas PNG, telemetry CSV, and XML-driven frontend geometry share the runtime.
 
 ### T-307 Adapt telemetry for MuJoCo backend
 
-Status: `Backlog`  
+Status: `Done`
 Track: Telemetry  
 Depends on: T-303, T-306  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Telemetry remains schema-compatible where possible and explicitly marks unavailable MuJoCo fields.
+Notes: Accepted 2026-07-28 with backend/model identity, joint/actuator/encoder state, current, torque, voltage, elastic/backlash/friction/load terms, contact, brush-loaded, and actual-deposition fields. Declared approximations remain documented.
 
 ### T-308 Define MuJoCo forecast strategy
 
-Status: `Backlog`  
+Status: `Done`
 Track: Planning/Forecasting  
 Depends on: T-301, T-305  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Initial MuJoCo live-execution versus forecast-rollout scope is decided and documented.
+Notes: Accepted 2026-07-28 as live MuJoCo execution with `native-abstract-v0 approximation` counterfactual motor forecasts; runtime diagnostics and model docs expose the split. Full MuJoCo/contact forecasting is deferred and must not be claimed.
 
 ### T-309 Add backend parity checks
 
-Status: `Backlog`  
+Status: `Active`
 Track: Validation  
 Depends on: T-305, T-306  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Same scripted stroke can run on native and MuJoCo backends with path/contact/coverage differences recorded.
+Notes: Canonical transform, logical retarget, state-shape, contact/deposition, and runtime selection tests pass. A versioned matched-stroke artifact comparing path, timing, pressure, current, and material coverage remains.
 
 ### T-310 S2 lock decision
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-305, T-306, T-307, T-308, T-309  
 Owner: Jackson  
 Estimate: 0.5 day  
 Acceptance: S2 is locked only after MuJoCo execution, paint update, backend selection, and known gaps are documented.
+Notes: Blocked on the T-309 matched parity artifact and Jackson's explicit acceptance of the native counterfactual-forecast approximation.
 
 ## M4: Experimental Observatory And Digital Twin
 
@@ -944,12 +965,13 @@ Acceptance: Shared contracts, provenance, clocks, access boundaries, synchronize
 
 ### T-501 Define `RobotGeometrySpec`
 
-Status: `Blocked`  
+Status: `Active`
 Track: Geometry/Architecture  
 Depends on: T-101, T-103  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: A versioned SI-unit schema covers frames, joints, limits, transforms, mass properties, collision geometry, brush, canvas, and camera references without controller corrections.
+Notes: Work began in the versioned MJCF and XML-derived web model with separated shoulder anchors, direct-drive joints, canvas frame, brush dimensions, and SI transforms. Acceptance remains open until these fields move into an authoritative backend-neutral `RobotGeometrySpec` with mass/collision/camera coverage.
 
 ### T-502 Define the frame graph and naming convention
 

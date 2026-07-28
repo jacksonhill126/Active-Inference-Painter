@@ -33,7 +33,6 @@ class StrokeReference:
     z: float
     depth: float
     pressure: float
-    brush_down: bool
     intended_start: tuple[float, float]
     intended_end: tuple[float, float]
     feasible: bool
@@ -43,7 +42,6 @@ class StrokeReference:
 @dataclass(frozen=True, slots=True)
 class StrokeCommand:
     pose: ArmPose
-    brush_down: bool
     intended_pressure: float
     reference: StrokeReference
 
@@ -137,10 +135,9 @@ def adaptive_stroke_timing(sim: ArmPainterSim, action: StrokeAction) -> StrokeTi
     """Phase durations scaled to the stroke's actual geometry.
 
     Fixed timing made distant stroke starts unreachable within the approach
-    phase and swept long strokes faster than the servo could track, so paint
-    gating dropped the middle of the mark. Approach time scales with the
-    distance from the current tip to the stroke start; paint time bounds the
-    sweep speed.
+    phase and swept long strokes faster than the servo could track. Approach
+    time scales with the distance from the current tip to the stroke start;
+    paint time bounds the sweep speed.
     """
 
     x0, z0, x1, z1 = stroke_world_endpoints(action, sim.canvas)
@@ -171,7 +168,6 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
             z=z0,
             depth=c.distance - 1.08 + 0.96 * smooth,
             pressure=0.0,
-            brush_down=False,
             intended_start=(x0, z0),
             intended_end=(x1, z1),
             feasible=feasible,
@@ -189,7 +185,6 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
             # breaks the near-surface pressure gate at extended reach.
             depth=c.distance - 0.12 + 0.32 * smooth,
             pressure=float(smooth * pressure_base),
-            brush_down=False,
             intended_start=(x0, z0),
             intended_end=(x1, z1),
             feasible=feasible,
@@ -214,7 +209,6 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
             z=float((1.0 - smooth) * z0 + smooth * z1),
             depth=c.distance + 0.2,
             pressure=float(consequence_pressure),
-            brush_down=True,
             intended_start=(x0, z0),
             intended_end=(x1, z1),
             feasible=feasible,
@@ -230,7 +224,6 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
         z=z1,
         depth=c.distance + 0.2 - 1.06 * smooth,
         pressure=float(max(0.0, pressure_base * (1.0 - smooth))),
-        brush_down=False,
         intended_start=(x0, z0),
         intended_end=(x1, z1),
         feasible=feasible,
@@ -255,7 +248,6 @@ class DirectStrokeController:
         reference = stroke_reference(action, sim, t, timing)
         return StrokeCommand(
             pose=pose_for_reference(reference),
-            brush_down=reference.brush_down,
             intended_pressure=reference.pressure,
             reference=reference,
         )
@@ -273,16 +265,12 @@ class ContactAwareStrokeController:
         preview_time: float = 0.22,
         filter_time: float = 0.18,
         max_joint_speed_deg: float = 72.0,
-        paint_tracking_tolerance: float = 0.65,
-        paint_engage_fraction: float = 0.045,
         roll_start_deg: float = 0.0,
         roll_end_deg: float = 0.0,
     ) -> None:
         self.preview_time = preview_time
         self.filter_time = filter_time
         self.max_joint_speed_deg = max_joint_speed_deg
-        self.paint_tracking_tolerance = paint_tracking_tolerance
-        self.paint_engage_fraction = paint_engage_fraction
         self.roll_start_deg = float(roll_start_deg)
         self.roll_end_deg = float(roll_end_deg)
         self._filtered_pose: ArmPose | None = None
@@ -294,21 +282,18 @@ class ContactAwareStrokeController:
     def command(self, sim: ArmPainterSim, action: StrokeAction, t: float, dt: float, timing: StrokeTiming) -> StrokeCommand:
         current_reference = stroke_reference(action, sim, t, timing)
         preview_reference = stroke_reference(action, sim, min(t + self.preview_time, timing.total), timing)
-        # While the tip is far from the reference, travel with the brush
-        # pulled back off the canvas and command a bounded Cartesian step (a
-        # carrot) toward the target instead of the target itself: joint-space
-        # interpolation toward distant targets can swing the tip through the
-        # canvas plane, where the overtravel safety rollback wedges the arm in
-        # place. Tracking IK solutions of nearby on-path points keeps
-        # intermediate joint configurations close to the safe manifold. Normal
-        # tracking lag during the paint phase stays within the paint tolerance
-        # and never triggers pullback, so contact is not disturbed mid-stroke.
+        # While travelling toward the stroke, keep the loaded brush clear of
+        # the canvas and command a bounded Cartesian step (a carrot) rather
+        # than a distant target. Once the press phase begins, normal position
+        # comes only from the stroke reference: tracking error must not
+        # magically retract a wet brush or disable deposition.
         tip = sim.kinematics.tip(sim.actual_pose)
         lateral_error = float(np.hypot(float(tip[0]) - current_reference.x, float(tip[2]) - current_reference.z))
-        pullback_threshold = (
-            self.paint_tracking_tolerance if current_reference.phase == "paint" else 0.35
+        travel_pullback = (
+            clip_scalar(0.9 * (lateral_error - 0.35), 0.0, 1.8)
+            if current_reference.phase == "approach"
+            else 0.0
         )
-        travel_pullback = clip_scalar(0.9 * (lateral_error - pullback_threshold), 0.0, 1.8)
         target_x, target_z = preview_reference.x, preview_reference.z
         to_target_x = target_x - float(tip[0])
         to_target_z = target_z - float(tip[2])
@@ -332,16 +317,9 @@ class ContactAwareStrokeController:
             max_delta=self.max_joint_speed_deg * dt,
         )
         self._filtered_pose = pose
-        brush_down = current_reference.brush_down
-        intended_pressure = current_reference.pressure
-        if current_reference.phase == "paint":
-            brush_down = self._paint_contact_is_ready(sim, current_reference)
-            if not brush_down:
-                intended_pressure = 0.0
         return StrokeCommand(
             pose=pose,
-            brush_down=brush_down,
-            intended_pressure=float(intended_pressure),
+            intended_pressure=float(current_reference.pressure),
             reference=current_reference,
         )
 
@@ -354,27 +332,6 @@ class ContactAwareStrokeController:
         u = clip_scalar((reference.t - paint_start) / max(timing.paint, 1e-6), 0.0, 1.0)
         alpha = smootherstep(u)
         return float((1.0 - alpha) * self.roll_start_deg + alpha * self.roll_end_deg)
-
-    def _paint_contact_is_ready(self, sim: ArmPainterSim, reference: StrokeReference) -> bool:
-        start = np.asarray(reference.intended_start, dtype=np.float64)
-        end = np.asarray(reference.intended_end, dtype=np.float64)
-        current = np.asarray([reference.x, reference.z], dtype=np.float64)
-        tip = sim.kinematics.tip(sim.actual_pose)
-        actual = np.asarray([float(tip[0]), float(tip[2])], dtype=np.float64)
-        intended_length = float(np.linalg.norm(end - start))
-        if intended_length < 0.18:
-            return False
-        min_progress = max(0.035, self.paint_engage_fraction * intended_length)
-        reference_progress = float(np.linalg.norm(current - start))
-        actual_progress = float(np.linalg.norm(actual - start))
-        lateral_error = float(np.linalg.norm(actual - current))
-        return (
-            reference.feasible
-            and reference_progress >= min_progress
-            and actual_progress >= 0.45 * min_progress
-            and lateral_error <= self.paint_tracking_tolerance
-        )
-
 
 class JointSpaceStrokeController:
     """Conventional motor primitive controller for joint-space mark realization.
@@ -393,16 +350,12 @@ class JointSpaceStrokeController:
         roll_end_deg: float = 0.0,
         filter_time: float = 0.16,
         max_joint_speed_deg: float = 72.0,
-        paint_tracking_tolerance: float = 0.85,
-        paint_engage_fraction: float = 0.045,
     ) -> None:
         self.kind = kind
         self.roll_start_deg = float(roll_start_deg)
         self.roll_end_deg = float(roll_end_deg)
         self.filter_time = filter_time
         self.max_joint_speed_deg = max_joint_speed_deg
-        self.paint_tracking_tolerance = paint_tracking_tolerance
-        self.paint_engage_fraction = paint_engage_fraction
         self._filtered_pose: ArmPose | None = None
         self._start_pose: ArmPose | None = None
         self._end_pose: ArmPose | None = None
@@ -439,7 +392,6 @@ class JointSpaceStrokeController:
                 z=float(tip[2]),
                 depth=float(tip[1]),
                 pressure=reference.pressure,
-                brush_down=True,
                 intended_start=intended_start,
                 intended_end=intended_end,
                 feasible=reference.feasible and sim.canvas.contains(float(tip[0]), float(tip[2])),
@@ -454,16 +406,9 @@ class JointSpaceStrokeController:
             max_delta=self.max_joint_speed_deg * dt,
         )
         self._filtered_pose = pose
-        brush_down = reference.brush_down
-        intended_pressure = reference.pressure
-        if reference.phase == "paint":
-            brush_down = self._paint_contact_is_ready(sim, reference)
-            if not brush_down:
-                intended_pressure = 0.0
         return StrokeCommand(
             pose=pose,
-            brush_down=brush_down,
-            intended_pressure=float(intended_pressure),
+            intended_pressure=float(reference.pressure),
             reference=reference,
         )
 
@@ -503,29 +448,6 @@ class JointSpaceStrokeController:
                 for name in JOINT_NAMES
             }
         ).clipped()
-
-    def _paint_contact_is_ready(self, sim: ArmPainterSim, reference: StrokeReference) -> bool:
-        start = np.asarray(reference.intended_start, dtype=np.float64)
-        end = np.asarray(reference.intended_end, dtype=np.float64)
-        current = np.asarray([reference.x, reference.z], dtype=np.float64)
-        tip = sim.kinematics.tip(sim.actual_pose)
-        actual = np.asarray([float(tip[0]), float(tip[2])], dtype=np.float64)
-        intended_length = float(np.linalg.norm(end - start))
-        if intended_length < 0.18:
-            return False
-        min_progress = max(0.035, self.paint_engage_fraction * intended_length)
-        reference_progress = float(np.linalg.norm(current - start))
-        actual_progress = float(np.linalg.norm(actual - start))
-        lateral_error = float(np.linalg.norm(actual - current))
-        near_surface = bool(sim.contact.on_canvas and sim.contact.pressure > 0.005)
-        return (
-            reference.feasible
-            and near_surface
-            and reference_progress >= min_progress
-            and actual_progress >= 0.35 * min_progress
-            and lateral_error <= self.paint_tracking_tolerance
-        )
-
 
 def controller_for_motor_primitive(
     motor_primitive: MotorPrimitiveLatent | None,
@@ -597,6 +519,7 @@ def _forecast_stroke_execution_once(
     working.plant.select_forecast_noise_sample(noise_sample_index)
     _jitter_body_parameters(working, noise_sample_index)
     before_state = summary_fn(working)
+    working.load_brush(action.amount, action.tone)
     controller.reset(working, action, timing)
 
     intended_points: list[tuple[float, float]] = []
@@ -622,10 +545,7 @@ def _forecast_stroke_execution_once(
         command = controller.command(working, action, t, dt, timing)
         feasible = feasible and command.reference.feasible
         working.set_target(command.pose)
-        working.paint_enabled = command.brush_down
         working.intended_contact_pressure = command.intended_pressure
-        working.brush_tone = float(action.tone >= 0.5)
-        working.intended_paint_load = float(action.amount)
         working.brush_flow = command.reference.flow
         working.step(dt)
         pose_vec = _pose_vector(working.actual_pose)
@@ -662,7 +582,7 @@ def _forecast_stroke_execution_once(
             realized_points.append((float(working.contact.brush_world[0]), float(working.contact.brush_world[2])))
             pressures.append(float(working.contact.pressure))
             target_pressures.append(command.reference.pressure)
-            if not command.brush_down or working.contact.pressure <= 0.01:
+            if working.contact.pressure <= 0.01:
                 contact_losses += 1
 
     after_state = summary_fn(working)

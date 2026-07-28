@@ -15,7 +15,8 @@ version and an updated baseline artifact.
 `native-abstract-v0` is used to:
 
 - make current simulator behavior reproducible;
-- define what the first MuJoCo abstract clone must match;
+- define the logical command/canvas reference that the MuJoCo physical draft
+  must preserve or explicitly retarget;
 - distinguish exact implementation constants from representative mechanics;
 - protect material semantics while the inference architecture changes;
 - identify which process values a physical robot would need to sense or infer.

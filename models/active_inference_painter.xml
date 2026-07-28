@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  mujoco-robstride-direct-v3
+  mujoco-robstride-electromechanical-v4
 
   Hardware-oriented 4-DOF painting-arm draft. MuJoCo owns rigid-body motion,
-  actuator limits, brush compliance, and contact sensing. Paint deposition,
-  material coverage, wetness, pigment, and surface tone remain in the Python
-  VerticalCanvas generative process.
+  lumped RobStride electromechanics, actuator limits, brush compliance, and
+  contact sensing. Paint deposition, material coverage, wetness, pigment, and
+  surface tone remain in the Python VerticalCanvas generative process.
 
   Exact interface fields:
     joint order/names: yaw, pitch, roll, elbow
@@ -20,7 +20,8 @@
 
   Prototype assumptions pending CAD or measurement:
     bracket geometry/mass/inertia, 285 mm yaw height, yaw-to-pitch offset,
-    83 mm pitch-to-roll offset, controller gains, friction, armature,
+    83 mm pitch-to-roll offset, internal position-controller gains, output
+    friction/armature, thermal constants, cogging, gearbox compliance/backlash,
     brush stiffness/damping, and contact parameters.
 -->
 <mujoco model="active_inference_painter">
@@ -39,16 +40,22 @@
   </visual>
 
   <custom>
-    <text name="model_version" data="mujoco-robstride-direct-v3"/>
+    <text name="model_version" data="mujoco-robstride-electromechanical-v4"/>
     <text name="kinematic_convention" data="Rz_yaw_Rx_pitch_Ry_roll_Rx_elbow"/>
     <text name="actuator_assignment" data="yaw_RS03_pitch_RS03_roll_RS02_elbow_RS02"/>
+    <text name="actuator_model" data="output_equivalent_dcmotor_position_v1"/>
+    <text name="torque_saturation_semantics" data="hard_peak_envelope_without_thermal_derating"/>
+    <text name="power_electronics_model" data="voltage_limited_equivalent_not_phase_resolved"/>
+    <text name="encoder_model" data="ideal_joint_state_without_noise_or_delay"/>
+    <text name="thermal_model" data="disabled_missing_vendor_constants"/>
+    <text name="transmission_model" data="rigid_integrated_reducer_without_backlash"/>
     <text name="paint_process" data="external_VerticalCanvas"/>
     <numeric name="joint_range_rad"
              data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 -1.483529864195 2.617993877991"/>
     <numeric name="native_controller_joint_range_rad"
              data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 0 2.617993877991"/>
     <numeric name="safe_home_qpos_rad"
-             data="0 -0.872664625997 0 1.745329251994 0"/>
+             data="0 -0.872664625997 0 1.745329251994 0 0 0"/>
     <numeric name="link_length_m" data="0.3302 0.3302"/>
     <numeric name="post_yaw_height_m" data="0.285"/>
     <numeric name="yaw_to_pitch_offset_m" data="0.075 0 0.106"/>
@@ -60,6 +67,10 @@
     <numeric name="canvas_center_x_m" data="0.075"/>
     <numeric name="canvas_center_z_m" data="0.350"/>
     <numeric name="brush_diameter_m" data="0.0127"/>
+    <numeric name="brush_tangential_bend_range_rad"
+             data="-0.349065850399 0.349065850399"/>
+    <numeric name="brush_tangential_stiffness_nm_per_rad" data="1.2 1.2"/>
+    <numeric name="brush_tangential_damping_nms_per_rad" data="0.01 0.01"/>
     <numeric name="robstride_rated_torque_nm" data="20 20 6 6"/>
     <numeric name="robstride_peak_torque_nm" data="60 60 17 17"/>
     <numeric name="robstride_mass_kg" data="0.880 0.880 0.405 0.405"/>
@@ -76,6 +87,36 @@
     <numeric name="robstride_peak_phase_current_apk" data="43 43 23 23"/>
     <numeric name="robstride_torque_constant_nm_per_arms"
              data="2.36 2.36 1.22 1.22"/>
+    <!-- Ke, output-equivalent R, and viscous loss are jointly derived so the
+         DC model passes through the published no-load speed/current point and
+         the 48 V peak-torque stall point. MuJoCo uses sqrt(Kt*Ke). -->
+    <numeric name="robstride_back_emf_constant_vs_per_rad"
+             data="2.295880796136 2.295880796136 1.080219146592 1.080219146592"/>
+    <numeric name="robstride_effective_motor_constant_nm_per_a"
+             data="2.327719630643 2.327719630643 1.147984041196 1.147984041196"/>
+    <!-- Equivalent output-side R is selected so 48 V at zero speed reaches
+         the specified peak output torque. It is not raw phase resistance. -->
+    <numeric name="robstride_equivalent_terminal_resistance_ohm"
+             data="1.862175704515 1.862175704515 3.241366704555 3.241366704555"/>
+    <numeric name="robstride_equivalent_viscous_loss_nms_per_rad"
+             data="0.068394108064 0.068394108064 0.013368829372 0.013368829372"/>
+    <numeric name="robstride_line_resistance_ohm" data="0.39 0.39 0.58 0.58"/>
+    <numeric name="robstride_line_inductance_h"
+             data="0.000275 0.000275 0.000263 0.000263"/>
+    <numeric name="robstride_electrical_time_constant_s"
+             data="0.000705128205 0.000705128205 0.000453448276 0.000453448276"/>
+    <numeric name="robstride_no_load_current_arms" data="0.6 0.6 0.5 0.5"/>
+    <numeric name="robstride_pole_count" data="42 42 28 28"/>
+    <numeric name="robstride_rated_current_arms"
+             data="8.485281374239 8.485281374239 4.949747468306 4.949747468306"/>
+    <numeric name="robstride_model_peak_current_a"
+             data="25.776300208208 25.776300208208 14.808568229121 14.808568229121"/>
+    <!-- These voltage-space gains preserve the prior approximate joint-space
+         stiffness/damping. They are not claimed RobStride firmware gains. -->
+    <numeric name="robstride_controller_kp_v_per_rad"
+             data="168 208 240 352.941176470588"/>
+    <numeric name="robstride_controller_kd_vs_per_rad"
+             data="13.644706652048 16.844706652048 18.596836435874 27.067424671168"/>
     <numeric name="robstride_encoder_count" data="2 2 2 2"/>
   </custom>
 
@@ -159,7 +200,7 @@
                   diaginertia="0.0060 0.0060 0.0042"/>
         <joint name="yaw" type="hinge" axis="0 0 1"
                range="-1.570796326795 1.570796326795"
-               damping="0.85" armature="0.0030"
+               damping="0.068394108064" frictionloss="0" armature="0.0030"
                actuatorfrcrange="-60 60"/>
         <geom name="yaw_output_flange" type="cylinder"
               fromto="0 0 -0.008 0 0 0.012" size="0.040"
@@ -179,7 +220,7 @@
                     diaginertia="0.0028 0.0018 0.0028"/>
           <joint name="pitch" type="hinge" axis="1 0 0"
                  range="-1.570796326795 1.570796326795"
-                 damping="0.95" armature="0.0030"
+                 damping="0.068394108064" frictionloss="0" armature="0.0030"
                  actuatorfrcrange="-60 60"/>
           <geom name="pitch_output_flange" type="cylinder"
                 fromto="-0.012 0 0 0.012 0 0" size="0.041"
@@ -199,7 +240,7 @@
                       diaginertia="0.0105 0.0024 0.0105"/>
             <joint name="roll" type="hinge" axis="0 1 0"
                    range="-3.141592653590 3.141592653590"
-                   damping="0.28" armature="0.0007"
+                   damping="0.013368829372" frictionloss="0" armature="0.0007"
                    actuatorfrcrange="-17 17"/>
             <geom name="roll_output_flange" type="cylinder"
                   fromto="0 -0.010 0 0 0.010 0" size="0.030"
@@ -218,7 +259,7 @@
                         diaginertia="0.0082 0.0013 0.0082"/>
               <joint name="elbow" type="hinge" axis="1 0 0"
                      range="-1.483529864195 2.617993877991"
-                     damping="0.42" armature="0.0007"
+                     damping="0.013368829372" frictionloss="0" armature="0.0007"
                      actuatorfrcrange="-17 17"/>
               <geom name="elbow_output_flange" type="cylinder"
                     fromto="-0.010 0 0 0.010 0 0" size="0.030"
@@ -241,6 +282,15 @@
               <body name="brush_compliance" pos="0 0.2952 0">
                 <inertial pos="0 0.0175 0" mass="0.06"
                           diaginertia="0.000020 0.000004 0.000020"/>
+                <!-- Lumped two-axis bundle flexure at the ferrule. The bristle
+                     bundle remains one rigid body; individual hairs do not
+                     bend or collide independently. -->
+                <joint name="brush_bend_x" type="hinge" axis="1 0 0"
+                       range="-0.349065850399 0.349065850399"
+                       stiffness="1.2" damping="0.01" springref="0"/>
+                <joint name="brush_bend_z" type="hinge" axis="0 0 1"
+                       range="-0.349065850399 0.349065850399"
+                       stiffness="1.2" damping="0.01" springref="0"/>
                 <joint name="brush_compression" type="slide" axis="0 1 0"
                        range="-0.012 0" stiffness="800" damping="6"
                        springref="0" frictionloss="0.15"/>
@@ -266,28 +316,43 @@
   <contact>
     <pair name="brush_canvas_contact" geom1="bristle_contact"
           geom2="canvas_surface" condim="4"
-          friction="0.85 0.03 0.001"
+          friction="0.85 0.85 0.03 0.001 0.001"
           solref="-1400 -24" solimp="0.90 0.97 0.001 0.5 2"
           margin="0.0005"/>
   </contact>
 
-  <!-- Position commands are joint-output radians. RobStride's internal
-       reduction is already inside each integrated actuator: gear=1 and there
-       is no external belt ratio. Peak torque is the hard actuator limit;
-       continuous/thermal limiting belongs in the hardware safety layer. -->
+  <!-- Position commands are joint-output radians. Each dcmotor is a lumped
+       output-side equivalent of the integrated FOC drive, motor, and planetary
+       reduction: gear=1 and there is no external belt ratio. Electrical
+       current dynamics use the measured L/R time constant. Kt and inferred Ke
+       retain their distinct vendor/output meanings before MuJoCo forms its
+       power-balanced effective motor constant. Peak torque is the hard limit.
+       Thermal, cogging, and LuGre parameters remain disabled until measured. -->
   <actuator>
-    <position name="yaw_position" joint="yaw" gear="1"
-              kp="210" kv="20" ctrlrange="-1.570796326795 1.570796326795"
-              forcerange="-60 60"/>
-    <position name="pitch_position" joint="pitch" gear="1"
-              kp="260" kv="24" ctrlrange="-1.570796326795 1.570796326795"
-              forcerange="-60 60"/>
-    <position name="roll_position" joint="roll" gear="1"
-              kp="85" kv="7" ctrlrange="-3.141592653590 3.141592653590"
-              forcerange="-17 17"/>
-    <position name="elbow_position" joint="elbow" gear="1"
-              kp="125" kv="10" ctrlrange="-1.483529864195 2.617993877991"
-              forcerange="-17 17"/>
+    <dcmotor name="yaw_position" joint="yaw" gear="1"
+             motorconst="2.36 2.295880796136"
+             resistance="1.862175704515" inductance="0 0.000705128205"
+             saturation="60 0 0" input="position"
+             controller="168 0 13.644706652048 0 0 48"
+             ctrlrange="-1.570796326795 1.570796326795"/>
+    <dcmotor name="pitch_position" joint="pitch" gear="1"
+             motorconst="2.36 2.295880796136"
+             resistance="1.862175704515" inductance="0 0.000705128205"
+             saturation="60 0 0" input="position"
+             controller="208 0 16.844706652048 0 0 48"
+             ctrlrange="-1.570796326795 1.570796326795"/>
+    <dcmotor name="roll_position" joint="roll" gear="1"
+             motorconst="1.22 1.080219146592"
+             resistance="3.241366704555" inductance="0 0.000453448276"
+             saturation="17 0 0" input="position"
+             controller="240 0 18.596836435874 0 0 48"
+             ctrlrange="-3.141592653590 3.141592653590"/>
+    <dcmotor name="elbow_position" joint="elbow" gear="1"
+             motorconst="1.22 1.080219146592"
+             resistance="3.241366704555" inductance="0 0.000453448276"
+             saturation="17 0 0" input="position"
+             controller="352.941176470588 0 27.067424671168 0 0 48"
+             ctrlrange="-1.483529864195 2.617993877991"/>
   </actuator>
 
   <!-- Sensor names are stable adapter keys. Painting code should consume tip
@@ -301,6 +366,8 @@
     <jointvel name="pitch_velocity_sensor" joint="pitch"/>
     <jointvel name="roll_velocity_sensor" joint="roll"/>
     <jointvel name="elbow_velocity_sensor" joint="elbow"/>
+    <jointpos name="brush_bend_x_sensor" joint="brush_bend_x"/>
+    <jointpos name="brush_bend_z_sensor" joint="brush_bend_z"/>
     <jointpos name="brush_compression_sensor" joint="brush_compression"/>
     <touch name="brush_touch_sensor" site="brush_contact_zone"/>
     <force name="brush_force_sensor" site="brush_force_site"/>
@@ -316,16 +383,16 @@
 
   <keyframe>
     <key name="safe_home"
-         qpos="0 -0.872664625997 0 1.745329251994 0"
+         qpos="0 -0.872664625997 0 1.745329251994 0 0 0"
          ctrl="0 -0.872664625997 0 1.745329251994"/>
     <key name="contact_probe"
-         qpos="0 -0.824069157992 0 1.479812604153 0"
+         qpos="0 -0.824069157992 0 1.479812604153 0 0 0"
          ctrl="0 -0.824069157992 0 1.479812604153"/>
     <key name="lower_arm_down"
-         qpos="0 0 0 -1.396263401595 0"
+         qpos="0 0 0 -1.396263401595 0 0 0"
          ctrl="0 0 0 -1.396263401595"/>
     <key name="bottom_edge_probe"
-         qpos="0 0.018483091890 0 -1.097714535920 0"
+         qpos="0 0.018483091890 0 -1.097714535920 0 0 0"
          ctrl="0 0.018483091890 0 -1.097714535920"/>
   </keyframe>
 </mujoco>

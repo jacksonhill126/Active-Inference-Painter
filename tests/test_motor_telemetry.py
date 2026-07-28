@@ -21,6 +21,8 @@ def test_arm_telemetry_log_records_pose_velocity_current_and_torque() -> None:
 
     assert sample["phase"] == "paint"
     assert sample["painting_count"] == 2
+    assert sample["brush_loaded"] is False
+    assert sample["depositing_paint"] is False
     for name in ("yaw", "pitch", "roll", "elbow"):
         assert f"position_{name}_deg" in sample
         assert f"target_{name}_deg" in sample

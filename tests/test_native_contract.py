@@ -65,4 +65,4 @@ def test_reset_pose_preserves_canvas_but_realigns_arm_state() -> None:
     assert sim.actual_pose == safe_home_pose()
     assert sim.target_pose == safe_home_pose()
     assert np.array_equal(sim.canvas.thickness, material_before)
-    assert not sim.paint_enabled
+    assert not sim.brush.loaded

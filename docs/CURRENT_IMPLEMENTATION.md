@@ -34,9 +34,12 @@ It is oil: paint does not dry within a session and the brush does not run out
 mid-stroke — deposition is consistent along a mark and the canvas keeps its
 wetness (there is no wetness decay).
 
-- **Brush loading.** The stroke's `amount` sets how heavily the brush is loaded,
-  which scales deposited thickness/opacity uniformly along the mark (a fuller
-  brush lays thicker paint). It never depletes or thins toward the end
+- **Brush loading.** The stroke's `amount` sets how heavily the brush is loaded
+  before approach, which scales deposited thickness/opacity uniformly along the
+  mark (a fuller brush lays thicker paint). Loaded/unloaded is material state,
+  not a controller paint gate: any positive-pressure canvas contact deposits,
+  including press, lift, and unintended contact. Finite fresh-paint depletion
+  is not yet calibrated, so the load does not thin toward the end
   (`brush_load_min`/`brush_load_max`).
 - **Directional shape.** Each deposition step paints the disc swept from the
   previous contact point, so travel elongates and connects the mark. The
@@ -70,11 +73,13 @@ wetness (there is no wetness decay).
 The policy sampler also biases proposed strokes toward longer sweeps (a declared
 empirical policy prior), since a round brush over a short span reads as a dab.
 
-Loading and carried tone are per-stroke state set on pen-down from the action,
-so each stroke stays a deterministic function of the canvas and the action (no
-cross-stroke brush memory the learned model cannot see). Brush tilt relative to
-the canvas normal is not yet modeled; the round footprint is oriented only by
-travel direction.
+Loading and carried tone are set before stroke motion from the action. The
+brush stays loaded through approach, press, sweep, lift, and retraction, and is
+reloaded for the next action or explicitly unloaded on reset. This makes
+incidental contact a real predicted paint consequence while preserving a
+deterministic transition at the action boundary. Brush tilt relative to the
+canvas normal is not yet modeled in the 2-D deposition footprint; the round
+footprint is oriented only by travel direction.
 
 ## Core expected-free-energy terms
 
@@ -384,10 +389,33 @@ python -m active_painter.web_server --plant-backend mujoco
 
 `native` remains the default accepted reference. In `mujoco` mode, position
 commands use the stable `yaw`, `pitch`, `roll`, `elbow` joint order in radians.
-MuJoCo supplies encoder position/velocity, actuator force and derived current,
-tip position, brush compression, and exact brush/canvas contact. Realized
-contact drives deposition into the existing `VerticalCanvas`; MuJoCo does not
-represent paint.
+MuJoCo supplies encoder position/velocity, dynamic output-equivalent winding
+current, actuator force, applied controller voltage, tip position, brush
+compression, and exact brush/canvas contact. The `dcmotor` actuators include
+back-EMF, finite electrical time constants, a 48 V controller limit, and peak
+torque saturation. Realized contact drives deposition into the existing
+`VerticalCanvas`; MuJoCo does not represent paint.
+
+The brush has passive axial compression plus a two-axis lumped flexure at the
+ferrule. Its rigid 35 mm bundle can rotate tangentially under isotropic canvas
+friction and spring back after lift-off; individual bristles are not modeled.
+The deflected MuJoCo tip is the point mapped into `VerticalCanvas`, and the web
+robot state exposes both bend angles for the Three.js mirror. Bend limits,
+stiffness, damping, and friction are provisional rather than measured.
+
+The electrical model is not a transistor-, phase-, or thermal-level drive
+simulation. Public RobStride torque, speed, voltage, resistance, inductance,
+and current data ground an output-side integrated-drive equivalent. Back-EMF,
+terminal resistance, and a one-point viscous-loss equivalent are derived to
+preserve the published no-load speed/current and peak-stall operating points;
+position-loop gains remain approximate. The viscous term does not identify the
+real split among mechanical, magnetic, and electronics losses. Thermal
+derating, cogging, detailed friction, gearbox compliance/backlash, and inverter
+behavior await measured hardware data. These below-policy dynamics do not add
+a painting preference.
+The two physical encoders listed for each drive are metadata only at this
+stage; MuJoCo joint sensors remain exact and have no quantization, noise,
+sample/transport delay, dropout, or motor/output-side disagreement.
 
 The current painting controllers still operate in the
 `native-abstract-v0` canvas frame. A conventional execution adapter maps their

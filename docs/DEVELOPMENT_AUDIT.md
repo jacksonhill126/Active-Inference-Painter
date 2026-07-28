@@ -33,9 +33,9 @@ edges and a dense-tiling ceiling test (now 0.871, edge to edge):
   (distance + 0.2, well under the 0.5 overtravel limit) so contact is robust
   to servo depth undershoot at extended reach, instead of relying on the
   0.08 near-surface gate at exactly zero deflection.
-- The direct-vs-aware controller test now bounds the aware controller's
-  deliberate paint gating rather than comparing against an ungated baseline
-  that paints while off-track.
+- The former tracking-error paint gate has since been removed. A loaded brush
+  deposits from physical pressure-bearing contact, and contact-loss forecasts
+  now count only actual pressure loss.
 
 These are all conventional execution-layer changes beneath the painting
 policy boundary; no EFE term changed in this pass.

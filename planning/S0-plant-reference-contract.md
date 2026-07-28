@@ -178,7 +178,7 @@ Notes:
 
 ### T-105 Capture baseline telemetry and web-runtime behavior
 
-Status: `Ready`
+Status: `Active`
 Track: Web/Telemetry  
 Depends on: T-101, T-103  
 Owner: Jackson/Codex  
@@ -192,6 +192,13 @@ Acceptance:
   state, policy diagnostics, and telemetry summaries.
 - Save a short baseline telemetry CSV and note the run configuration.
 
+Notes:
+
+- Runtime endpoint, frontend-state, canvas-render, and telemetry-schema tests
+  are implemented and passing.
+- A short versioned baseline CSV/canvas/config artifact still needs to be saved
+  under the T-107 bundle convention.
+
 Baseline command:
 
 ```powershell
@@ -200,7 +207,7 @@ python -m active_painter.web_server --driver-bootstrap-transitions 0 --driver-bo
 
 ### T-106 Document known simulator shortcuts and limitations
 
-Status: `Ready`
+Status: `Active`
 Track: Documentation  
 Depends on: T-101, T-102, T-103  
 Owner: Jackson/Codex  
@@ -216,6 +223,13 @@ Acceptance:
   densities, and simulator-only summary observations.
 - Mark each shortcut as acceptable baseline, needs MuJoCo calibration, or needs
   hardware validation.
+
+Notes:
+
+- Architecture, current-implementation, development-audit, sensor-ledger, and
+  model documentation now identify the native forecast approximation,
+  motor/contact assumptions, Python paint boundary, and uncalibrated fields.
+- A consolidated three-category acceptance table remains.
 
 Suggested sources:
 

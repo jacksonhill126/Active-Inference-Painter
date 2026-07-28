@@ -188,11 +188,36 @@ def test_oil_paint_wetness_persists_while_brush_is_lifted() -> None:
     sim.canvas.paint_at(point, pressure=0.8, tone=1.0, dt=1.0 / 120.0)
     wetness_after_paint = sim.canvas.wetness.copy()
 
-    sim.paint_enabled = False
     for _ in range(480):
         sim.step(1.0 / 240.0)
 
     assert np.array_equal(sim.canvas.wetness, wetness_after_paint)
+
+
+def test_loaded_brush_deposition_is_driven_by_contact_without_a_paint_gate() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=48))
+    contact_pose = ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance + 0.2)
+    sim.actual_pose = contact_pose
+    sim.target_pose = contact_pose
+    sim.plant.reset_state(contact_pose)
+    sim.load_brush(amount=0.7, tone=1.0)
+    sim.refresh_contact()
+
+    sim.step(1.0 / 120.0)
+
+    assert sim.brush.loaded
+    assert sim.contact.pressure > 0.0
+    assert sim.depositing_paint
+    assert sim.canvas.material_coverage() > 0.0
+
+    thickness = sim.canvas.thickness.copy()
+    sim.unload_brush()
+    sim.step(1.0 / 120.0)
+
+    assert not sim.brush.loaded
+    assert sim.contact.pressure > 0.0
+    assert not sim.depositing_paint
+    assert np.array_equal(sim.canvas.thickness, thickness)
 
 
 def _drag(canvas: VerticalCanvas, brush: Brush | None, x0: float, x1: float, z: float,

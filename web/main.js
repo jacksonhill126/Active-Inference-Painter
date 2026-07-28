@@ -235,20 +235,27 @@ function applyJoint(name, value) {
   if (!entry) return;
   const { node, definition } = entry;
   const axis = v3(definition.axis).normalize();
-  node.position.copy(node.userData.basePosition);
-  node.quaternion.identity();
   if (definition.type === "slide") {
-    node.position.addScaledVector(axis, value);
+    // Compound brush joints share a body. A slide axis therefore follows any
+    // preceding local bend rotations already accumulated on that body.
+    node.position.addScaledVector(axis.applyQuaternion(node.quaternion), value);
   } else {
-    node.quaternion.setFromAxisAngle(axis, value);
+    node.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(axis, value));
   }
 }
 
 function updateRobot(robotState, contact) {
+  for (const node of new Set([...jointNodes.values()].map((entry) => entry.node))) {
+    node.position.copy(node.userData.basePosition);
+    node.quaternion.identity();
+  }
   const q = robotState.jointPositionDeg;
   for (const name of robotModel.jointOrder) {
     applyJoint(name, THREE.MathUtils.degToRad(q[name]));
   }
+  const bend = robotState.brushBendRad || {};
+  applyJoint("brush_bend_x", bend.x || 0);
+  applyJoint("brush_bend_z", bend.z || 0);
   applyJoint("brush_compression", -Math.max(0, robotState.brushCompressionM || 0));
   tipMarker.position.copy(v3(robotState.tipM));
   tipMarker.material.color.setHex(contact.touching ? 0x5ad1c4 : 0xf06b46);
@@ -275,7 +282,7 @@ document.getElementById("btnMax").onclick = () => command("toggle_max_speed");
 document.getElementById("btnPause").onclick = () => command("toggle_pause");
 document.getElementById("btnReset").onclick = () => command("reset");
 document.getElementById("btnClear").onclick = () => command("clear");
-document.getElementById("btnPaint").onclick = () => command("toggle_paint");
+document.getElementById("btnPaint").onclick = () => command("toggle_brush_load");
 document.getElementById("btnAgent").onclick = () => command("toggle_agent");
 document.getElementById("btnHomeView").onclick = () => setHomeView();
 document.getElementById("btnFaceCanvas").onclick = () => setFaceCanvasView();
@@ -409,7 +416,7 @@ async function pollState() {
   document.getElementById("btnMax").textContent = `Max speed: ${state.maxSpeed ? "on" : "off"}`;
   document.getElementById("btnMax").classList.toggle("active", state.maxSpeed);
   document.getElementById("btnPause").textContent = state.paused ? "Resume" : "Pause";
-  document.getElementById("btnPaint").textContent = `Paint: ${state.paintEnabled ? "on" : "off"}`;
+  document.getElementById("btnPaint").textContent = `Brush: ${state.brushLoaded ? "loaded" : "unloaded"}`;
   document.getElementById("btnAgent").textContent = `Agent: ${state.agentEnabled ? "on" : "off"}`;
   document.getElementById("btnAgent").classList.toggle("active", state.agentEnabled);
   const efe = state.agent?.efe || {};

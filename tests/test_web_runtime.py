@@ -45,6 +45,8 @@ def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
     assert len(state["robot"]["tipM"]) == 3
     assert state["telemetryLog"]["sampleCount"] >= 1
     assert state["telemetryLog"]["csvEndpoint"] == "/api/telemetry.csv"
+    assert state["brushLoaded"] is False
+    assert state["depositingPaint"] is False
     assert "velocityRadS" in state["motor"]["yaw"]
     assert "encoderAngleDeg" in state["motor"]["yaw"]
     assert "positionErrorDeg" in state["motor"]["yaw"]
@@ -270,6 +272,23 @@ def test_web_runtime_exports_arm_telemetry_csv() -> None:
     assert "torque_elbow_nm" in csv_text
     assert "tip_x" in csv_text
     assert "target_tip_y" in csv_text
+    assert "brush_loaded" in csv_text
+    assert "depositing_paint" in csv_text
+
+
+def test_web_runtime_manual_control_toggles_material_load_not_deposition_permission() -> None:
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+
+    loaded = runtime.command({"type": "toggle_brush_load"})["state"]
+    unloaded = runtime.command({"type": "toggle_brush_load"})["state"]
+
+    assert loaded["brushLoaded"] is True
+    assert loaded["depositingPaint"] is False
+    assert unloaded["brushLoaded"] is False
 
 
 def test_web_runtime_default_telemetry_is_sparse_rolling_window() -> None:
@@ -334,24 +353,55 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "/api/robot-model" in main_js
     assert "buildBody" in main_js
     assert "updateRobot(state.robot" in main_js
+    assert 'applyJoint("brush_bend_x"' in main_js
+    assert 'applyJoint("brush_bend_z"' in main_js
     assert "canvasTexture" in main_js
-    assert "mujoco-robstride-direct-v3" not in main_js
+    assert "mujoco-robstride-electromechanical-v4" not in main_js
 
 
 def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
     model = load_robot_visual_model()
 
-    assert model["version"] == "mujoco-robstride-direct-v3"
+    assert model["version"] == "mujoco-robstride-electromechanical-v4"
     assert model["jointOrder"] == ["yaw", "pitch", "roll", "elbow"]
     assert model["kinematicConvention"] == "Rz_yaw_Rx_pitch_Ry_roll_Rx_elbow"
+    assert (
+        model["fidelity"]["powerElectronics"]
+        == "voltage_limited_equivalent_not_phase_resolved"
+    )
+    assert model["fidelity"]["encoder"] == "ideal_joint_state_without_noise_or_delay"
+    assert model["fidelity"]["thermal"] == "disabled_missing_vendor_constants"
     assert model["kinematics"]["yawOrigin"] == pytest.approx([0.0, 0.0, 0.285])
     assert model["kinematics"]["pitchAnchorAtZero"] == pytest.approx([0.075, 0.0, 0.391])
     assert model["kinematics"]["upperArmLength"] == pytest.approx(0.3302)
     assert model["kinematics"]["lowerArmLength"] == pytest.approx(0.3302)
     assert model["canvas"]["center"] == pytest.approx([0.075, 0.4826, 0.350])
     assert model["brush"]["diameter"] == pytest.approx(0.0127)
+    assert model["brush"]["bendRangeRad"] == pytest.approx(
+        [-0.349065850399, 0.349065850399]
+    )
+    assert model["brush"]["tangentialStiffnessNmPerRad"] == pytest.approx(
+        [1.2, 1.2]
+    )
     assert model["motors"]["yaw"]["model"] == "RobStride 03"
     assert model["motors"]["elbow"]["model"] == "RobStride 02"
+    assert (
+        model["motors"]["yaw"]["actuatorModel"]
+        == "output_equivalent_dcmotor_position_v1"
+    )
+    assert model["motors"]["yaw"]["ratedVoltageV"] == pytest.approx(48.0)
+    assert model["motors"]["yaw"]["voltageRangeV"] == pytest.approx([15.0, 60.0])
+    assert model["motors"]["yaw"]["poleCount"] == 42
+    assert model["motors"]["elbow"]["poleCount"] == 28
+    assert model["motors"]["yaw"]["effectiveMotorConstantNmPerA"] == pytest.approx(
+        2.327719630643
+    )
+    assert model["motors"]["yaw"]["equivalentViscousLossNmsPerRad"] == pytest.approx(
+        0.068394108064
+    )
+    assert model["motors"]["elbow"]["electricalTimeConstantS"] == pytest.approx(
+        0.000453448276
+    )
 
     world_body_names = [body["name"] for body in model["world"]["bodies"]]
     assert world_body_names == ["canvas", "base"]
@@ -595,7 +645,7 @@ def test_web_runtime_restarts_after_stop_and_saves_every_fifth_canvas() -> None:
 
 def test_web_runtime_restart_lifts_brush_before_next_sim_step() -> None:
     runtime = WebSimRuntime(canvas_size=32)
-    runtime.sim.paint_enabled = True
+    runtime.sim.load_brush(amount=0.7, tone=1.0)
     runtime.sim.intended_contact_pressure = 1.0
     runtime.sim.contact = runtime.sim.canvas.contact_from_tip(
         np.asarray([0.0, runtime.sim.canvas.distance, 0.0]),
@@ -608,7 +658,7 @@ def test_web_runtime_restart_lifts_brush_before_next_sim_step() -> None:
     assert runtime._restart_after_stop_if_needed()
     runtime.sim.step(1.0 / 240.0)
 
-    assert not runtime.sim.paint_enabled
+    assert not runtime.sim.brush.loaded
     assert runtime.sim.intended_contact_pressure == 0.0
     assert runtime.sim.contact.pressure == 0.0
     assert runtime.sim.canvas.material_coverage() == 0.0

@@ -155,7 +155,6 @@ class WebSimRuntime:
                 self._record_telemetry(force=True)
                 return
         else:
-            self.sim.paint_enabled = True
             self.sim.control_damping_multiplier = 1.0
             self.sim.set_target(scripted_pose(self.sim_time))
             self.sim.intended_contact_pressure = scripted_contact_pressure(self.sim_time)
@@ -204,13 +203,21 @@ class WebSimRuntime:
                 self.telemetry_log.clear()
                 self._next_telemetry_time = self.sim_time
                 self._record_telemetry(force=True)
-            elif action == "toggle_paint":
-                self.sim.paint_enabled = not self.sim.paint_enabled
+            elif action in {"toggle_brush_load", "toggle_paint"}:
+                if self.sim.brush.loaded:
+                    self.sim.unload_brush()
+                else:
+                    self.sim.load_brush(1.0, self.sim.brush_tone)
             elif action == "toggle_agent":
                 self.agent_enabled = not self.agent_enabled
                 self.agent_driver.enabled = self.agent_enabled
+                if not self.agent_enabled and not self.sim.brush.loaded:
+                    self.sim.load_brush(1.0, self.sim.brush_tone)
             elif action == "tone":
-                self.sim.brush_tone = 1.0 if str(data.get("value", "black")) == "black" else 0.0
+                tone = 1.0 if str(data.get("value", "black")) == "black" else 0.0
+                self.sim.brush_tone = tone
+                if self.sim.brush.loaded:
+                    self.sim.load_brush(self.sim.brush.load_amount, tone)
             else:
                 return {"ok": False, "error": f"unknown command: {action}"}
         return {"ok": True, "state": self.state()}
@@ -239,6 +246,7 @@ class WebSimRuntime:
                     self.robot_model["brush"]["compressionTravel"],
                     max(0.0, float(contact.deflection) * 0.0254),
                 )
+                robot_state["brushBendRad"] = {"x": 0.0, "z": 0.0}
             return {
                 "simTime": self.sim_time,
                 "codeVersion": self.code_build.version,
@@ -250,7 +258,9 @@ class WebSimRuntime:
                 "lastSavedCanvas": self.last_saved_canvas,
                 "telemetryLog": self.telemetry_log.summary(self.sim_time),
                 "agent": self.agent_driver.diagnostics(),
-                "paintEnabled": self.sim.paint_enabled,
+                "brushLoaded": self.sim.brush.loaded,
+                "depositingPaint": self.sim.depositing_paint,
+                "brushLoadAmount": self.sim.brush.load_amount,
                 "plantBackend": self.plant_backend,
                 "counterfactualPlantBackend": getattr(
                     self.sim.plant,
@@ -332,7 +342,6 @@ class WebSimRuntime:
             self.last_saved_canvas = str(self._save_canvas_snapshot(self.painting_count))
         self.sim.reset_pose()
         self.sim.canvas.clear()
-        self.sim.paint_enabled = False
         self.sim.intended_contact_pressure = 0.0
         self.sim.refresh_contact()
         self.agent_driver.reset(self.sim)

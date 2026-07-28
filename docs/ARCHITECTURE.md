@@ -345,8 +345,10 @@ It derives:
 - material coverage.
 
 Paint does not dry during a painting. Wetness is persistent. The brush is
-reloaded at every pen-down from the stroke's declared `amount` and `tone`, so
-the current model assumes paint handling happens between strokes.
+loaded before each stroke from its declared `amount` and `tone`. There is no
+controller-side paint gate: once loaded, pressure-bearing contact deposits
+during press, sweep, lift, or unintended contact. The current model therefore
+assumes paint handling happens between strokes.
 
 The brush process includes:
 
@@ -366,10 +368,11 @@ physical than alpha compositing, but it is still phenomenological. It does not
 model rheology, yield stress, bristle bending, three-dimensional ridges, brush
 tilt, solvent concentration, or cross-stroke brush contamination.
 
-The absence of cross-stroke brush memory is deliberate at present: the learned
-transition model does not observe a persistent brush state, so retaining hidden
-paint in the brush between actions would make the environment partially
-observed in an unmodeled way.
+The fresh load is reset at each action boundary because the learned transition
+model does not yet observe a persistent brush-load latent. Within an action the
+loaded state remains physical and continuous; it is never toggled by tracking
+error. Finite load depletion and cross-action contamination remain future
+latent-state extensions.
 
 ## 7. Material state representation
 
@@ -1150,9 +1153,11 @@ Pressure is currently generated conventionally from:
 - stroke speed;
 - stroke phase.
 
-The controller previews the reference, filters and rate-limits joint targets,
-pulls back during large lateral tracking error, and gates paint until contact
-tracking is sufficiently established.
+The controller previews the reference and filters and rate-limits joint
+targets. During approach it may pull back while laterally far from the stroke
+start. From press onward it never retracts or disables paint because of
+tracking error: the loaded brush and physical contact state determine
+deposition.
 
 This is below the painting-policy boundary, but it is not yet a learned
 conditional contact model. The active-inference planner predicts and evaluates
@@ -1315,10 +1320,30 @@ selection.
 
 When the web runtime is launched with `--plant-backend mujoco`, the formal
 `PlantBackend` is implemented by the MJCF model in SI units. MuJoCo owns
-realized joint dynamics, actuator saturation, brush compliance, tip pose, and
-contact. `VerticalCanvas` still owns paint thickness, wetness, pigment,
-coverage, and visible tone. A compatibility facade maps the current abstract
-controller frame to and from the physical plant.
+realized joint dynamics, output-equivalent RobStride dcmotor current and
+back-EMF dynamics, voltage/peak-torque saturation, brush compliance, tip pose,
+and contact. The controller receives joint-output position commands. Applied
+controller voltage, dynamic current, and actuator force are exposed separately
+in telemetry, while the plant sensor packet retains bus voltage.
+`VerticalCanvas` still owns paint thickness, wetness, pigment, coverage, and
+visible tone. A compatibility facade maps the current abstract controller frame
+to and from the physical plant.
+
+Brush compliance comprises passive axial compression and two tangential hinge
+springs at the ferrule. The bristle bundle remains a single rigid contact body;
+friction can tilt and lag the bundle, but individual bristle deformation is not
+represented. The actual deflected tip drives contact-to-paint registration.
+
+The electrical model is an integrated-drive equivalent, not a phase-resolved
+FOC/inverter model. Vendor torque, speed, voltage, current, resistance, and
+inductance specifications ground its envelope. Equivalent output resistance,
+back-EMF, and a one-point viscous loss are derived to preserve the published
+peak-stall and no-load speed/current points; the loss fit does not identify its
+physical source. The internal position gains remain approximate. Thermal
+derating, cogging, detailed friction, gearbox compliance/backlash, and firmware
+delays are intentionally absent until measured. Those limitations are reported
+as model uncertainty and safety work, not hidden behind a painting reward or
+preference.
 
 Actual MuJoCo execution and counterfactual policy prediction are deliberately
 separate in this first integration. Deep-copied planning rollouts use

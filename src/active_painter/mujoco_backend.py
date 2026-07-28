@@ -75,6 +75,8 @@ class MujocoPlantBackend:
             for name in (
                 *(f"{joint}_position_sensor" for joint in JOINT_NAMES),
                 *(f"{joint}_velocity_sensor" for joint in JOINT_NAMES),
+                "brush_bend_x_sensor",
+                "brush_bend_z_sensor",
                 "brush_compression_sensor",
                 "brush_touch_sensor",
                 "brush_force_sensor",
@@ -87,6 +89,14 @@ class MujocoPlantBackend:
             mujoco.mjtObj.mjOBJ_JOINT,
             "brush_compression",
         )
+        self._brush_bend_joint_ids = {
+            axis: _named_id(
+                self.model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                f"brush_bend_{axis}",
+            )
+            for axis in ("x", "z")
+        }
         self._canvas_geom_id = _named_id(
             self.model,
             mujoco.mjtObj.mjOBJ_GEOM,
@@ -97,10 +107,20 @@ class MujocoPlantBackend:
             mujoco.mjtObj.mjOBJ_GEOM,
             "bristle_contact",
         )
-        self._torque_constants = self._custom_numeric(
-            "robstride_torque_constant_nm_per_arms"
+        self._effective_motor_constants = self._custom_numeric(
+            "robstride_effective_motor_constant_nm_per_a"
+        )
+        self._rated_current = self._custom_numeric("robstride_rated_current_arms")
+        self._model_peak_current = self._custom_numeric(
+            "robstride_model_peak_current_a"
         )
         self._bus_voltage = self._custom_numeric("robstride_rated_voltage_v")
+        self._controller_kp = self._custom_numeric(
+            "robstride_controller_kp_v_per_rad"
+        )
+        self._controller_kd = self._custom_numeric(
+            "robstride_controller_kd_vs_per_rad"
+        )
         self._pending_time_s = 0.0
         self._sequence = 0
         self._last_command: PlantCommand | None = None
@@ -109,7 +129,7 @@ class MujocoPlantBackend:
             for joint_id in self._joint_ids.values()
         )
         self._capabilities = PlantCapabilities(
-            backend_id="mujoco-robstride-direct-v3",
+            backend_id="mujoco-robstride-electromechanical-v4",
             joint_names=JOINT_NAMES,
             position_limits_rad=limits,
             command_modes=("position",),
@@ -189,12 +209,79 @@ class MujocoPlantBackend:
             dtype=np.float64,
         )
 
+    def actuator_current_a(self) -> np.ndarray:
+        """Return the simulated output-equivalent winding-current state.
+
+        With MuJoCo's dcmotor electrical dynamics enabled, the final activation
+        slot is armature current. This reports that state without clipping:
+        force saturation does not by itself clamp regenerative current, so an
+        over-envelope value must remain observable rather than be hidden.
+        """
+        currents = np.empty(len(JOINT_NAMES), dtype=np.float64)
+        torque = self.actuator_force_nm()
+        for index, name in enumerate(JOINT_NAMES):
+            actuator_id = self._actuator_ids[name]
+            activation_address = int(self.model.actuator_actadr[actuator_id])
+            activation_count = int(self.model.actuator_actnum[actuator_id])
+            if activation_address >= 0 and activation_count > 0:
+                current = float(
+                    self.data.act[activation_address + activation_count - 1]
+                )
+            else:
+                current = float(
+                    torque[index]
+                    / max(abs(self._effective_motor_constants[index]), 1e-9)
+                )
+            currents[index] = current
+        return currents
+
+    def rated_current_fraction(self) -> np.ndarray:
+        return np.abs(self.actuator_current_a()) / np.maximum(
+            self._rated_current,
+            1e-9,
+        )
+
+    def applied_voltage_v(self) -> np.ndarray:
+        """Return the dcmotor position controller's terminal-voltage request.
+
+        The MJCF controller has no integral term, slew limit, or control delay,
+        so its voltage request is exactly the clamped proportional-derivative
+        expression below. This is distinct from the fixed 48 V DC bus exposed
+        in :class:`PhysicalSensorPacket`.
+        """
+        voltage = np.empty(len(JOINT_NAMES), dtype=np.float64)
+        for index, name in enumerate(JOINT_NAMES):
+            actuator_id = self._actuator_ids[name]
+            position_error = (
+                float(self.data.ctrl[actuator_id])
+                - float(self.data.actuator_length[actuator_id])
+            )
+            velocity = float(self.data.actuator_velocity[actuator_id])
+            request = (
+                self._controller_kp[index] * position_error
+                - self._controller_kd[index] * velocity
+            )
+            voltage[index] = float(
+                np.clip(request, -self._bus_voltage[index], self._bus_voltage[index])
+            )
+        return voltage
+
     def tip_position_m(self) -> np.ndarray:
         return self._sensor("tip_position_sensor").copy()
 
     def brush_compression_m(self) -> float:
         value = float(self._sensor("brush_compression_sensor")[0])
         return max(0.0, -value)
+
+    def brush_bend_rad(self) -> np.ndarray:
+        """Return the two lumped ferrule-flexure angles in local x/z order."""
+        return np.asarray(
+            [
+                float(self._sensor("brush_bend_x_sensor")[0]),
+                float(self._sensor("brush_bend_z_sensor")[0]),
+            ],
+            dtype=np.float64,
+        )
 
     def contact_force_n(self) -> float:
         return max(0.0, float(self._sensor("brush_touch_sensor")[0]))
@@ -261,9 +348,10 @@ class MujocoPlantBackend:
             self._pending_time_s -= timestep
 
     def read_sensors(self) -> PhysicalSensorPacket:
-        torque = self.actuator_force_nm()
-        current = torque / np.maximum(np.abs(self._torque_constants), 1e-9)
+        current = self.actuator_current_a()
         flags: list[str] = []
+        if np.any(np.abs(current) > self._model_peak_current + 1e-9):
+            flags.append("model_peak_current_exceeded")
         if not (
             np.isfinite(self.data.qpos).all()
             and np.isfinite(self.data.qvel).all()
@@ -346,12 +434,12 @@ class MujocoJointPlant:
     """
 
     handles_contact = True
-    backend_id = "mujoco-robstride-direct-v3"
+    backend_id = "mujoco-robstride-electromechanical-v4"
     counterfactual_backend_id = "native-abstract-v0 approximation"
 
     # Compatibility parameters consumed by existing telemetry/EFE code.
-    current_limit = 23.0
-    kt = 1.22
+    current_limit = 25.5
+    kt = 1.17
     max_link_velocity = 5.0
     inertia = 0.08
     link_inertia: dict[str, float] | float = 0.08
@@ -510,6 +598,7 @@ class MujocoJointPlant:
         velocity = np.asarray(packet.encoder_velocity_rad_s)
         torque = self.backend.actuator_force_nm()
         current = np.asarray(packet.motor_current_a)
+        applied_voltage = self.backend.applied_voltage_v()
         target = np.asarray(
             [np.deg2rad(self._physical_target_deg[name]) for name in JOINT_NAMES]
         )
@@ -542,7 +631,7 @@ class MujocoJointPlant:
             self.motor_velocity[name] = float(velocity[index])
             self.motor_angle[name] = float(q[index])
             self.temperature[name] = 0.0
-            self.telemetry.voltage[name] = float(packet.bus_voltage_v[index])
+            self.telemetry.voltage[name] = float(applied_voltage[index])
             self.telemetry.current[name] = float(current[index])
             self.telemetry.torque[name] = float(torque[index])
             self.telemetry.actuator_angle_deg[name] = float(np.rad2deg(q[index]))
@@ -653,6 +742,7 @@ class MujocoJointPlant:
             )["mappedCartesianTargetM"]
         )
         tip_m = self.backend.tip_position_m()
+        brush_bend = self.backend.brush_bend_rad()
         return {
             "mode": "mujoco_direct",
             "backendId": self.backend_id,
@@ -669,4 +759,8 @@ class MujocoJointPlant:
             "alignmentErrorM": float(np.linalg.norm(tip_m - target_m)),
             "rollPreserved": self._last_roll_preserved,
             "brushCompressionM": self.backend.brush_compression_m(),
+            "brushBendRad": {
+                "x": float(brush_bend[0]),
+                "z": float(brush_bend[1]),
+            },
         }

@@ -160,6 +160,9 @@ def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
     compression_range = _numbers(brush_compression.get("range"))
     if len(compression_range) != 2:
         raise ValueError("brush_compression must have a two-value range")
+    bend_range = numeric["brush_tangential_bend_range_rad"]
+    if len(bend_range) != 2:
+        raise ValueError("brush_tangential_bend_range_rad must have two values")
     actuator_assignments = _actuator_assignments(text["actuator_assignment"])
 
     return {
@@ -170,6 +173,14 @@ def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
         "kinematicConvention": text["kinematic_convention"],
         "jointOrder": list(CONTROLLED_JOINTS),
         "jointRangeDeg": joint_range_deg,
+        "fidelity": {
+            "actuatorModel": text["actuator_model"],
+            "torqueSaturation": text["torque_saturation_semantics"],
+            "powerElectronics": text["power_electronics_model"],
+            "encoder": text["encoder_model"],
+            "thermal": text["thermal_model"],
+            "transmission": text["transmission_model"],
+        },
         "materials": materials,
         "world": {
             "geoms": [_geom_payload(geom) for geom in worldbody.findall("geom")],
@@ -198,12 +209,69 @@ def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
             "diameter": 2.0 * _numbers(bristle_contact.get("size"))[0],
             "bristleLength": _from_to_length(bristle_contact),
             "compressionTravel": compression_range[1] - compression_range[0],
+            "bendRangeRad": bend_range,
+            "tangentialStiffnessNmPerRad": numeric[
+                "brush_tangential_stiffness_nm_per_rad"
+            ],
+            "tangentialDampingNmsPerRad": numeric[
+                "brush_tangential_damping_nms_per_rad"
+            ],
         },
         "motors": {
             name: {
                 "model": actuator_assignments[name].replace("RS", "RobStride "),
+                "actuatorModel": text["actuator_model"],
                 "ratedTorqueNm": numeric["robstride_rated_torque_nm"][index],
                 "peakTorqueNm": numeric["robstride_peak_torque_nm"][index],
+                "ratedVoltageV": numeric["robstride_rated_voltage_v"][index],
+                "voltageRangeV": [
+                    numeric["robstride_voltage_min_v"][index],
+                    numeric["robstride_voltage_max_v"][index],
+                ],
+                "ratedPowerW": numeric["robstride_rated_power_w"][index],
+                "ratedSpeedRadS": numeric["robstride_rated_speed_rad_s"][index],
+                "noLoadSpeedRadS": numeric["robstride_no_load_speed_rad_s"][index],
+                "noLoadCurrentArms": numeric[
+                    "robstride_no_load_current_arms"
+                ][index],
+                "ratedCurrentArms": numeric["robstride_rated_current_arms"][index],
+                "modelPeakCurrentA": numeric["robstride_model_peak_current_a"][index],
+                "ratedPhaseCurrentApk": numeric[
+                    "robstride_rated_phase_current_apk"
+                ][index],
+                "peakPhaseCurrentApk": numeric[
+                    "robstride_peak_phase_current_apk"
+                ][index],
+                "torqueConstantNmPerArms": numeric[
+                    "robstride_torque_constant_nm_per_arms"
+                ][index],
+                "backEmfConstantVsPerRad": numeric[
+                    "robstride_back_emf_constant_vs_per_rad"
+                ][index],
+                "effectiveMotorConstantNmPerA": numeric[
+                    "robstride_effective_motor_constant_nm_per_a"
+                ][index],
+                "equivalentTerminalResistanceOhm": numeric[
+                    "robstride_equivalent_terminal_resistance_ohm"
+                ][index],
+                "equivalentViscousLossNmsPerRad": numeric[
+                    "robstride_equivalent_viscous_loss_nms_per_rad"
+                ][index],
+                "lineResistanceOhm": numeric[
+                    "robstride_line_resistance_ohm"
+                ][index],
+                "lineInductanceH": numeric["robstride_line_inductance_h"][index],
+                "electricalTimeConstantS": numeric[
+                    "robstride_electrical_time_constant_s"
+                ][index],
+                "controllerKpVPerRad": numeric[
+                    "robstride_controller_kp_v_per_rad"
+                ][index],
+                "controllerKdVsPerRad": numeric[
+                    "robstride_controller_kd_vs_per_rad"
+                ][index],
+                "poleCount": int(numeric["robstride_pole_count"][index]),
+                "encoderCount": int(numeric["robstride_encoder_count"][index]),
                 "massKg": numeric["robstride_mass_kg"][index],
                 "reductionRatio": numeric["robstride_reduction_ratio"][index],
             }
@@ -430,4 +498,5 @@ def retarget_legacy_robot_state(
         "alignmentErrorM": best_error,
         "rollPreserved": roll_preserved,
         "brushCompressionM": 0.0,
+        "brushBendRad": {"x": 0.0, "z": 0.0},
     }

@@ -521,7 +521,7 @@ def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan()
     sim.actual_pose = contact_pose
     sim.target_pose = contact_pose
     sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 1.0)
-    sim.paint_enabled = True
+    sim.load_brush(amount=0.7, tone=1.0)
     sim.intended_contact_pressure = 1.0
     driver.planning = True
 
@@ -530,7 +530,7 @@ def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan()
         driver.step(sim, 1.0 / 240.0)
         sim.step(1.0 / 240.0)
 
-    assert not sim.paint_enabled
+    assert sim.brush.loaded
     assert sim.intended_contact_pressure == 0.0
     assert float(sim.kinematics.tip(sim.actual_pose)[1]) < initial_tip_y - 0.05
     assert sim.contact.pressure == 0.0
@@ -655,6 +655,7 @@ def test_hold_uses_extra_damping_and_stroke_execution_clears_it() -> None:
     ex.timing = adaptive_stroke_timing(sim, action)
     ex.controller.reset(sim, action, ex.timing)
     ex.initialized = True
+    sim.load_brush(action.amount, action.tone)
     driver.current = ex
 
     driver.step(sim, 1.0 / 240.0)
@@ -724,6 +725,7 @@ def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_c
     ex.timing = adaptive_stroke_timing(sim, action)
     ex.controller.reset(sim, action, ex.timing)
     ex.initialized = True
+    sim.load_brush(action.amount, action.tone)
     ex.t = ex.total - 0.001
     driver.current = ex
 
@@ -731,7 +733,7 @@ def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_c
 
     assert driver.current is None
     assert driver.phase_label() == "return_center"
-    assert not sim.paint_enabled
+    assert sim.brush.loaded
     assert sim.intended_contact_pressure == 0.0
 
     pending = StrokeExecution(action=action, efe=efe, posterior=1.0)
@@ -857,9 +859,8 @@ def test_active_inference_stroke_realization_targets_canvas_face_not_behind_wall
     efe = EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     ex = StrokeExecution(action=action, efe=efe, posterior=1.0)
     ex.t = ex.approach + ex.press + 0.5 * ex.paint
-    pose, brush_down, intended_pressure = pose_for_execution(sim, ex)
+    pose, intended_pressure = pose_for_execution(sim, ex)
     tip = sim.kinematics.tip(pose)
-    assert brush_down
     assert intended_pressure > 0.0
     # Painting targets slight bushing deflection, never beyond the hard
     # overtravel limit behind the canvas face.

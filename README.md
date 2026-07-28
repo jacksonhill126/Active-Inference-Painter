@@ -30,8 +30,9 @@ python -m active_painter.web_server
 
 Open `http://127.0.0.1:8017`.
 
-To use MuJoCo for realized arm dynamics, actuator limits, brush compliance,
-and contact while retaining the Python paint-material process:
+To use MuJoCo for realized arm dynamics, RobStride-equivalent electrical
+current/back-EMF and actuator limits, brush compliance, and contact while
+retaining the Python paint-material process:
 
 ```bash
 python -m pip install -e ".[dev,mujoco]"
@@ -97,8 +98,10 @@ policy below that boundary.
   that builds its robot hierarchy from the MuJoCo XML while retaining the
   Python material-canvas display.
 - Selectable native and MuJoCo realized-execution backends behind the SI-unit
-  plant contract. MuJoCo execution currently retains the native abstract body
-  as an explicitly labeled counterfactual motor-forecast approximation.
+  plant contract. The MuJoCo backend uses output-equivalent RobStride dcmotors
+  with voltage, current-lag, back-EMF, and peak-torque saturation. MuJoCo
+  execution currently retains the native abstract body as an explicitly
+  labeled counterfactual motor-forecast approximation.
 - Broad deterministic and integration test coverage across material,
   inference, hierarchy, arm, execution, and runtime behavior.
 

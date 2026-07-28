@@ -143,22 +143,23 @@ Stop conditions:
   proposal correction;
 - failed calibration is hidden by precision tuning.
 
-## G2: MuJoCo Abstract Clone
+## G2: MuJoCo Physical Draft And Logical Retarget
 
 Decision task: `T-209`
 
 Permits:
 
-- using the named MuJoCo model as an abstract kinematic clone;
+- using the named MuJoCo model as an uncalibrated physical draft;
 - beginning backend integration;
-- making coordinate and kinematic parity claims only.
+- making only the tested command-subset, coordinate-retarget, reach, contact,
+  and kinematic claims.
 
 Required tests:
 
 - MJCF compile/load test;
-- exact joint order, axes, ranges, units, link lengths, home pose, canvas frame,
-  and tip-site tests;
-- representative native-versus-MuJoCo forward-kinematics parity test;
+- exact joint order, axes, signs, ranges, units, separated anchors, keyframes,
+  canvas frame, brush geometry, and tip-site tests;
+- representative physical-kinematics and logical-retarget tests;
 - collision-role test or inspection showing visual placeholders do not create
   unintended constraints.
 
@@ -167,19 +168,21 @@ Required artifacts and logs:
 - versioned MJCF and SHA-256;
 - field table marking exact, approximate, visual-only, and unmeasured values;
 - viewer inspection record;
-- parity results with tolerances and failure entries.
+- kinematic/retarget results with tolerances and failure entries.
 
 Pass conditions:
 
-- declared constants match the native reference;
-- tip-site parity passes at home, contact, roll, elbow-bent, and near-limit
-  poses;
+- the logical command subset and every intentional native/physical difference
+  are declared;
+- physical kinematics and logical retargets pass at home, contact, roll,
+  elbow-bent, canvas-edge, and near-limit poses;
 - model loads in the supported MuJoCo version;
 - no physical-calibration claim is made.
 
 Stop conditions:
 
-- coordinate corrections are hidden in controller code;
+- coordinate corrections are hidden in controller code rather than named at
+  the retarget boundary;
 - actuator or joint ranges diverge silently;
 - decorative geometry changes reachable motion;
 - the model is described as a calibrated twin.

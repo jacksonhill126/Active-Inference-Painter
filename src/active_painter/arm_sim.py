@@ -518,19 +518,26 @@ class ContactState:
 
 @dataclass(slots=True)
 class Brush:
-    """Per-stroke brush state: how heavily it is loaded (a constant fresh-paint
-    deposition scale, since oil does not run out or dry mid-stroke), a small
-    held reservoir of paint skimmed off the canvas (the "dirty brush" that
-    drives wet blending: held volume plus its pigment mass, exactly conserved
-    against the canvas ledger), and a fixed bristle furrow pattern. Reset at
-    each pen-down from the stroke's ``amount``/``tone`` so that a whole stroke
-    stays a deterministic function of the canvas and the action (the learned
-    transition model never sees cross-stroke brush memory).
+    """Material state carried by the physical brush.
+
+    ``load`` is zero while the brush is unloaded and becomes a calibrated
+    fresh-paint deposition scale when :meth:`reload` is called.  Contact never
+    changes this state implicitly: a loaded brush deposits whenever it touches
+    the canvas, including during press, lift, or unintended contact.  The
+    current approximation keeps the fresh load constant within a stroke rather
+    than pretending to have a calibrated finite paint-volume reservoir.
+
+    The held reservoir stores paint skimmed off the canvas (the "dirty brush"
+    that drives wet blending: held volume plus its pigment mass, exactly
+    conserved against the canvas ledger), alongside a fixed bristle-furrow
+    pattern.  Loading once before a stroke keeps the whole realized mark a
+    deterministic function of the canvas and action.
     """
 
     config: PainterConfig
     rng: np.random.Generator
-    load: float = field(default=1.0)
+    load: float = field(default=0.0)
+    load_amount: float = field(default=0.0)
     fresh_tone: float = field(default=0.0)
     held_volume: float = field(default=0.0)
     held_black: float = field(default=0.0)
@@ -542,9 +549,21 @@ class Brush:
     wobble_phases: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
     wobble_amps: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
 
+    @property
+    def loaded(self) -> bool:
+        return self.load > 0.0
+
+    def unload(self) -> None:
+        self.load = 0.0
+        self.load_amount = 0.0
+        self.held_volume = 0.0
+        self.held_black = 0.0
+        self.path_distance = 0.0
+
     def reload(self, amount: float, tone: float) -> None:
         cfg = self.config
         frac = clip_scalar(amount, 0.0, 1.0)
+        self.load_amount = frac
         self.load = cfg.brush_load_min + (cfg.brush_load_max - cfg.brush_load_min) * frac
         self.fresh_tone = float(tone >= 0.5)
         self.held_volume = 0.0
@@ -800,7 +819,9 @@ class VerticalCanvas:
             float(self.config.paint_deposition_base_rate)
             + float(self.config.paint_deposition_pressure_rate) * pressure
         )
-        # Brush loading scales deposited thickness uniformly; it never depletes.
+        # Brush loading scales deposited thickness uniformly. Fresh-paint
+        # depletion is an explicit uncalibrated approximation, not an implicit
+        # controller switch.
         load_scale = brush.load if brush is not None else 1.0
         peak = float(dt) * max(0.0, deposition_rate) * load_scale
         region = np.s_[row0:row1, col0:col1]
@@ -901,10 +922,8 @@ class ArmPainterSim:
     canvas: VerticalCanvas = field(init=False)
     actual_pose: ArmPose = field(init=False)
     target_pose: ArmPose = field(init=False)
-    paint_enabled: bool = field(init=False)
     brush_tone: float = field(init=False)
     intended_contact_pressure: float = field(init=False)
-    intended_paint_load: float = field(init=False)
     brush_flow: float = field(init=False)
     control_damping_multiplier: float = field(init=False)
     contact: ContactState = field(init=False)
@@ -918,10 +937,8 @@ class ArmPainterSim:
         self.actual_pose = safe_home_pose()
         self.target_pose = safe_home_pose()
         self.plant.reset_state(self.actual_pose)
-        self.paint_enabled = False
         self.brush_tone = 1.0
         self.intended_contact_pressure = 0.0
-        self.intended_paint_load = 1.0
         self.brush_flow = 1.0
         self.control_damping_multiplier = 1.0
         self.brush = Brush(self.config, np.random.default_rng(int(self.config.brush_seed)))
@@ -933,7 +950,7 @@ class ArmPainterSim:
         self.actual_pose = safe_home_pose()
         self.target_pose = safe_home_pose()
         self.plant.reset_state(self.actual_pose)
-        self.paint_enabled = False
+        self.unload_brush()
         self.intended_contact_pressure = 0.0
         self.control_damping_multiplier = 1.0
         self._painting = False
@@ -943,6 +960,27 @@ class ArmPainterSim:
 
     def set_target(self, pose: ArmPose) -> None:
         self.target_pose = pose.clipped()
+
+    def load_brush(self, amount: float, tone: float) -> None:
+        """Load material before motion; later deposition is contact-driven."""
+
+        self.brush_tone = float(tone >= 0.5)
+        self.brush.reload(amount, self.brush_tone)
+        self._painting = False
+        self._previous_brush_world = None
+        self._tip_lag_world = None
+
+    def unload_brush(self) -> None:
+        """Remove paint availability without changing canvas or robot state."""
+
+        self.brush.unload()
+        self._painting = False
+        self._previous_brush_world = None
+        self._tip_lag_world = None
+
+    @property
+    def depositing_paint(self) -> bool:
+        return self._painting
 
     def step(self, dt: float) -> None:
         previous_pose = self.actual_pose
@@ -970,19 +1008,17 @@ class ArmPainterSim:
                 self.target_pose = self.actual_pose
             tip = self.kinematics.tip(self.actual_pose)
         self.refresh_contact()
-        painting = self.paint_enabled and self.contact.pressure > 0.001 and self.contact.on_canvas
+        painting = self.brush.loaded and self.contact.pressure > 0.001 and self.contact.on_canvas
         if painting:
             if not self._painting:
-                # Pen-down: reload the brush from the stroke's declared load and
-                # tone. Per-stroke reset keeps each stroke a function of the
-                # canvas and action, with no cross-stroke brush memory.
-                self.brush.reload(self.intended_paint_load, self.brush_tone)
+                # Contact onset resets only the geometric trailer. Material was
+                # loaded before motion and is not switched by tracking state.
                 self._previous_brush_world = None
                 self._tip_lag_world = None
             contact_world = self.contact.brush_world
             # Bristle-tip trailer dynamics: the painting point is a damped
             # follower of the contact point, so it lags starts and cuts corners
-            # like a pulled brush tip. Reset each pen-down.
+            # like a pulled brush tip. Reset each contact onset.
             tau = float(self.config.brush_tip_lag_seconds)
             if tau > 1e-6:
                 if self._tip_lag_world is None:
@@ -999,7 +1035,7 @@ class ArmPainterSim:
             self.canvas.paint_at(
                 brush_world,
                 self.contact.pressure,
-                self.brush_tone,
+                self.brush.fresh_tone,
                 dt,
                 motion=motion,
                 brush=self.brush,

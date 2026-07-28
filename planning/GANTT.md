@@ -23,7 +23,7 @@ gantt
 
     section Simulation Support
     S0 native plant reference contract            :s0, 2026-08-03, 3w
-    S1 MuJoCo abstract clone                      :s1, after s0, 3w
+    S1 MuJoCo physical draft and logical retarget :s1, after s0, 3w
     S2 MuJoCo backend adapter                     :s2, after s1, 4w
     M4 native observatory core                    :m4a, 2026-09-07, 5w
     M4 MuJoCo parity and observatory gate         :m4b, after s2, 3w

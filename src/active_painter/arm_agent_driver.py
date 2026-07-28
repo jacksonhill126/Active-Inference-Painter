@@ -435,6 +435,7 @@ class ArmActiveInferenceDriver:
             self._contact_release_count = 0
             self._cached_belief_gap = None
             self._cached_passage_trajectory = None
+        sim.unload_brush()
         state = self._observe(sim)
         if isinstance(self.agent, SpatialActiveInferencePainter) and isinstance(state, SpatialCanvasState):
             self.agent.reset_hierarchy_beliefs(state)
@@ -536,7 +537,6 @@ class ArmActiveInferenceDriver:
         self._execute_current(sim, dt)
 
     def _hold_retracted(self, sim: ArmPainterSim, dt: float, *, scope: str) -> None:
-        sim.paint_enabled = False
         sim.intended_contact_pressure = 0.0
         sim.control_damping_multiplier = max(1.0, float(self.config.hold_damping_multiplier))
         contact_escape = self._contact_escape_pose(sim, scope)
@@ -603,7 +603,6 @@ class ArmActiveInferenceDriver:
         self._hold_command_velocity = dict.fromkeys(JOINT_NAMES, 0.0)
         sim.plant.reset_state(sim.actual_pose)
         sim.intended_contact_pressure = 0.0
-        sim.paint_enabled = False
         sim.refresh_contact()
         self._contact_release_count += 1
 
@@ -1185,21 +1184,19 @@ class ArmActiveInferenceDriver:
         self._hold_command_velocity = {}
         if not ex.initialized:
             ex.timing = adaptive_stroke_timing(sim, ex.action)
+            sim.load_brush(ex.action.amount, ex.action.tone)
             ex.controller.reset(sim, ex.action, ex.timing)
             ex.initialized = True
         ex.t += dt
         command = ex.controller.command(sim, ex.action, ex.t, dt, ex.timing)
         sim.control_damping_multiplier = 1.0
         sim.set_target(command.pose)
-        sim.paint_enabled = command.brush_down
         sim.intended_contact_pressure = command.intended_pressure
-        sim.brush_tone = float(ex.action.tone >= 0.5)
-        sim.intended_paint_load = float(ex.action.amount)
         sim.brush_flow = command.reference.flow
         # Accumulate realized tracking residuals while painting (the contact
         # state reflects the last completed sim step). These become the
         # reliability observation for this stroke's motor realization kind.
-        if command.brush_down and sim.contact.on_canvas and sim.contact.pressure > 0.001:
+        if command.reference.phase == "paint" and sim.contact.on_canvas and sim.contact.pressure > 0.001:
             x0, z0, x1, z1 = stroke_world_endpoints(ex.action, sim.canvas)
             px = float(sim.contact.brush_world[0])
             pz = float(sim.contact.brush_world[2])
@@ -2037,6 +2034,7 @@ def execute_stroke_action(sim: ArmPainterSim, action: StrokeAction, dt: float = 
         initial_state=canvas_summary_state(sim),
     )
     ex.timing = adaptive_stroke_timing(sim, action)
+    sim.load_brush(action.amount, action.tone)
     ex.controller.reset(sim, ex.action, ex.timing)
     ex.initialized = True
     while ex.t < ex.total:
@@ -2044,10 +2042,7 @@ def execute_stroke_action(sim: ArmPainterSim, action: StrokeAction, dt: float = 
         command = ex.controller.command(sim, ex.action, ex.t, dt, ex.timing)
         sim.control_damping_multiplier = 1.0
         sim.set_target(command.pose)
-        sim.paint_enabled = command.brush_down
         sim.intended_contact_pressure = command.intended_pressure
-        sim.brush_tone = float(action.tone >= 0.5)
-        sim.intended_paint_load = float(action.amount)
         sim.brush_flow = command.reference.flow
         sim.step(dt)
 
@@ -2064,6 +2059,6 @@ def execution_phase(ex: StrokeExecution | None) -> str:
     return "lift"
 
 
-def pose_for_execution(sim: ArmPainterSim, ex: StrokeExecution) -> tuple[ArmPose, bool, float]:
+def pose_for_execution(sim: ArmPainterSim, ex: StrokeExecution) -> tuple[ArmPose, float]:
     reference = stroke_reference(ex.action, sim, ex.t, ex.timing)
-    return pose_for_reference(reference), reference.brush_down, reference.pressure
+    return pose_for_reference(reference), reference.pressure

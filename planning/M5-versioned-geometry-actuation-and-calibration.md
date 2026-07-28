@@ -55,7 +55,7 @@ storing a tolerance does not make it an inferred precision.
 
 ### T-501 Define `RobotGeometrySpec`
 
-Status: `Blocked`  
+Status: `Active`
 Track: Geometry/Architecture  
 Depends on: T-101, T-103  
 Owner: Jackson/Codex  
@@ -70,6 +70,15 @@ Acceptance:
 - Declare SI units internally and conversion rules at interfaces.
 - Support provisional, measured, and calibrated revisions.
 - Avoid controller-specific correction offsets in the geometry schema.
+
+Notes:
+
+- Work began in the versioned MJCF and XML-derived web model with separated
+  shoulder anchors, direct-drive joints, canvas frame, brush dimensions, and
+  SI transforms.
+- Acceptance remains open until these fields move into an authoritative
+  backend-neutral `RobotGeometrySpec` with mass, collision, and camera
+  coverage.
 
 ### T-502 Define the frame graph and naming convention
 

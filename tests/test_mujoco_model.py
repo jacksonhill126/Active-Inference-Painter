@@ -42,6 +42,31 @@ ACTUATOR_PEAK_TORQUES = {
     "roll_position": 17.0,
     "elbow_position": 17.0,
 }
+ACTUATOR_RATED_TORQUES = (20.0, 20.0, 6.0, 6.0)
+EFFECTIVE_MOTOR_CONSTANTS = (
+    2.327719630643,
+    2.327719630643,
+    1.147984041196,
+    1.147984041196,
+)
+EQUIVALENT_RESISTANCES = (
+    1.862175704515,
+    1.862175704515,
+    3.241366704555,
+    3.241366704555,
+)
+EQUIVALENT_VISCOUS_LOSS = (
+    0.068394108064,
+    0.068394108064,
+    0.013368829372,
+    0.013368829372,
+)
+ELECTRICAL_TIME_CONSTANTS = (
+    0.000705128205,
+    0.000705128205,
+    0.000453448276,
+    0.000453448276,
+)
 
 
 def _root() -> ET.Element:
@@ -68,7 +93,27 @@ def test_mujoco_model_declares_external_paint_boundary_and_si_radians() -> None:
     assert root.attrib["model"] == "active_inference_painter"
     assert compiler is not None
     assert compiler.attrib["angle"] == "radian"
-    assert texts["model_version"].attrib["data"] == "mujoco-robstride-direct-v3"
+    assert (
+        texts["model_version"].attrib["data"]
+        == "mujoco-robstride-electromechanical-v4"
+    )
+    assert (
+        texts["actuator_model"].attrib["data"]
+        == "output_equivalent_dcmotor_position_v1"
+    )
+    assert (
+        texts["torque_saturation_semantics"].attrib["data"]
+        == "hard_peak_envelope_without_thermal_derating"
+    )
+    assert (
+        texts["encoder_model"].attrib["data"]
+        == "ideal_joint_state_without_noise_or_delay"
+    )
+    assert texts["thermal_model"].attrib["data"] == "disabled_missing_vendor_constants"
+    assert (
+        texts["transmission_model"].attrib["data"]
+        == "rigid_integrated_reducer_without_backlash"
+    )
     assert texts["paint_process"].attrib["data"] == "external_VerticalCanvas"
 
     xml_text = MODEL_PATH.read_text(encoding="utf-8").lower()
@@ -99,7 +144,7 @@ def test_joint_order_axes_ranges_and_home_preserve_native_command_subset() -> No
     expected_home = safe_home_pose()
     expected_qpos = tuple(
         math.radians(float(getattr(expected_home, name))) for name in JOINT_NAMES
-    ) + (0.0,)
+    ) + (0.0, 0.0, 0.0)
     assert _floats(key.attrib["qpos"]) == pytest.approx(expected_qpos)
     assert _floats(key.attrib["ctrl"]) == pytest.approx(expected_qpos[:4])
     assert ArmPose(-999, -999, -999, -999).clipped() == ArmPose(-90, -90, -180, 0)
@@ -154,10 +199,12 @@ def test_shoulder_and_roll_axes_are_physically_separated() -> None:
 def test_robstride_direct_mount_specs_and_actuator_limits_are_encoded() -> None:
     root = _root()
     numerics = _named_elements(root, "./custom/numeric")
-    actuators = _named_elements(root, "./actuator/position")
+    actuators = _named_elements(root, "./actuator/dcmotor")
     joints = _named_elements(root, ".//joint")
 
-    assert _floats(numerics["robstride_rated_torque_nm"].attrib["data"]) == (20, 20, 6, 6)
+    assert _floats(
+        numerics["robstride_rated_torque_nm"].attrib["data"]
+    ) == ACTUATOR_RATED_TORQUES
     assert _floats(numerics["robstride_peak_torque_nm"].attrib["data"]) == (60, 60, 17, 17)
     assert _floats(numerics["robstride_mass_kg"].attrib["data"]) == pytest.approx(
         (0.880, 0.880, 0.405, 0.405)
@@ -207,14 +254,93 @@ def test_robstride_direct_mount_specs_and_actuator_limits_are_encoded() -> None:
         23,
         23,
     )
+    assert _floats(
+        numerics["robstride_effective_motor_constant_nm_per_a"].attrib["data"]
+    ) == pytest.approx(EFFECTIVE_MOTOR_CONSTANTS)
+    assert _floats(
+        numerics["robstride_equivalent_terminal_resistance_ohm"].attrib["data"]
+    ) == pytest.approx(EQUIVALENT_RESISTANCES)
+    assert _floats(
+        numerics["robstride_equivalent_viscous_loss_nms_per_rad"].attrib["data"]
+    ) == pytest.approx(EQUIVALENT_VISCOUS_LOSS)
+    assert _floats(
+        numerics["robstride_electrical_time_constant_s"].attrib["data"]
+    ) == pytest.approx(ELECTRICAL_TIME_CONSTANTS)
+    assert _floats(
+        numerics["robstride_rated_current_arms"].attrib["data"]
+    ) == pytest.approx(
+        (
+            12.0 / math.sqrt(2.0),
+            12.0 / math.sqrt(2.0),
+            7.0 / math.sqrt(2.0),
+            7.0 / math.sqrt(2.0),
+        )
+    )
+    assert _floats(numerics["robstride_pole_count"].attrib["data"]) == (
+        42,
+        42,
+        28,
+        28,
+    )
 
-    for joint_name, actuator_name in zip(JOINT_NAMES, ACTUATOR_PEAK_TORQUES, strict=True):
+    torque_constant = np.asarray(
+        _floats(numerics["robstride_torque_constant_nm_per_arms"].attrib["data"])
+    )
+    back_emf_constant = np.asarray(
+        _floats(
+            numerics["robstride_back_emf_constant_vs_per_rad"].attrib["data"]
+        )
+    )
+    effective_constant = np.asarray(EFFECTIVE_MOTOR_CONSTANTS)
+    equivalent_resistance = np.asarray(EQUIVALENT_RESISTANCES)
+    equivalent_viscous_loss = np.asarray(EQUIVALENT_VISCOUS_LOSS)
+    no_load_current = np.asarray(
+        _floats(numerics["robstride_no_load_current_arms"].attrib["data"])
+    )
+    no_load_speed = np.asarray(
+        _floats(numerics["robstride_no_load_speed_rad_s"].attrib["data"])
+    )
+    peak_torque = np.asarray(
+        _floats(numerics["robstride_peak_torque_nm"].attrib["data"])
+    )
+    assert effective_constant == pytest.approx(
+        np.sqrt(torque_constant * back_emf_constant)
+    )
+    assert equivalent_resistance == pytest.approx(
+        48.0 * effective_constant / peak_torque
+    )
+    assert 48.0 == pytest.approx(
+        equivalent_resistance * no_load_current
+        + back_emf_constant * no_load_speed
+    )
+    assert equivalent_viscous_loss * no_load_speed == pytest.approx(
+        effective_constant * no_load_current
+    )
+
+    for index, (joint_name, actuator_name) in enumerate(
+        zip(JOINT_NAMES, ACTUATOR_PEAK_TORQUES, strict=True)
+    ):
         actuator = actuators[actuator_name]
         peak = ACTUATOR_PEAK_TORQUES[actuator_name]
         assert actuator.attrib["joint"] == joint_name
         assert float(actuator.attrib["gear"]) == 1.0
+        assert actuator.attrib["input"] == "position"
         assert _floats(actuator.attrib["ctrlrange"]) == pytest.approx(JOINT_RANGES[joint_name])
-        assert _floats(actuator.attrib["forcerange"]) == pytest.approx((-peak, peak))
+        assert _floats(actuator.attrib["saturation"]) == pytest.approx((peak, 0.0, 0.0))
+        assert _floats(actuator.attrib["inductance"]) == pytest.approx(
+            (0.0, ELECTRICAL_TIME_CONSTANTS[index])
+        )
+        assert float(actuator.attrib["resistance"]) == pytest.approx(
+            EQUIVALENT_RESISTANCES[index]
+        )
+        assert float(joints[joint_name].attrib["damping"]) == pytest.approx(
+            EQUIVALENT_VISCOUS_LOSS[index]
+        )
+        assert float(joints[joint_name].attrib["frictionloss"]) == 0.0
+        controller = _floats(actuator.attrib["controller"])
+        assert controller[1] == 0.0
+        assert controller[3:5] == (0.0, 0.0)
+        assert controller[5] == 48.0
         assert _floats(joints[joint_name].attrib["actuatorfrcrange"]) == pytest.approx(
             (-peak, peak)
         )
@@ -242,10 +368,27 @@ def test_half_inch_brush_has_axial_compliance_and_bounded_canvas_contact() -> No
     assert _floats(compression.attrib["range"]) == pytest.approx((-0.012, 0.0))
     assert float(compression.attrib["stiffness"]) > 0.0
     assert float(compression.attrib["damping"]) > 0.0
+    bend_range = _floats(
+        numerics["brush_tangential_bend_range_rad"].attrib["data"]
+    )
+    for name, axis in (
+        ("brush_bend_x", (1.0, 0.0, 0.0)),
+        ("brush_bend_z", (0.0, 0.0, 1.0)),
+    ):
+        bend = joints[name]
+        assert bend.attrib["type"] == "hinge"
+        assert _floats(bend.attrib["axis"]) == axis
+        assert _floats(bend.attrib["range"]) == pytest.approx(bend_range)
+        assert float(bend.attrib["stiffness"]) == pytest.approx(1.2)
+        assert float(bend.attrib["damping"]) == pytest.approx(0.01)
 
     pair = pairs["brush_canvas_contact"]
     assert pair.attrib["geom1"] == "bristle_contact"
     assert pair.attrib["geom2"] == "canvas_surface"
+    assert int(pair.attrib["condim"]) == 4
+    assert _floats(pair.attrib["friction"]) == pytest.approx(
+        (0.85, 0.85, 0.03, 0.001, 0.001)
+    )
     assert sensors["brush_touch_sensor"].attrib["site"] == "brush_contact_zone"
     assert "tip" in sites
 
@@ -259,17 +402,28 @@ def test_mujoco_compiles_with_stable_adapter_names_and_separated_anchors() -> No
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     data = mujoco.MjData(model)
 
-    assert model.nq == 5
-    assert model.nv == 5
+    assert model.nq == 7
+    assert model.nv == 7
     assert model.nu == 4
+    assert model.pair_dim.tolist() == [4]
+    assert model.pair_friction[0] == pytest.approx(
+        (0.85, 0.85, 0.03, 0.001, 0.001)
+    )
     assert model.nkey == 4
     assert [
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, index)
         for index in range(model.njnt)
-    ] == [*JOINT_NAMES, "brush_compression"]
+    ] == [
+        *JOINT_NAMES,
+        "brush_bend_x",
+        "brush_bend_z",
+        "brush_compression",
+    ]
 
     for name in (
         "tip",
+        "brush_bend_x_sensor",
+        "brush_bend_z_sensor",
         "brush_touch_sensor",
         "brush_force_sensor",
         "tip_position_sensor",
@@ -305,7 +459,7 @@ def test_mujoco_joint_signs_match_the_declared_offset_kinematics() -> None:
     tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tip")
 
     yaw, pitch, roll, elbow = np.deg2rad((14.0, -38.0, 32.0, 92.0))
-    data.qpos[:] = (yaw, pitch, roll, elbow, 0.0)
+    data.qpos[:] = (yaw, pitch, roll, elbow, 0.0, 0.0, 0.0)
     mujoco.mj_forward(model, data)
 
     def rot_x(angle: float) -> np.ndarray:
@@ -379,7 +533,7 @@ def test_canvas_center_edges_and_corners_are_reachable_in_hardware_ranges() -> N
         ):
             yaw, pitch, elbow = pose_for_canvas_point(x, z)
             yaw_by_x[x] = yaw
-            data.qpos[:] = (yaw, pitch, 0.0, elbow, 0.0)
+            data.qpos[:] = (yaw, pitch, 0.0, elbow, 0.0, 0.0, 0.0)
             mujoco.mj_forward(model, data)
             assert data.site_xpos[tip_id] == pytest.approx(
                 (x, CANVAS_CONTACT_Y_M, z), abs=1e-9
@@ -403,7 +557,13 @@ def test_provisional_static_gravity_loads_stay_below_rated_torque() -> None:
     data.qpos[:] = 0.0
     mujoco.mj_forward(model, data)
 
-    gravity_bias = dict(zip((*JOINT_NAMES, "brush_compression"), data.qfrc_bias, strict=True))
+    gravity_bias = dict(
+        zip(
+            (*JOINT_NAMES, "brush_bend_x", "brush_bend_z", "brush_compression"),
+            data.qfrc_bias,
+            strict=True,
+        )
+    )
     assert gravity_bias["yaw"] == pytest.approx(0.0, abs=1e-12)
     assert gravity_bias["roll"] == pytest.approx(0.0, abs=1e-12)
     assert abs(gravity_bias["pitch"]) == pytest.approx(6.6537, abs=5e-4)

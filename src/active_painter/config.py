@@ -21,9 +21,12 @@ class PainterConfig:
     # boundary). Oil paint does not dry within a session: paint is laid at a
     # consistent rate along a stroke and the canvas keeps its wetness (there is
     # no wetness decay). The stroke's `amount` sets how heavily the brush is
-    # loaded, which scales deposited thickness/opacity uniformly along the mark
-    # (a fuller brush lays thicker paint) -- it never runs out or thins toward
-    # the end. `amount` 0 -> brush_load_min, 1 -> brush_load_max.
+    # loaded before motion, which scales deposited thickness/opacity uniformly
+    # along the mark (a fuller brush lays thicker paint). The loaded/unloaded
+    # material state is physical: once loaded, contact and pressure determine
+    # deposition through press, sweep, and lift. Finite fresh-paint depletion
+    # is not yet calibrated, so load does not thin within a stroke.
+    # `amount` 0 -> brush_load_min, 1 -> brush_load_max.
     brush_load_min: float = 0.55
     brush_load_max: float = 1.45
     # Directional (swept-capsule) footprint: each deposition step paints the
@@ -80,7 +83,7 @@ class PainterConfig:
     brush_push_forward: float = 0.6
     # Bristle-tip trailer dynamics: the painting point is a damped follower of
     # the contact point (it lags and cuts corners like a pulled brush tip).
-    # Reset at each pen-down; 0 disables.
+    # Reset at each contact onset; 0 disables.
     brush_tip_lag_seconds: float = 0.06
 
     state_dim: int = 6

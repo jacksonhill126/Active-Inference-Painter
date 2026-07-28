@@ -38,9 +38,8 @@ def test_contact_aware_controller_reduces_overshoot_against_direct_waypoint_base
     assert aware.joint_target_error_rms < direct.joint_target_error_rms
     assert aware.joint_current_rms < direct.joint_current_rms
     assert sum(aware.path_covariance) < sum(direct.path_covariance)
-    # The aware controller gates paint until tracking engages, so a small
-    # contact-loss fraction is deliberate; it must stay bounded rather than
-    # beat an ungated baseline that paints while off-track.
+    # Contact loss now means physical pressure loss only; no controller
+    # paint-permission flag contributes to this probability.
     assert aware.contact_loss_probability < 0.35
 
 
@@ -57,7 +56,7 @@ def test_execution_forecast_diagnostics_are_json_serializable() -> None:
     assert isinstance(diagnostics["canvas_delta_mean"], list)
 
 
-def test_contact_pressure_ramps_before_paint_is_enabled() -> None:
+def test_contact_pressure_ramps_before_the_stroke_sweep() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
     action = StrokeAction(0.2, 0.3, 0.8, 0.7, 0.08, 0.7, 1.0)
     timing = StrokeTiming()
@@ -66,32 +65,29 @@ def test_contact_pressure_ramps_before_paint_is_enabled() -> None:
     paint_reference = stroke_reference(action, sim, timing.approach + timing.press + 0.1, timing)
 
     assert press_reference.pressure > 0.0
-    assert not press_reference.brush_down
-    assert paint_reference.brush_down
+    assert press_reference.phase == "press"
+    assert paint_reference.phase == "paint"
+    assert paint_reference.pressure > 0.0
 
 
-def test_contact_controller_gates_paint_until_realized_tip_tracks_reference() -> None:
+def test_contact_controller_does_not_retract_or_disable_pressure_when_tracking_lags() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
     action = StrokeAction(0.2, 0.3, 0.8, 0.7, 0.08, 0.7, 1.0)
     timing = StrokeTiming()
-    controller = ContactAwareStrokeController()
+    controller = ContactAwareStrokeController(
+        preview_time=0.0,
+        filter_time=1e-6,
+        max_joint_speed_deg=1e6,
+    )
     controller.reset(sim, action, timing)
 
-    first_paint_t = timing.approach + timing.press + 0.01
-    first_command = controller.command(sim, action, first_paint_t, 1.0 / 240.0, timing)
+    mid_paint_t = timing.approach + timing.press + 0.5 * timing.paint
+    command = controller.command(sim, action, mid_paint_t, 1.0 / 240.0, timing)
+    commanded_tip = sim.kinematics.tip(command.pose)
 
-    assert first_command.reference.phase == "paint"
-    assert not first_command.brush_down
-    assert first_command.intended_pressure == 0.0
-
-    mid_paint_t = timing.approach + timing.press + 0.55 * timing.paint
-    mid_reference = stroke_reference(action, sim, mid_paint_t, timing)
-    sim.actual_pose = pose_for_reference(mid_reference)
-    sim.target_pose = sim.actual_pose
-    tracked_command = controller.command(sim, action, mid_paint_t, 1.0 / 240.0, timing)
-
-    assert tracked_command.brush_down
-    assert tracked_command.intended_pressure > 0.0
+    assert command.reference.phase == "paint"
+    assert command.intended_pressure > 0.0
+    assert commanded_tip[1] == pytest.approx(sim.canvas.distance + 0.2, abs=0.03)
 
 
 def test_execution_forecast_rejects_degenerate_stationary_paint_realization() -> None:
@@ -191,7 +187,7 @@ def test_opposite_upper_arm_roll_policies_have_distinct_feasible_likelihoods() -
 
     assert all(forecast.feasible for forecast in forecasts)
     assert forecasts[0].motor_primitive_kind != forecasts[1].motor_primitive_kind
-    assert forecasts[0].contact_loss_probability != pytest.approx(forecasts[1].contact_loss_probability)
+    assert not np.allclose(forecasts[0].next_state_mean, forecasts[1].next_state_mean)
     assert forecasts[0].joint_path_length_deg != pytest.approx(forecasts[1].joint_path_length_deg)
 
 

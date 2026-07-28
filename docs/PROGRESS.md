@@ -51,11 +51,30 @@ captured in a run manifest.
 2. Build the leakage-resistant live-scale baseline corpus in AI-108.
 3. Capture baseline web/telemetry behavior in T-105.
 4. Document and classify simulator shortcuts in T-106.
-5. Add reproducible baseline runs with measured prediction, calibration,
-   policy, execution, and latency outputs.
-6. Implement the S1 MuJoCo abstract clone against `native-abstract-v0`.
+5. Complete the T-208 standalone MuJoCo viewer inspection and accept or revise
+   the physical-draft/logical-retarget contract.
+6. Capture the T-309 matched native/MuJoCo stroke parity artifact.
+7. Move provisional MJCF geometry into the backend-neutral T-501
+   `RobotGeometrySpec`.
 
 ## Progress Log
+
+### 2026-07-28: MuJoCo physical draft, backend, and contact-driven paint
+
+- Reframed S1 from a future exact co-located abstract clone to the implemented
+  `mujoco-robstride-electromechanical-v4` physical draft with a named logical
+  canvas retarget.
+- Implemented the S2 live MuJoCo backend path, electromechanical RobStride
+  approximation, direct runtime selection, telemetry, XML-driven frontend
+  geometry, and Python-owned paint boundary.
+- Added separated shoulder axes, reachable canvas/keyframe tests, a half-inch
+  brush, axial compression, isotropic tangential friction, and lumped
+  tangential brush compliance.
+- Removed the controller paint-permission gate. Brush loading is material
+  state, while actual contact and pressure determine deposition continuously.
+- Left T-208 viewer acceptance, T-309 matched-backend parity, and T-501
+  backend-neutral geometry extraction open rather than treating a running
+  simulation as a calibrated digital twin.
 
 ### 2026-07-24: observation factorization and plant interface
 

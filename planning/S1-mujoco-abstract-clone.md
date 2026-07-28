@@ -1,34 +1,37 @@
-# S1: MuJoCo Abstract Clone
+# S1: MuJoCo Physical Draft And Logical Retarget
 
 ## Summary
 
-S1 makes MuJoCo match the current Python arm simulator at the abstract
-kinematic and canvas-frame level. This milestone is not a calibrated hardware
-model. It exists so the controller can later swap plants without changing the
-painting policy.
+S1 originally planned an exact kinematic clone of the co-located native arm.
+That path was deliberately superseded on 2026-07-28 by a versioned,
+hardware-oriented MuJoCo draft with separated shoulder anchors, RobStride
+direct drives, physical canvas contact, and a half-inch brush. The existing
+painting controller retains the native logical coordinate convention through a
+named, tested retarget at the backend boundary.
 
-The Python simulator remains authoritative in S1. MuJoCo must match it before
-physical motor offsets, joint housings, hard stops, CAD geometry, or hardware
-constraints are introduced.
+This is still not a calibrated hardware twin. Datasheet-derived, estimated,
+visual-only, and unmeasured fields remain explicit, and the native abstract
+body remains the declared counterfactual forecast approximation.
 
-## Clone Contracts
+## Physical-Draft And Retarget Contracts
 
-- Joint order is `yaw`, `pitch`, `roll`, `elbow`.
-- Joint ranges match `ArmPose.clipped()`.
-- `safe_home` matches `safe_home_pose()`.
-- Link lengths match `ArmKinematics`, converted from inches to meters.
-- Canvas size and contact plane match `VerticalCanvas`.
-- The `tip` site is the brush contact reference for later backend work.
-- Base, floor, joint housings, link radii, and brush handle are visual
-  placeholders unless explicitly measured.
-- Abstract clone geometry must not introduce accidental physical constraints
-  that the Python simulator does not have.
+- Logical joint order remains `yaw`, `pitch`, `roll`, `elbow`.
+- Joint axes, signs, command ranges, physical anchors, and keyframes are
+  explicit in SI/radians.
+- The separated pitch/roll/elbow geometry is intentional and must not be
+  corrected by hidden controller offsets.
+- The logical canvas frame is mapped to the physical canvas through the named
+  retarget tested by the frontend/backend adapters.
+- The `tip` site and `bristle_contact` geom define the brush/contact boundary.
+- Visual-only, collision-relevant, and contact geometry have explicit roles.
+- The version label must distinguish this physical draft from
+  `native-abstract-v0` and any future calibrated hardware revision.
 
 ## Tasks
 
-### T-201 Match native arm constants in MuJoCo XML
+### T-201 Define the versioned physical MuJoCo draft and logical command subset
 
-Status: `Ready`
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-101  
 Owner: Jackson/Codex  
@@ -36,15 +39,22 @@ Estimate: 1-2 days
 
 Acceptance:
 
-- XML defines the native joint order, axes, ranges, link lengths, canvas frame,
-  brush tip site, and `safe_home` keyframe.
+- XML defines the four-joint logical command order, explicit axes/signs/ranges,
+  separated physical anchors, link geometry, canvas frame, brush contact
+  reference, and safe keyframes.
 - MuJoCo angle units are explicit.
-- Position actuators inherit joint ranges or otherwise remain synchronized with
-  joint stops.
+- Intentional differences from the native logical body are named.
 
-### T-202 Add XML constant tests
+Notes:
 
-Status: `Blocked`
+- Accepted 2026-07-28 in `models/active_inference_painter.xml` and
+  `models/README.md` as `mujoco-robstride-electromechanical-v4`.
+- The native command subset is preserved through a named physical retarget
+  instead of hidden controller offsets.
+
+### T-202 Add XML geometry, range, actuator, and contact tests
+
+Status: `Done`
 Track: Validation  
 Depends on: T-201  
 Owner: Jackson/Codex  
@@ -52,46 +62,58 @@ Estimate: 0.5 day
 
 Acceptance:
 
-- Tests compare XML joint constants against `ArmPose.clipped()`.
-- Tests compare XML link lengths against `ArmKinematics`.
-- Tests compare canvas dimensions and contact plane against `VerticalCanvas`.
-- Tests verify actuator ranges stay tied to joint ranges.
+- Tests protect joint order/axes/ranges, separated anchors, keyframes, canvas
+  dimensions, direct-drive actuator limits, brush geometry/compliance,
+  friction, and stable adapter names.
 
-### T-203 Validate MuJoCo forward kinematics against native kinematics
+Notes:
 
-Status: `Backlog`  
+- Accepted 2026-07-28 in `tests/test_mujoco_model.py`; the focused XML/model
+  suite includes optional MuJoCo compile coverage.
+
+### T-203 Validate physical kinematics and logical retarget transforms
+
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-201, T-202  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
 
-- A representative pose set includes home, straight, near-canvas, roll-positive,
-  roll-negative, and elbow-bent configurations.
-- For each pose, MuJoCo `tip` site position matches
-  `ArmKinematics.tip(ArmPose(...))` within a declared tolerance.
-- Any coordinate transform is named and tested rather than corrected ad hoc in
-  controller code.
+- Representative poses verify joint signs, offset kinematics, brush-tip
+  transforms, canvas reach, and the logical-canvas-to-physical-target retarget
+  within declared tolerances.
+- The separated physical shoulder is explicitly distinguished from the
+  co-located native abstraction.
 
-### T-204 Keep physical housings visual-only
+Notes:
 
-Status: `Backlog`  
+- Accepted 2026-07-28 through joint-sign/offset-kinematics, reach/keyframe, and
+  legacy-canvas retarget tests.
+
+### T-204 Separate visual, collision, and contact geometry
+
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-201  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 0.5 day
 
 Acceptance:
 
-- Base, floor, joint marker, and decorative link geoms do not constrain the
-  abstract clone.
-- Canvas contact remains available for later pressure/contact tests.
-- The model documentation states which geoms are collision-relevant.
+- Decorative housings remain non-colliding.
+- Collision-relevant links and the brush/canvas contact pair are explicit.
+- Documentation identifies visual, collision, and contact roles.
+
+Notes:
+
+- Accepted 2026-07-28 in the MJCF collision masks and `models/README.md`;
+  compile/contact tests exercise the intended collision pair.
 
 ### T-205 Document exact versus approximate model fields
 
-Status: `Blocked`
+Status: `Done`
 Track: Documentation  
 Depends on: T-201  
 Owner: Jackson/Codex  
@@ -103,12 +125,18 @@ Acceptance:
 - Model docs list approximate visual fields.
 - Model docs list first measurements required for a calibrated twin.
 
+Notes:
+
+- Accepted 2026-07-28 in `models/README.md`, including provisional
+  datasheet-derived values, lumped brush compliance, Python-owned paint, native
+  counterfactual forecasts, and first calibration measurements.
+
 ### T-206 Add MuJoCo load/compile smoke test
 
-Status: `Backlog`  
+Status: `Done`
 Track: Validation  
 Depends on: T-201  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 0.5-1 day
 
 Acceptance:
@@ -118,23 +146,33 @@ Acceptance:
 - If MuJoCo is not installed, the test skips cleanly with an explicit reason.
 - The smoke test confirms joint and actuator counts.
 
+Notes:
+
+- Accepted 2026-07-28 in `tests/test_mujoco_model.py`; the module skips
+  explicitly when MuJoCo is unavailable.
+
 ### T-207 Define model version label
 
-Status: `Backlog`  
+Status: `Done`
 Track: Operations  
 Depends on: T-002, T-201  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 0.5 day
 
 Acceptance:
 
-- Abstract model version is named, initially `mujoco-abstract-v0`.
-- Version label appears in model docs and is available for future runtime state.
-- The label is distinct from any future calibrated hardware model version.
+- The model has a runtime-visible version label.
+- The label distinguishes the physical draft from the native abstract and
+  future calibrated hardware revisions.
+
+Notes:
+
+- Accepted 2026-07-28 as `mujoco-robstride-electromechanical-v4` in MJCF text
+  metadata, backend identity, runtime state, and documentation.
 
 ### T-208 Compare model behavior in MuJoCo viewer
 
-Status: `Backlog`  
+Status: `Active`
 Track: Manual Validation  
 Depends on: T-201, T-206  
 Owner: Jackson  
@@ -143,7 +181,7 @@ Estimate: 0.5-1 day
 Acceptance:
 
 - Manual load command is documented.
-- Joint sliders move through expected abstract ranges.
+- Joint sliders move through expected command ranges.
 - Brush tip and canvas are visually aligned enough for backend integration.
 - Any viewer discrepancy becomes a failure-mode entry or a follow-up task.
 
@@ -153,9 +191,16 @@ Suggested command:
 simulate "C:\Users\jxnhi\Documents\Active Inference Painter\models\active_inference_painter.xml"
 ```
 
+Notes:
+
+- The XML-driven Three.js frontend has been inspected through home,
+  canvas-facing, top, contact, lower-arm-down, and canvas-edge views.
+- A dated standalone MuJoCo viewer inspection record and any discrepancy
+  entries remain before acceptance.
+
 ### T-209 S1 lock decision
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-203, T-204, T-205, T-206, T-208  
 Owner: Jackson  
@@ -168,20 +213,27 @@ Acceptance:
 - S2 backend work may begin only after the tip-site coordinate contract is
   accepted.
 
+Notes:
+
+- Blocked only on T-208 manual acceptance and Jackson's explicit
+  physical-draft/retarget contract decision.
+
 ## Validation Gate
 
 S1 is complete when:
 
-- MuJoCo XML constants match the Python simulator.
-- Forward kinematics parity is tested for representative poses.
+- MuJoCo physical geometry, command subset, and logical retarget are explicit.
+- Physical kinematics and retarget transforms are tested for representative
+  poses.
 - The model loads in MuJoCo or has a documented dependency blocker.
-- Visual-only geometry cannot distort the abstract reference behavior.
-- The model is versioned as an abstract clone, not a hardware twin.
+- Geometry roles cannot create undeclared collision/contact behavior.
+- The model is versioned as an uncalibrated physical draft, not a hardware
+  twin.
 
 ## Failure Modes To Watch
 
 - MuJoCo slider units or actuator ranges differ from joint ranges.
-- The pitch/roll/elbow sign convention differs from the Python simulator.
+- Pitch/roll/elbow signs or offsets diverge from the declared retarget.
 - Decorative base or floor geometry creates false physical constraints.
 - Canvas frame is shifted enough that IK appears broken when the model is
   actually misaligned.

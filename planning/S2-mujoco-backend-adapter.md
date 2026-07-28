@@ -27,10 +27,10 @@ owns paint deposition and canvas state.
 
 ### T-301 Define common backend surface
 
-Status: `Backlog`  
+Status: `Done`
 Track: Architecture  
-Depends on: S0, S1  
-Owner: TBD  
+Depends on: T-103, T-201, T-203
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -48,12 +48,19 @@ Primary call sites:
 - `src/active_painter/stroke_execution.py`
 - `src/active_painter/telemetry_log.py`
 
+Notes:
+
+- Accepted 2026-07-28 through `plant-interface-v1`,
+  `MujocoPlantBackend`, and `MujocoJointPlant`.
+- Backend-specific calls remain below `ArmPainterSim`, stroke execution,
+  telemetry, and web runtime.
+
 ### T-302 Map `ArmPose` targets to MuJoCo controls
 
-Status: `Backlog`  
+Status: `Done`
 Track: Control  
 Depends on: T-301  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day
 
 Acceptance:
@@ -65,12 +72,18 @@ Acceptance:
   backend safety contract.
 - Target pose remains available to telemetry in degrees.
 
+Notes:
+
+- Accepted 2026-07-28 in `MujocoJointPlant.step`; degree/radian conversion,
+  joint order, target clipping, encoder state, and telemetry targets have
+  focused tests.
+
 ### T-303 Read MuJoCo state into existing pose/contact structures
 
-Status: `Backlog`  
+Status: `Done`
 Track: MuJoCo  
 Depends on: T-301, T-302  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -82,12 +95,18 @@ Acceptance:
   brush width, and brush world position.
 - State shape is compatible with `/api/state`.
 
+Notes:
+
+- Accepted 2026-07-28 with direct qpos/encoder state, physical tip/site state,
+  exact brush-canvas contact, force/pressure/compression/bend state, and
+  runtime payload coverage.
+
 ### T-304 Reuse `VerticalCanvas` for MuJoCo-driven paint
 
-Status: `Backlog`  
+Status: `Done`
 Track: Painting Model  
 Depends on: T-303  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -95,15 +114,21 @@ Acceptance:
 - MuJoCo brush tip/contact drives `VerticalCanvas.paint_at`.
 - Existing brush loading, wet blending, bristle texture, material coverage, and
   white-on-white behavior remain unchanged.
-- Painting can be disabled without changing arm motion.
+- Unloading material changes paint availability without changing arm motion.
 - Canvas PNG rendering continues to use the existing material renderer.
+
+Notes:
+
+- Accepted 2026-07-28: brush material is loaded before motion and deposition is
+  driven by physical contact/pressure through `VerticalCanvas`.
+- Python remains the declared paint-material boundary.
 
 ### T-305 Add scripted-stroke smoke tests
 
-Status: `Backlog`  
+Status: `Done`
 Track: Validation  
 Depends on: T-302, T-303, T-304  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1 day
 
 Acceptance:
@@ -113,12 +138,18 @@ Acceptance:
 - Without optional MuJoCo installed, tests skip cleanly.
 - Test records basic telemetry: final pose, contact pressure, and coverage.
 
+Notes:
+
+- Accepted 2026-07-28 in `tests/test_mujoco_backend.py`; contact, force,
+  pressure, coverage, deterministic snapshot/restore, and a 370-sample
+  continuous-contact deposition stroke are covered.
+
 ### T-306 Add backend selection to web runtime
 
-Status: `Backlog`  
+Status: `Done`
 Track: Web/Runtime  
 Depends on: T-301, T-304  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -131,16 +162,21 @@ Acceptance:
 Suggested CLI:
 
 ```powershell
-python -m active_painter.web_server --backend native
-python -m active_painter.web_server --backend mujoco
+python -m active_painter.web_server --plant-backend native
+python -m active_painter.web_server --plant-backend mujoco
 ```
+
+Notes:
+
+- Accepted 2026-07-28; state, canvas PNG, telemetry CSV, and XML-driven frontend
+  geometry share the runtime.
 
 ### T-307 Adapt telemetry for MuJoCo backend
 
-Status: `Backlog`  
+Status: `Done`
 Track: Telemetry  
 Depends on: T-303, T-306  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -150,12 +186,19 @@ Acceptance:
   the choice is documented.
 - Backend identity and model version are included in runtime diagnostics.
 
+Notes:
+
+- Accepted 2026-07-28 with backend/model identity, joint/actuator/encoder
+  state, current, torque, voltage, elastic/backlash/friction/load terms,
+  contact, brush-loaded, and actual-deposition fields.
+- Declared approximations remain documented.
+
 ### T-308 Define MuJoCo forecast strategy
 
-Status: `Backlog`  
+Status: `Done`
 Track: Planning/Forecasting  
 Depends on: T-301, T-305  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -173,12 +216,19 @@ Default:
 - MuJoCo motor forecast rollouts are deferred unless they are cheap and
   deterministic enough to copy/reset.
 
+Notes:
+
+- Accepted 2026-07-28 as live MuJoCo execution with
+  `native-abstract-v0 approximation` counterfactual motor forecasts.
+- Runtime diagnostics and model docs expose the split; full MuJoCo/contact
+  forecasting is deferred and must not be claimed.
+
 ### T-309 Add backend parity checks
 
-Status: `Backlog`  
+Status: `Active`
 Track: Validation  
 Depends on: T-305, T-306  
-Owner: TBD  
+Owner: Jackson/Codex
 Estimate: 1-2 days
 
 Acceptance:
@@ -188,9 +238,16 @@ Acceptance:
   coverage.
 - Differences are recorded as calibration needs, not hidden as test noise.
 
+Notes:
+
+- Canonical transform, logical retarget, state-shape, contact/deposition, and
+  runtime selection tests pass.
+- A versioned matched-stroke artifact comparing path, timing, pressure,
+  current, and material coverage remains.
+
 ### T-310 S2 lock decision
 
-Status: `Backlog`  
+Status: `Blocked`
 Track: Validation  
 Depends on: T-305, T-306, T-307, T-308, T-309  
 Owner: Jackson  
@@ -201,6 +258,11 @@ Acceptance:
 - S2 is locked only if the controller can drive MuJoCo through the backend
   interface and live paint updates through the existing material model.
 - Any deferred forecasting or telemetry gaps are documented before M4.
+
+Notes:
+
+- Blocked on the T-309 matched parity artifact and Jackson's explicit
+  acceptance of the native counterfactual-forecast approximation.
 
 ## Validation Gate
 
