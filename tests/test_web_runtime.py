@@ -12,6 +12,10 @@ from xml.etree import ElementTree
 from PIL import Image
 import pytest
 
+from active_painter.arm_agent_driver import (
+    ORACLE_OBSERVATION_ACCESS_MODE,
+    SENSOR_OBSERVATION_ACCESS_MODE,
+)
 from active_painter.version import code_build_info, code_version, package_version
 from active_painter.web_server import (
     PainterRequestHandler,
@@ -30,8 +34,30 @@ from active_painter.web_robot_model import (
 )
 
 
+def oracle_runtime(*args, **kwargs) -> WebSimRuntime:
+    kwargs.setdefault("observation_access_mode", ORACLE_OBSERVATION_ACCESS_MODE)
+    return WebSimRuntime(*args, **kwargs)
+
+
+def test_web_runtime_defaults_to_fail_closed_sensor_boundary() -> None:
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        driver_bootstrap_transitions=8,
+        driver_bootstrap_train_steps=1,
+    )
+
+    assert runtime.agent_enabled is False
+    assert runtime.agent_driver.trained_transitions == 0
+    assert runtime.agent_driver.diagnostics()["observationBoundary"][
+        "modelAccessBlocked"
+    ] is True
+    result = runtime.command({"type": "toggle_agent"})
+    assert result["ok"] is False
+    assert "fail-closed" in result["error"]
+
+
 def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     state = runtime.state()
     assert state["canvas"]["distance"] == 17.0
     assert len(state["points"]) == 3
@@ -55,7 +81,7 @@ def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
 
 
 def test_web_runtime_can_enable_spatial_material_planner() -> None:
-    runtime = WebSimRuntime(
+    runtime = oracle_runtime(
         canvas_size=32,
         planner_state_kind="spatial_material",
         spatial_grid_size=8,
@@ -91,7 +117,7 @@ def test_web_runtime_can_enable_spatial_material_planner() -> None:
 
 
 def test_web_runtime_uses_bounded_passage_planning_budget() -> None:
-    runtime = WebSimRuntime(
+    runtime = oracle_runtime(
         canvas_size=32,
         planner_state_kind="spatial_material",
         driver_bootstrap_transitions=0,
@@ -130,6 +156,7 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert summary.checkpoint_path is None
     assert summary.checkpoint_save_every_transitions == 10
     assert summary.plant_backend == "native"
+    assert summary.observation_mode == SENSOR_OBSERVATION_ACCESS_MODE
     assert parser.parse_args(["--plant-backend", "mujoco"]).plant_backend == "mujoco"
 
 
@@ -152,7 +179,7 @@ def test_web_runtime_wires_checkpoint_path() -> None:
     root = Path("runs/test_web_runtime_checkpoint")
     shutil.rmtree(root, ignore_errors=True)
     path = root / "viewer_weights.pt"
-    runtime = WebSimRuntime(
+    runtime = oracle_runtime(
         canvas_size=32,
         checkpoint_path=path,
         checkpoint_save_every_transitions=3,
@@ -206,7 +233,7 @@ def test_web_server_reraises_unexpected_socket_errors(monkeypatch: pytest.Monkey
 
 
 def test_web_runtime_commands_update_modes_and_canvas_png() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     assert not runtime.state()["maxSpeed"]
     response = runtime.command({"type": "toggle_max_speed"})
     assert response["ok"]
@@ -216,7 +243,7 @@ def test_web_runtime_commands_update_modes_and_canvas_png() -> None:
 
 
 def test_web_runtime_exposes_upper_arm_and_rolled_elbow_axes() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     runtime.sim.actual_pose.roll = 31.0
 
     state = runtime.state()
@@ -227,7 +254,7 @@ def test_web_runtime_exposes_upper_arm_and_rolled_elbow_axes() -> None:
 
 
 def test_web_canvas_png_renders_gray_ground_with_visible_white_and_black_paint() -> None:
-    runtime = WebSimRuntime(
+    runtime = oracle_runtime(
         canvas_size=32,
         driver_bootstrap_transitions=0,
         driver_bootstrap_train_steps=0,
@@ -256,7 +283,7 @@ def test_web_canvas_png_renders_gray_ground_with_visible_white_and_black_paint()
 
 
 def test_web_runtime_exports_arm_telemetry_csv() -> None:
-    runtime = WebSimRuntime(canvas_size=32, telemetry_sample_period=1.0 / 240.0)
+    runtime = oracle_runtime(canvas_size=32, telemetry_sample_period=1.0 / 240.0)
     runtime.agent_enabled = False
     runtime.agent_driver.enabled = False
     for _ in range(4):
@@ -277,7 +304,7 @@ def test_web_runtime_exports_arm_telemetry_csv() -> None:
 
 
 def test_web_runtime_manual_control_toggles_material_load_not_deposition_permission() -> None:
-    runtime = WebSimRuntime(
+    runtime = oracle_runtime(
         canvas_size=32,
         driver_bootstrap_transitions=0,
         driver_bootstrap_train_steps=0,
@@ -292,7 +319,7 @@ def test_web_runtime_manual_control_toggles_material_load_not_deposition_permiss
 
 
 def test_web_runtime_default_telemetry_is_sparse_rolling_window() -> None:
-    runtime = WebSimRuntime(
+    runtime = oracle_runtime(
         canvas_size=32,
         driver_bootstrap_transitions=0,
         driver_bootstrap_train_steps=0,
@@ -306,14 +333,14 @@ def test_web_runtime_default_telemetry_is_sparse_rolling_window() -> None:
 
 
 def test_web_runtime_state_exposes_python_code_version() -> None:
-    state = WebSimRuntime(canvas_size=32).state()
+    state = oracle_runtime(canvas_size=32).state()
     assert state["codeVersion"] == code_version()
     assert state["codeVersion"] != "unknown"
     assert "+code." in state["codeVersion"]
 
 
 def test_web_runtime_state_consumes_stopped_episode_before_reporting() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     runtime.sim.canvas.paint_at(
         np.asarray([0.0, runtime.sim.canvas.distance, 0.0]),
         pressure=0.8,
@@ -525,7 +552,7 @@ def test_code_build_info_increments_when_source_fingerprint_changes() -> None:
 
 
 def test_web_runtime_driver_stop_callback_immediately_restarts_episode() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     runtime.sim.canvas.paint_at(
         np.asarray([0.0, runtime.sim.canvas.distance, 0.0]),
         pressure=0.8,
@@ -553,7 +580,7 @@ def test_web_runtime_max_speed_releases_state_lock_between_physics_steps() -> No
         time.sleep(0.02)
 
     WebSimRuntime._advance_one_step = slow_advance
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     runtime.max_speed = True
     try:
         runtime.start()
@@ -574,7 +601,7 @@ def test_spatial_replay_capacity_is_bounded_for_long_runs() -> None:
     # so the 50k default would grow the three replays to ~15-20 GB over a long
     # run. The spatial driver must cap them well below that; summary mode (tiny
     # 6-float states) keeps the large default.
-    spatial = WebSimRuntime(
+    spatial = oracle_runtime(
         canvas_size=64,
         planner_state_kind="spatial_material",
         driver_bootstrap_transitions=0,
@@ -589,7 +616,7 @@ def test_spatial_replay_capacity_is_bounded_for_long_runs() -> None:
     ):
         assert replay.data.maxlen is not None and replay.data.maxlen <= 8_000
 
-    summary = WebSimRuntime(
+    summary = oracle_runtime(
         canvas_size=64,
         planner_state_kind="summary",
         driver_bootstrap_transitions=0,
@@ -599,7 +626,7 @@ def test_spatial_replay_capacity_is_bounded_for_long_runs() -> None:
 
 
 def test_web_runtime_retains_learned_training_across_new_painting() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     agent = runtime.agent_driver.agent
     dynamics = runtime.agent_driver.agent.dynamics
     replay_size = len(runtime.agent_driver.agent.replay)
@@ -618,7 +645,7 @@ def test_web_runtime_retains_learned_training_across_new_painting() -> None:
 
 def test_web_runtime_restarts_after_stop_and_saves_every_fifth_canvas() -> None:
     archive_dir = Path("runs/test_web_runtime_archive")
-    runtime = WebSimRuntime(canvas_size=32, archive_dir=archive_dir)
+    runtime = oracle_runtime(canvas_size=32, archive_dir=archive_dir)
     runtime.sim.canvas.paint_at(
         np.asarray([0.0, runtime.sim.canvas.distance, 0.0]),
         pressure=0.8,
@@ -644,7 +671,7 @@ def test_web_runtime_restarts_after_stop_and_saves_every_fifth_canvas() -> None:
 
 
 def test_web_runtime_restart_lifts_brush_before_next_sim_step() -> None:
-    runtime = WebSimRuntime(canvas_size=32)
+    runtime = oracle_runtime(canvas_size=32)
     runtime.sim.load_brush(amount=0.7, tone=1.0)
     runtime.sim.intended_contact_pressure = 1.0
     runtime.sim.contact = runtime.sim.canvas.contact_from_tip(

@@ -286,6 +286,12 @@ Depends on: M1
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Fixed camera, encoders, current, and contact observations have declared channels, units, rates, noise, and physical analogues.
+Notes: Boundary enforcement began 2026-07-28: the live default is now
+`sensor-boundary-v0`, which skips oracle bootstrap and blocks policy inference,
+learning, and planner-state construction from `ArmPainterSim`. The legacy
+`oracle_material_state` path requires explicit diagnostic opt-in. AI-201
+remains blocked/not accepted because camera channels, rates, noise, and the
+model-facing observation package are not yet defined.
 
 ### AI-202 Implement the fixed-view observation generative process
 
@@ -656,6 +662,11 @@ Depends on: T-103, AI-201, AI-203, AI-204
 Owner: Jackson/Codex
 Estimate: 3-5 days
 Acceptance: Native execution and motor forecasts consume physical sensor packets and posterior snapshots without copied live simulator or process-RNG state.
+Notes: The live default now fails closed before copied simulator state can
+reach the model, while the explicit oracle comparator retains the old forecast
+path. T-109 remains blocked until sensor-conditioned execution and
+`BodyBeliefSnapshot` forecasts replace that comparator rather than merely
+disabling it.
 
 ## S1: MuJoCo Physical Draft And Logical Retarget
 

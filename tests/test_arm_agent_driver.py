@@ -9,6 +9,7 @@ import torch
 
 from active_painter.arm_control import ik_pose_for_canvas_point
 from active_painter.arm_agent_driver import (
+    ORACLE_OBSERVATION_ACCESS_MODE,
     ArmActiveInferenceDriver,
     StrokeExecution,
     canvas_summary_state,
@@ -25,8 +26,13 @@ from active_painter.spatial_state import SpatialCanvasState
 from active_painter.stroke_execution import ExecutionForecast, StrokeTiming, adaptive_stroke_timing
 
 
+def oracle_driver(*args, **kwargs) -> ArmActiveInferenceDriver:
+    kwargs.setdefault("observation_access_mode", ORACLE_OBSERVATION_ACCESS_MODE)
+    return ArmActiveInferenceDriver(*args, **kwargs)
+
+
 def make_driver() -> ArmActiveInferenceDriver:
-    return ArmActiveInferenceDriver(bootstrap_transitions=72, bootstrap_train_steps=24)
+    return oracle_driver(bootstrap_transitions=72, bootstrap_train_steps=24)
 
 
 def wait_for_driver(driver: ArmActiveInferenceDriver, sim: ArmPainterSim, timeout: float = 15.0) -> None:
@@ -84,7 +90,7 @@ def test_active_inference_driver_reports_policy_and_state_distributions() -> Non
 
 def test_active_inference_driver_reports_passage_posterior_mass() -> None:
     cfg = PainterConfig(candidate_policies=4, passage_proposal_mix=0.0)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     stroke_a = StrokeAction(0.2, 0.3, 0.7, 0.3, 0.08, 0.5, 1.0)
     stroke_b = StrokeAction(0.2, 0.45, 0.7, 0.45, 0.08, 0.5, 1.0)
     passage = PassageLatent("band", 0.45, 0.37, 0.0, 0.5, 0.15, 2, 0.08, 0.5, 1.0)
@@ -106,7 +112,7 @@ def test_active_inference_driver_reports_passage_posterior_mass() -> None:
 
 def test_active_inference_driver_reports_passage_plan_posterior_mass() -> None:
     cfg = PainterConfig(candidate_policies=2)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     stroke_a = StrokeAction(0.2, 0.3, 0.7, 0.3, 0.08, 0.5, 1.0)
     stroke_b = StrokeAction(0.2, 0.45, 0.7, 0.45, 0.08, 0.5, 1.0)
     first = PassageLatent("band", 0.45, 0.30, 0.0, 0.5, 0.08, 2, 0.08, 0.5, 1.0)
@@ -141,7 +147,7 @@ def test_spatial_material_driver_reports_spatial_planner_state() -> None:
         batch_size=4,
     )
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
     driver._background_plan(driver._planner_state(sim), None, sim)
     assert driver._pending_error is None
@@ -184,7 +190,7 @@ def test_driver_reports_motor_primitive_policy_latents_and_efe_terms() -> None:
         policy_precision=0.35,
     )
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
     driver._background_plan(canvas_summary_state(sim), None, sim)
     assert driver._pending_error is None
@@ -203,7 +209,7 @@ def test_driver_reports_motor_primitive_policy_latents_and_efe_terms() -> None:
 def test_summary_driver_replay_stores_selected_motor_realization_condition() -> None:
     cfg = PainterConfig(candidate_policies=2, motor_realization_candidate_limit=3)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     before = canvas_summary_state(sim)
     after = before.copy()
     after[0] += 0.05
@@ -221,7 +227,7 @@ def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
     root = Path("runs/test_driver_checkpoint_summary")
     shutil.rmtree(root, ignore_errors=True)
     path = root / "summary_weights.pt"
-    driver = ArmActiveInferenceDriver(
+    driver = oracle_driver(
         config=cfg,
         bootstrap_transitions=0,
         bootstrap_train_steps=0,
@@ -239,7 +245,7 @@ def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
 
     try:
         driver._save_checkpoint_if_due(force=True)
-        restored = ArmActiveInferenceDriver(
+        restored = oracle_driver(
             config=cfg,
             bootstrap_transitions=0,
             bootstrap_train_steps=0,
@@ -262,7 +268,7 @@ def test_driver_checkpoint_rejects_architectural_mismatch() -> None:
     path = root / "mismatch.pt"
     saved_cfg = PainterConfig(hidden_dim=16, ensemble_size=2)
     changed_cfg = PainterConfig(hidden_dim=24, ensemble_size=2)
-    driver = ArmActiveInferenceDriver(
+    driver = oracle_driver(
         config=saved_cfg,
         bootstrap_transitions=0,
         bootstrap_train_steps=0,
@@ -270,7 +276,7 @@ def test_driver_checkpoint_rejects_architectural_mismatch() -> None:
     )
     try:
         driver._save_checkpoint_if_due(force=True)
-        restored = ArmActiveInferenceDriver(
+        restored = oracle_driver(
             config=changed_cfg,
             bootstrap_transitions=0,
             bootstrap_train_steps=0,
@@ -300,7 +306,7 @@ def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
     shutil.rmtree(root, ignore_errors=True)
     path = root / "spatial_weights.pt"
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(
+    driver = oracle_driver(
         config=cfg,
         bootstrap_transitions=0,
         bootstrap_train_steps=0,
@@ -328,7 +334,7 @@ def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
 
     try:
         driver._save_checkpoint_if_due(force=True)
-        restored = ArmActiveInferenceDriver(
+        restored = oracle_driver(
             config=cfg,
             bootstrap_transitions=0,
             bootstrap_train_steps=0,
@@ -365,7 +371,7 @@ def test_driver_updates_persistent_hierarchy_at_passage_boundary() -> None:
         batch_size=2,
     )
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     action = StrokeAction(0.2, 0.3, 0.7, 0.5, 0.08, 0.7, 1.0)
     before = driver._planner_state(sim)
     execute_stroke_action(sim, action, dt=1.0 / 120.0)
@@ -403,7 +409,7 @@ def test_spatial_material_driver_can_use_dense_grid_transition_mode() -> None:
         batch_size=4,
     )
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
     driver._background_plan(driver._planner_state(sim), None, sim)
     assert driver._pending_error is None
@@ -418,7 +424,7 @@ def test_spatial_material_driver_can_use_dense_grid_transition_mode() -> None:
 
 def test_spatial_execution_forecast_covariance_propagates_to_material_variance() -> None:
     cfg = PainterConfig(planner_state_kind="spatial_material", spatial_grid_size=8)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     sim = ArmPainterSim(cfg)
     material = np.zeros((6, 8, 8), dtype=np.float32)
     next_material = material.copy()
@@ -482,7 +488,7 @@ def test_spatial_execution_forecast_covariance_propagates_to_material_variance()
 
 
 def test_active_inference_driver_diagnostics_with_execution_forecast_are_json_serializable() -> None:
-    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(bootstrap_transitions=0, bootstrap_train_steps=0)
     driver.last_execution_forecast = ExecutionForecast(
         next_state_mean=np.zeros(6, dtype=np.float32),
         next_state_variance=np.ones(6, dtype=np.float32),
@@ -516,7 +522,7 @@ def test_active_inference_driver_diagnostics_with_execution_forecast_are_json_se
 
 def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
-    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(bootstrap_transitions=0, bootstrap_train_steps=0)
     contact_pose = ik_pose_for_canvas_point(0.0, 0.0, sim.canvas.distance)
     sim.actual_pose = contact_pose
     sim.target_pose = contact_pose
@@ -538,7 +544,7 @@ def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan()
 
 def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
-    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(bootstrap_transitions=0, bootstrap_train_steps=0)
     driver.planning = True
 
     for _ in range(240):
@@ -559,7 +565,7 @@ def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
 
 def test_global_hold_escapes_canvas_contact_before_center_translation() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
-    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(bootstrap_transitions=0, bootstrap_train_steps=0)
     sim.actual_pose = ArmPose(yaw=-16.37, pitch=-12.56, roll=0.0, elbow=77.38)
     sim.target_pose = sim.actual_pose
     sim.contact = sim.canvas.contact_from_tip(sim.kinematics.tip(sim.actual_pose), 0.0)
@@ -577,7 +583,7 @@ def test_global_hold_escapes_canvas_contact_before_center_translation() -> None:
 def test_global_hold_targets_visible_planning_clearance() -> None:
     cfg = PainterConfig(canvas_size=48)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
     for _ in range(160):
         driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
@@ -592,7 +598,7 @@ def test_global_hold_targets_visible_planning_clearance() -> None:
 
 
 def test_driver_reports_current_background_planning_elapsed_time() -> None:
-    driver = ArmActiveInferenceDriver(bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(bootstrap_transitions=0, bootstrap_train_steps=0)
     with driver._planner_lock:
         driver.planning = True
         driver._planning_started_at = time.perf_counter() - 1.25
@@ -605,7 +611,7 @@ def test_driver_reports_current_background_planning_elapsed_time() -> None:
 def test_background_planning_reports_phase_profile() -> None:
     cfg = PainterConfig(candidate_policies=4, planning_horizon=1, motor_forecast_candidates=1)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
     driver._background_plan(canvas_summary_state(sim), None, sim)
     diagnostics = driver.diagnostics()
@@ -626,7 +632,7 @@ def test_background_planning_reports_phase_profile() -> None:
 def test_planning_profile_marks_training_after_publish_without_moving_belief_update() -> None:
     cfg = PainterConfig(candidate_policies=4, planning_horizon=1, motor_forecast_candidates=1, batch_size=1)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     action = StrokeAction(0.2, 0.3, 0.6, 0.4, 0.08, 0.5, 1.0)
     before = canvas_summary_state(sim)
     execute_stroke_action(sim, action, dt=1.0 / 120.0)
@@ -644,7 +650,7 @@ def test_planning_profile_marks_training_after_publish_without_moving_belief_upd
 def test_hold_uses_extra_damping_and_stroke_execution_clears_it() -> None:
     cfg = PainterConfig(canvas_size=48, hold_damping_multiplier=2.5)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
     driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
     assert sim.control_damping_multiplier == pytest.approx(2.5)
@@ -666,7 +672,7 @@ def test_hold_uses_extra_damping_and_stroke_execution_clears_it() -> None:
 def test_hold_contact_release_immediately_reduces_pressed_canvas_state() -> None:
     cfg = PainterConfig(canvas_size=48)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     sim.actual_pose = ArmPose(yaw=12.264818812595841, pitch=-51.50472268128021, roll=0.0, elbow=92.52234156319845)
     sim.target_pose = sim.actual_pose
     sim.plant.reset_state(sim.actual_pose)
@@ -685,7 +691,7 @@ def test_hold_contact_release_immediately_reduces_pressed_canvas_state() -> None
 def test_contact_release_does_not_jump_target_to_final_rest_pose() -> None:
     cfg = PainterConfig(canvas_size=48)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     sim.actual_pose = ArmPose(yaw=12.264818812595841, pitch=-51.50472268128021, roll=0.0, elbow=92.52234156319845)
     sim.target_pose = sim.actual_pose
     sim.plant.reset_state(sim.actual_pose)
@@ -702,7 +708,7 @@ def test_contact_release_does_not_jump_target_to_final_rest_pose() -> None:
 def test_hold_rest_target_is_acceleration_limited() -> None:
     cfg = PainterConfig(canvas_size=48, hold_target_joint_speed_deg_s=80.0, hold_target_joint_accel_deg_s2=220.0)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     initial_target = sim.target_pose
 
     driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
@@ -718,7 +724,7 @@ def test_hold_rest_target_is_acceleration_limited() -> None:
 def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_completion() -> None:
     cfg = PainterConfig(canvas_size=48, post_stroke_retract_seconds=0.2)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     action = StrokeAction(0.2, 0.3, 0.8, 0.7, 0.08, 0.7, 1.0)
     efe = EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     ex = StrokeExecution(action=action, efe=efe, posterior=1.0, initial_state=canvas_summary_state(sim))
@@ -749,7 +755,7 @@ def test_driver_retracts_and_does_not_consume_pending_stroke_immediately_after_c
 def test_global_planning_waits_for_retraction_timer_and_physical_clearance(monkeypatch) -> None:
     cfg = PainterConfig(canvas_size=48, post_stroke_retract_seconds=0.02)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     calls: list[float] = []
 
     def record_start(self, working_sim):
@@ -777,7 +783,7 @@ def test_global_planning_waits_for_retraction_timer_and_physical_clearance(monke
 def test_stale_planner_generation_cannot_publish_after_reset() -> None:
     cfg = PainterConfig(candidate_policies=2, planning_horizon=1, motor_forecast_samples=1)
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     stale_generation = driver._planner_generation
     driver.reset(sim)
 
@@ -795,7 +801,7 @@ def test_passage_queue_uses_local_hold_then_returns_center_after_final_mark() ->
         passage_center_retract_seconds=0.2,
     )
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     first = StrokeAction(0.22, 0.30, 0.36, 0.34, 0.08, 0.55, 1.0)
     second = StrokeAction(0.25, 0.35, 0.39, 0.39, 0.08, 0.55, 1.0)
     passage = PassageLatent("chain", 0.30, 0.35, 0.0, 0.2, 0.08, 2, 0.08, 0.55, 1.0)
@@ -881,7 +887,7 @@ def test_executed_stroke_changes_material_coverage_at_planning_scale() -> None:
 
 def test_active_inference_driver_continues_after_first_material_mark() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
-    driver = ArmActiveInferenceDriver(bootstrap_transitions=48, bootstrap_train_steps=16)
+    driver = oracle_driver(bootstrap_transitions=48, bootstrap_train_steps=16)
     deadline = time.perf_counter() + 30.0
 
     while time.perf_counter() < deadline and driver.current is None and not driver.stopped:
@@ -912,7 +918,7 @@ def test_stop_demoted_by_declared_prior_is_reported_and_not_executed() -> None:
     # demotion as a diagnostic.
     cfg = PainterConfig(minimum_stop_coverage=0.70)
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     stroke = StrokeAction(0.2, 0.3, 0.8, 0.7, 0.08, 0.7, 1.0)
     stop_policy = Policy((StrokeAction.stop_action(),))
     continue_policy = Policy((stroke, StrokeAction.stop_action()))
@@ -939,7 +945,7 @@ def test_stop_demoted_by_declared_prior_is_reported_and_not_executed() -> None:
 def test_stop_selected_by_policy_inference_is_accepted_without_veto() -> None:
     cfg = PainterConfig(minimum_stop_coverage=0.70)
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     stop_policy = Policy((StrokeAction.stop_action(),))
     stop_components = EFEComponents(0.0, 0.0, 0.0, 0.0, 0.8, 0.0)
 

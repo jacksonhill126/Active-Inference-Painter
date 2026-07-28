@@ -22,13 +22,18 @@ active-inference model. It covers:
 - painting and motor policy inference;
 - online learning.
 
-The current implementation is an **oracle-observation baseline**. The spatial
-planner receives arrays deterministically derived from hidden simulator
-material state. The summary planner receives exact aggregate material
-statistics. Assigned observation variances make inference probabilistic, but
-the inputs are not yet measurements a physical robot could obtain. M2 must
-replace this path with fixed-camera, encoder, current, and contact
-observations. The complete access audit is maintained in
+This specification describes the retained **oracle-observation comparator**.
+When explicitly enabled, the spatial planner receives arrays deterministically
+derived from hidden simulator material state and the summary planner receives
+exact aggregate material statistics. Assigned observation variances make
+inference probabilistic, but the inputs are not measurements a physical robot
+could obtain.
+
+The live runtime now defaults to the fail-closed `sensor-boundary-v0`: it
+does not run policy inference, learning, or oracle bootstrap until M2 supplies
+fixed-camera, encoder, current, and contact likelihoods and a
+sensor-conditioned posterior. `oracle_material_state` remains an explicit
+diagnostic-only opt-in. The complete access audit is maintained in
 `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`.
 
 This specification is "executable" in the limited engineering sense that every

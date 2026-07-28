@@ -21,6 +21,14 @@
       "embodied prediction without simulator-state leakage"
     ]
   },
+  "live_default": {
+    "id": "sensor-boundary-v0",
+    "observation_mode": "sensor_equivalent",
+    "sensor_equivalent": false,
+    "model_access_blocked": true,
+    "reason": "The fixed-camera/body likelihood and sensor-conditioned posterior are not implemented. Policy inference, learning, and oracle bootstrap fail closed instead of reading process truth.",
+    "oracle_opt_in": "oracle_material_state"
+  },
   "classifications": {
     "physical_sensor_observation": "A simulated value with a direct planned hardware sensor analogue. It is not necessarily assimilated by the current agent.",
     "derived_observation": "A deterministic or statistical transform of observations or process state. Derivation from hidden process truth does not make it sensor-equivalent.",

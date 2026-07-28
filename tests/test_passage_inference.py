@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from active_painter.arm_agent_driver import ArmActiveInferenceDriver
+from active_painter.arm_agent_driver import (
+    ORACLE_OBSERVATION_ACCESS_MODE,
+    ArmActiveInferenceDriver,
+)
 from active_painter.arm_sim import ArmPainterSim
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
@@ -89,7 +92,12 @@ def test_local_passage_candidates_include_immediate_stop_and_paired_tone_consequ
         passage_local_candidate_policies=5,
         stroke_tone_prior=None,
     )
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+        observation_access_mode=ORACLE_OBSERVATION_ACCESS_MODE,
+    )
     passage = PassageLatent("band", 0.5, 0.5, 0.0, 0.3, 0.08, 3, 0.08, 0.5, 1.0)
     driver._active_passage = passage
     driver._active_passage_total_strokes = 3
@@ -117,7 +125,12 @@ def test_local_passage_plan_preserves_slow_belief_and_completed_mark_count() -> 
         motor_forecast_samples=1,
     )
     sim = ArmPainterSim(cfg)
-    driver = ArmActiveInferenceDriver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+        observation_access_mode=ORACLE_OBSERVATION_ACCESS_MODE,
+    )
     driver.reset(sim)
     passage = PassageLatent("band", 0.5, 0.5, 0.0, 0.25, 0.07, 2, 0.08, 0.5, 1.0)
     driver._active_passage = passage

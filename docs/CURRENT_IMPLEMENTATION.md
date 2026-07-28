@@ -372,6 +372,18 @@ inference core. Three.js builds the direct-drive robot body hierarchy from
 the arm, controls, telemetry, and the Python material image from
 `/api/canvas.png`. MuJoCo is not used as a paint renderer.
 
+The default `sensor_equivalent` observation mode currently fails closed:
+the viewer and scripted execution remain available, but policy inference,
+learning, oracle bootstrap, and process-derived planner-state construction are
+disabled. To reproduce the legacy upper-bound comparator, opt in explicitly:
+
+```bash
+python -m active_painter.web_server --observation-mode oracle_material_state
+```
+
+This diagnostic mode exposes exact simulator material and body state and is
+not a physically accessible observation condition.
+
 The current controller still emits `native-abstract-v0` Cartesian motion. With
 the native plant, a named `legacy_canvas_cartesian_retarget` adapter uses
 conventional visualization-only IK to register that motion with the physical

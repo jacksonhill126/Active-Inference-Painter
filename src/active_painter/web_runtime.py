@@ -10,7 +10,10 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from .arm_agent_driver import ArmActiveInferenceDriver
+from .arm_agent_driver import (
+    OBSERVATION_ACCESS_MODE,
+    ArmActiveInferenceDriver,
+)
 from .arm_control import scripted_contact_pressure, scripted_pose
 from .arm_sim import ArmPainterSim, JOINT_NAMES
 from .config import PainterConfig
@@ -36,6 +39,7 @@ class WebSimRuntime:
     checkpoint_save_every_transitions: int = 10
     device: str | None = None
     plant_backend: str = "native"
+    observation_access_mode: str = OBSERVATION_ACCESS_MODE
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)
@@ -100,7 +104,10 @@ class WebSimRuntime:
             checkpoint_save_every_transitions=self.checkpoint_save_every_transitions,
             on_stop=self._complete_stopped_painting,
             device=self.device,
+            observation_access_mode=self.observation_access_mode,
         )
+        if self.agent_driver.observation_boundary_blocked:
+            self.agent_enabled = False
         self.telemetry_log = ArmTelemetryLog(max_samples=self.telemetry_max_samples)
         self.agent_driver.reset(self.sim)
         self._record_telemetry(force=True)
@@ -209,6 +216,14 @@ class WebSimRuntime:
                 else:
                     self.sim.load_brush(1.0, self.sim.brush_tone)
             elif action == "toggle_agent":
+                if self.agent_driver.observation_boundary_blocked:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "active inference is fail-closed: the sensor-equivalent "
+                            "camera/body likelihood is not implemented"
+                        ),
+                    }
                 self.agent_enabled = not self.agent_enabled
                 self.agent_driver.enabled = self.agent_enabled
                 if not self.agent_enabled and not self.sim.brush.loaded:

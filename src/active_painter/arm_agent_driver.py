@@ -47,8 +47,19 @@ from .stroke_execution import (
     stroke_reference,
 )
 
-OBSERVATION_BASELINE_ID = "baseline-oracle-v0"
-OBSERVATION_ACCESS_MODE = "oracle_material_state"
+SENSOR_OBSERVATION_BASELINE_ID = "sensor-boundary-v0"
+SENSOR_OBSERVATION_ACCESS_MODE = "sensor_equivalent"
+ORACLE_OBSERVATION_BASELINE_ID = "baseline-oracle-v0"
+ORACLE_OBSERVATION_ACCESS_MODE = "oracle_material_state"
+
+# The unqualified names describe the safe live default.  The oracle constants
+# remain available only for explicitly labelled diagnostic fixtures.
+OBSERVATION_BASELINE_ID = SENSOR_OBSERVATION_BASELINE_ID
+OBSERVATION_ACCESS_MODE = SENSOR_OBSERVATION_ACCESS_MODE
+
+
+class PrivilegedStateAccessError(RuntimeError):
+    """Raised when a sensor-only planner path attempts to read process truth."""
 
 
 @dataclass(slots=True)
@@ -103,6 +114,7 @@ class ArmActiveInferenceDriver:
     bootstrap_train_steps: int = 180
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
+    observation_access_mode: str = OBSERVATION_ACCESS_MODE
     enabled: bool = True
     on_stop: Callable[[], None] | None = None
     device: str | None = None
@@ -166,8 +178,26 @@ class ArmActiveInferenceDriver:
     _cached_belief_gap: float | None = field(default=None, init=False)
     _cached_passage_trajectory: dict[str, object] | None = field(default=None, init=False)
     motion_reliability: MotionReliabilityLedger = field(init=False)
+    _observation_boundary_blocked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        if self.observation_access_mode not in {
+            SENSOR_OBSERVATION_ACCESS_MODE,
+            ORACLE_OBSERVATION_ACCESS_MODE,
+        }:
+            raise ValueError(
+                "observation_access_mode must be "
+                f"{SENSOR_OBSERVATION_ACCESS_MODE!r} or "
+                f"{ORACLE_OBSERVATION_ACCESS_MODE!r}."
+            )
+        self._observation_boundary_blocked = (
+            self.observation_access_mode == SENSOR_OBSERVATION_ACCESS_MODE
+        )
+        if self._observation_boundary_blocked:
+            # Fail closed until the fixed-camera/body likelihood and posterior
+            # path exist.  In this mode neither bootstrap nor live planning may
+            # obtain an ArmPainterSim-derived material/body state.
+            self.enabled = False
         if self._uses_spatial_planner():
             self.agent = SpatialActiveInferencePainter(self.config, seed=17, device=self.device)
         else:
@@ -176,13 +206,18 @@ class ArmActiveInferenceDriver:
         self.belief = self.agent.belief
         self.checkpoint_architecture = self._checkpoint_architecture_metadata()
         loaded = self._load_checkpoint_if_available()
-        if self.bootstrap_transitions > 0 and not loaded:
+        if (
+            self.bootstrap_transitions > 0
+            and not loaded
+            and not self._observation_boundary_blocked
+        ):
             self.bootstrap_dynamics()
             self._save_checkpoint_if_due(force=True)
         if isinstance(self.agent, SpatialActiveInferencePainter):
             self.agent.reset_hierarchy_beliefs(self.agent.belief)
 
     def bootstrap_dynamics(self) -> None:
+        self._require_oracle_diagnostic_mode("bootstrap dynamics")
         sim = ArmPainterSim(replace(self.config))
         for i in range(self.bootstrap_transitions):
             current_state = self._planner_state(sim)
@@ -205,6 +240,7 @@ class ArmActiveInferenceDriver:
         return {
             "schema_version": 3,
             "agent_kind": "spatial_material" if self._uses_spatial_planner() else "summary",
+            "observation_access_mode": self.observation_access_mode,
             "state_dim": cfg.state_dim,
             "action_dim": cfg.action_dim,
             "planner_state_kind": cfg.planner_state_kind,
@@ -435,12 +471,17 @@ class ArmActiveInferenceDriver:
             self._contact_release_count = 0
             self._cached_belief_gap = None
             self._cached_passage_trajectory = None
+        if self._observation_boundary_blocked:
+            # Do not even touch the process object from the model-facing reset
+            # path.  A separate execution/runtime reset owns plant mutations.
+            return
         sim.unload_brush()
         state = self._observe(sim)
         if isinstance(self.agent, SpatialActiveInferencePainter) and isinstance(state, SpatialCanvasState):
             self.agent.reset_hierarchy_beliefs(state)
 
     def _observe(self, sim: ArmPainterSim) -> GaussianBelief | SpatialCanvasState:
+        self._require_oracle_diagnostic_mode("planner observation")
         state = self._planner_state(sim)
         self._reset_agent_belief(state)
         self.belief = self.agent.belief
@@ -450,9 +491,23 @@ class ArmActiveInferenceDriver:
         return self.config.planner_state_kind == "spatial_material"
 
     def _planner_state(self, sim: ArmPainterSim) -> np.ndarray | SpatialCanvasState:
+        self._require_oracle_diagnostic_mode("planner state construction")
         if self._uses_spatial_planner():
             return spatial_canvas_state(sim, self.config)
         return canvas_summary_state(sim)
+
+    @property
+    def observation_boundary_blocked(self) -> bool:
+        return self._observation_boundary_blocked
+
+    def _require_oracle_diagnostic_mode(self, operation: str) -> None:
+        if self._observation_boundary_blocked:
+            raise PrivilegedStateAccessError(
+                f"{operation} requires hidden simulator state and is denied in "
+                f"{SENSOR_OBSERVATION_ACCESS_MODE!r} mode. Use the explicit "
+                f"{ORACLE_OBSERVATION_ACCESS_MODE!r} diagnostic mode only for "
+                "labelled oracle fixtures."
+            )
 
     def _state_coverage(self, state: np.ndarray | SpatialCanvasState) -> float:
         if isinstance(state, SpatialCanvasState):
@@ -503,6 +558,12 @@ class ArmActiveInferenceDriver:
             self.agent.replay.add(state, encoded_action_vector(action, self.config, motor_primitive), next_state)
 
     def step(self, sim: ArmPainterSim, dt: float) -> None:
+        if self._observation_boundary_blocked:
+            # Sensor-equivalent perception is not implemented yet.  Returning
+            # before dereferencing ``sim`` guarantees that policy inference,
+            # learning, and planning cannot silently fall back to process
+            # truth while that work is pending.
+            return
         if not self.enabled or self.stopped:
             self._hold_retracted(sim, dt, scope="global")
             return
@@ -1809,16 +1870,38 @@ class ArmActiveInferenceDriver:
                     "gap = hierarchical ELBO minus context-free flat code, nats/cell-channel"
                 ),
             }
+        oracle_mode = self.observation_access_mode == ORACLE_OBSERVATION_ACCESS_MODE
         return {
             "enabled": self.enabled,
             "stopped": self.stopped,
             "planning": self.planning,
             "observationBoundary": {
-                "baseline": OBSERVATION_BASELINE_ID,
-                "mode": OBSERVATION_ACCESS_MODE,
+                "baseline": (
+                    ORACLE_OBSERVATION_BASELINE_ID
+                    if oracle_mode
+                    else SENSOR_OBSERVATION_BASELINE_ID
+                ),
+                "mode": self.observation_access_mode,
                 "sensorEquivalent": False,
-                "materialStateAccess": "exact VerticalCanvas fields and deterministic transforms",
-                "bodyForecastInitialization": "deep copy of ArmPainterSim process state",
+                "modelAccessBlocked": self._observation_boundary_blocked,
+                "materialStateAccess": (
+                    "exact VerticalCanvas fields and deterministic transforms; "
+                    "explicit diagnostic-only exception"
+                    if oracle_mode
+                    else "denied"
+                ),
+                "bodyForecastInitialization": (
+                    "deep copy of ArmPainterSim process state; explicit "
+                    "diagnostic-only exception"
+                    if oracle_mode
+                    else "denied"
+                ),
+                "blockedReason": (
+                    "fixed-camera/body likelihood and sensor-conditioned "
+                    "posterior are not implemented"
+                    if self._observation_boundary_blocked
+                    else None
+                ),
             },
             "plannerError": self._pending_error,
             "lastPlanningSeconds": self.last_planning_seconds,
@@ -1990,6 +2073,8 @@ class ArmActiveInferenceDriver:
         return forecast.diagnostics(include_state_fields=False) if forecast is not None else None
 
     def phase_label(self) -> str:
+        if self._observation_boundary_blocked:
+            return "sensor_boundary_blocked"
         if self.current is not None:
             return execution_phase(self.current)
         if self.stopped:

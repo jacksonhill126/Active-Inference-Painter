@@ -11,11 +11,13 @@ This contract separates active-inference painting decisions from conventional
 robot execution and from the generative process. It is shared by the native
 simulator, a future MuJoCo backend, and eventual hardware.
 
-Defining this boundary does not make the current native runtime
-sensor-equivalent. The current forecast implementation still deep-copies the
-live simulator, including hidden body, material, contact, parameter, brush,
-and RNG state. That path is a documented `baseline-oracle-v0` exception and
-must not satisfy M2 embodiment claims.
+Defining this boundary does not make the native runtime sensor-equivalent.
+The live default now fails closed before policy inference or learning can read
+process truth. The old forecast implementation still deep-copies hidden body,
+material, contact, parameter, brush, and RNG state, but that path is reachable
+only through the explicit `oracle_material_state` diagnostic mode. It remains
+a documented `baseline-oracle-v0` exception and must not satisfy M2 embodiment
+claims.
 
 ## Semantic Layers
 

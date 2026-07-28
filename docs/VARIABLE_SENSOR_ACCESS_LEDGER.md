@@ -62,7 +62,7 @@ posterior beliefs -> EFE -> painting policy
 commands -> conventional controller -> hard safety -> plant
 ```
 
-The current baseline is instead:
+The explicit oracle comparator is:
 
 ```text
 VerticalCanvas material arrays --------------------+
@@ -75,13 +75,25 @@ simulated encoder/current packet ------------------------> diagnostics only
 perfect canvas render -----------------------------------> browser only
 ```
 
-The second diagram is useful for development, but it is not a sensor-equivalent
-active-inference agent.
+That diagram is useful for diagnostic development, but it is not a
+sensor-equivalent active-inference agent.
+
+As of 2026-07-28 the live default is `sensor-boundary-v0` with observation
+mode `sensor_equivalent`. It fails closed: oracle bootstrap is skipped,
+policy inference and learning remain disabled, and planner reset/step return
+without dereferencing the process object. Any attempted construction of a
+planner state from `ArmPainterSim` raises `PrivilegedStateAccessError`.
+
+This is boundary enforcement, not completed sensor inference. The default
+therefore reports `sensor_equivalent=false` and `model_access_blocked=true`
+until the fixed-camera/body likelihood and sensor-conditioned posterior are
+implemented. The old behavior is available only through the explicit
+`oracle_material_state` diagnostic mode.
 
 ## 4. Temporary Oracle Baseline
 
-`baseline-oracle-v0` is the explicit name for the current observation
-condition.
+`baseline-oracle-v0` is the explicit name for the retained diagnostic
+observation condition. It is no longer the fail-closed live default.
 
 Its runtime observation mode is `oracle_material_state`. It may be used for:
 
@@ -99,7 +111,7 @@ It may not support claims of:
 - learning exclusively from physically available sensory history;
 - embodied prediction without simulator-state leakage.
 
-Every experiment manifest using the current runtime must record:
+Every experiment manifest opting into this diagnostic mode must record:
 
 ```text
 observation_baseline = baseline-oracle-v0

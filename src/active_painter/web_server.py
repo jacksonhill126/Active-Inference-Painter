@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .arm_agent_driver import (
+    ORACLE_OBSERVATION_ACCESS_MODE,
+    SENSOR_OBSERVATION_ACCESS_MODE,
+)
 from .version import code_version
 from .web_robot_model import load_robot_visual_model
 from .web_runtime import WebSimRuntime
@@ -168,6 +172,19 @@ def build_parser() -> argparse.ArgumentParser:
         default="native",
         help="realized arm dynamics/contact backend; painting remains in VerticalCanvas",
     )
+    parser.add_argument(
+        "--observation-mode",
+        choices=(
+            SENSOR_OBSERVATION_ACCESS_MODE,
+            ORACLE_OBSERVATION_ACCESS_MODE,
+        ),
+        default=SENSOR_OBSERVATION_ACCESS_MODE,
+        help=(
+            "sensor_equivalent fails closed until the camera/body likelihood is "
+            "implemented; oracle_material_state is an explicit diagnostic-only "
+            "legacy baseline"
+        ),
+    )
     return parser
 
 
@@ -214,7 +231,20 @@ def main() -> None:
         checkpoint_save_every_transitions=args.checkpoint_save_every_transitions,
         device=args.device,
         plant_backend=args.plant_backend,
+        observation_access_mode=args.observation_mode,
     )
+    if runtime.agent_driver.observation_boundary_blocked:
+        print(
+            "Active inference disabled: sensor-equivalent observation inference "
+            "is not implemented, and hidden simulator state is denied.",
+            flush=True,
+        )
+    elif args.observation_mode == ORACLE_OBSERVATION_ACCESS_MODE:
+        print(
+            "WARNING: oracle_material_state exposes hidden process truth to the "
+            "model and is diagnostic-only.",
+            flush=True,
+        )
     print(f"Planner device: {runtime.agent_driver.agent.device}", flush=True)
     server = bind_server(args.host, args.port, PainterRequestHandler)
     server.runtime = runtime

@@ -1,10 +1,17 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from active_painter.arm_agent_driver import (
     OBSERVATION_ACCESS_MODE,
     OBSERVATION_BASELINE_ID,
+    ORACLE_OBSERVATION_ACCESS_MODE,
+    ORACLE_OBSERVATION_BASELINE_ID,
+    SENSOR_OBSERVATION_ACCESS_MODE,
+    SENSOR_OBSERVATION_BASELINE_ID,
     ArmActiveInferenceDriver,
+    PrivilegedStateAccessError,
 )
 from active_painter.arm_sim import (
     ArmKinematics,
@@ -113,7 +120,37 @@ def test_spatial_oracle_channels_are_explicitly_ledgered() -> None:
     assert spatial["research_status"] == "oracle_only"
 
 
-def test_runtime_reports_the_oracle_observation_boundary() -> None:
+def test_default_model_boundary_fails_closed_without_reading_process_truth() -> None:
+    class ForbiddenProcess:
+        def __getattribute__(self, name: str):
+            raise AssertionError(f"sensor-only model dereferenced process field {name!r}")
+
+    driver = ArmActiveInferenceDriver(
+        config=PainterConfig(candidate_policies=2, planning_horizon=1),
+        bootstrap_transitions=8,
+        bootstrap_train_steps=1,
+    )
+    process = ForbiddenProcess()
+
+    driver.reset(process)  # type: ignore[arg-type]
+    driver.step(process, 1.0 / 240.0)  # type: ignore[arg-type]
+    boundary = driver.diagnostics()["observationBoundary"]
+
+    assert OBSERVATION_BASELINE_ID == SENSOR_OBSERVATION_BASELINE_ID
+    assert OBSERVATION_ACCESS_MODE == SENSOR_OBSERVATION_ACCESS_MODE
+    assert driver.enabled is False
+    assert driver.trained_transitions == 0
+    assert boundary["baseline"] == SENSOR_OBSERVATION_BASELINE_ID
+    assert boundary["mode"] == SENSOR_OBSERVATION_ACCESS_MODE
+    assert boundary["modelAccessBlocked"] is True
+    assert boundary["materialStateAccess"] == "denied"
+    assert boundary["bodyForecastInitialization"] == "denied"
+
+    with pytest.raises(PrivilegedStateAccessError, match="denied"):
+        driver._planner_state(process)  # type: ignore[arg-type]
+
+
+def test_explicit_oracle_diagnostic_mode_retains_legacy_baseline_label() -> None:
     ledger = _ledger()
     baseline = ledger["baseline"]
     assert isinstance(baseline, dict)
@@ -121,15 +158,18 @@ def test_runtime_reports_the_oracle_observation_boundary() -> None:
         config=PainterConfig(candidate_policies=2, planning_horizon=1),
         bootstrap_transitions=0,
         bootstrap_train_steps=0,
+        observation_access_mode=ORACLE_OBSERVATION_ACCESS_MODE,
     )
 
     boundary = driver.diagnostics()["observationBoundary"]
 
-    assert OBSERVATION_BASELINE_ID == baseline["id"]
-    assert OBSERVATION_ACCESS_MODE == baseline["observation_mode"]
+    assert ORACLE_OBSERVATION_BASELINE_ID == baseline["id"]
+    assert ORACLE_OBSERVATION_ACCESS_MODE == baseline["observation_mode"]
     assert boundary["baseline"] == baseline["id"]
     assert boundary["mode"] == baseline["observation_mode"]
     assert boundary["sensorEquivalent"] is False
+    assert boundary["modelAccessBlocked"] is False
+    assert "diagnostic-only" in boundary["materialStateAccess"]
 
 
 def test_oracle_baseline_prohibits_sensor_only_claims() -> None:

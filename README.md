@@ -30,6 +30,21 @@ python -m active_painter.web_server
 
 Open `http://127.0.0.1:8017`.
 
+The live default is deliberately fail-closed: the viewer runs, but active
+policy inference remains disabled until the fixed-camera/body likelihood and
+sensor-conditioned posterior are implemented. This prevents the model from
+silently receiving exact pose, contact, canvas material, or copied simulator
+state.
+
+The former hidden-state baseline is retained only as an explicitly labelled
+diagnostic comparator:
+
+```bash
+python -m active_painter.web_server --observation-mode oracle_material_state
+```
+
+That mode is not sensor-equivalent and must not support physical-agent claims.
+
 To use MuJoCo for realized arm dynamics, RobStride-equivalent electrical
 current/back-EMF and actuator limits, brush compliance, and contact while
 retaining the Python paint-material process:
