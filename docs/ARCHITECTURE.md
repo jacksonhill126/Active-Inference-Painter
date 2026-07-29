@@ -182,14 +182,17 @@ The agent is receding-horizon. Even when it evaluates several future marks, it
 normally commits only to the first actionable decision. A structured passage
 persists across several marks, but is locally re-inferred between them.
 
-## 4. The two planner modes
+## 4. Planner representations and lifecycle
 
-There are two state representations.
+The repository contains two implemented state representations, but they do not
+have equal architectural standing.
 
-### Summary mode
+### Obsolete summary compatibility fixture
 
-Summary mode is the compatibility and speed-oriented implementation. Its hidden
-canvas state has six values:
+`planner_state_kind="summary"` is deprecated and obsolete as a painting
+representation. It is retained only for regression, tractable-reference,
+speed, and checkpoint-compatibility fixtures. Its hidden canvas state has six
+values:
 
 1. material coverage;
 2. mean thickness;
@@ -203,18 +206,42 @@ trainable parameters in the current configuration. Each member predicts a
 Gaussian next state from a 6-D state and 12-D action vector.
 
 This mode cannot represent where paint is located. Two canvases with the same
-six summaries are identical to it. It remains useful for tests, fast runs, and
-comparison, but it is not the architecture to use for composition research.
+six summaries are identical to it. It must not be described as a highest-level
+belief, composition state, or research architecture. Explicit driver
+construction emits a deprecation warning and diagnostics label it
+`obsolete_compatibility_fixture`.
 
-### Spatial material mode
+### Provisional spatial material baseline
 
-Spatial mode is the current research path and the mode used by the active web
-run discussed in this project.
+Spatial mode is the current low-level research baseline and the web entry-point
+default. It is not the final abstract hierarchy.
 
 It maintains native pixel material, a deterministic pyramid, a 16 x 16 planner
 field, learned local dynamics, and slower canvas/relational latents.
 
 The remainder of this brief primarily describes spatial mode.
+
+### Intended learned perceptual hierarchy
+
+The target architecture does not replace six hand-selected global aggregates
+with a larger hand-selected global list. It learns multiscale latent causes
+whose usefulness is established by prediction:
+
+- local material/contact latents explain immediate camera patches and brush
+  interaction;
+- perceptual spatial latents explain visible pigment, edges, regions, texture,
+  and contrast relationships without receiving exact material truth;
+- slower canvas and relational latents predict later observations and
+  subordinate mark trajectories;
+- passage and painting latents provide temporally deep transition priors.
+
+Spatial locality, temporal separation, bottlenecks, and equivariance are valid
+inductive structure. The contents of the learned features are not manually
+specified aesthetic variables. A latent is retained only if it improves
+held-out prediction/calibration and survives freeze, shuffle, reset, and
+substitution tests. Hand-defined thickness, wetness, coverage, commands, and
+safety limits remain process variables, readouts, preferences, or engineering
+boundaries—not the learned painting-level representation.
 
 ## 5. Current live web configuration
 
@@ -344,11 +371,13 @@ It derives:
 - ground contrast;
 - material coverage.
 
-Paint does not dry during a painting. Wetness is persistent. The brush is
-loaded before each stroke from its declared `amount` and `tone`. There is no
-controller-side paint gate: once loaded, pressure-bearing contact deposits
-during press, sweep, lift, or unintended contact. The current model therefore
-assumes paint handling happens between strokes.
+Paint does not dry during a painting. Wetness is persistent. Dedicated white
+and black brushes carry finite persistent fresh load and picked-up canvas
+paint. The mark's declared `amount` controls deposition separately from the
+reservoir. There is no controller-side paint gate: once material is available,
+pressure-bearing contact deposits during press, sweep, lift, or unintended
+contact. An instantaneous reload preparation policy restores the selected
+brush to full, uniformly nominal-color paint.
 
 The brush process includes:
 
@@ -361,18 +390,19 @@ The brush process includes:
 - a lagging bristle-tip follower;
 - wet paint pickup into a held reservoir;
 - leading-edge-biased redeposition of dirty paint;
-- conserved thickness and black pigment during pickup/release.
+- conserved thickness and black pigment during pickup/release;
+- persistent finite fresh load and cross-mark average-color contamination.
 
 This is intended to produce thick, wet-into-wet oil behavior. It is more
 physical than alpha compositing, but it is still phenomenological. It does not
-model rheology, yield stress, bristle bending, three-dimensional ridges, brush
-tilt, solvent concentration, or cross-stroke brush contamination.
+model rheology, yield stress, bristle-resolved bending, three-dimensional
+ridges, brush tilt, or solvent concentration.
 
-The fresh load is reset at each action boundary because the learned transition
-model does not yet observe a persistent brush-load latent. Within an action the
-loaded state remains physical and continuous; it is never toggled by tracking
-error. Finite load depletion and cross-action contamination remain future
-latent-state extensions.
+The compact model maintains load and average-pigment beliefs per dedicated
+brush. Preserve and reload are inferred preparation policies, not controller
+thresholds. The current transition model predicts depletion and increasing
+contamination uncertainty. A local camera-derived deposition likelihood is
+defined but is not assimilated until the camera/material posterior exists.
 
 ## 7. Material state representation
 
@@ -1534,8 +1564,8 @@ Polyline turn is not directly observed in the passage posterior update.
 ### 31.8 Simplified contact and paint mechanics
 
 The body and paint values are plausible but not calibrated. There is no brush
-tilt, wrist, bristle mechanics, paint rheology, palette/solvent action state,
-or persistent dirty-brush state.
+tilt, wrist, bristle-resolved mechanics, paint rheology, or
+palette/solvent/cleaning action geometry. Reload is currently instantaneous.
 
 ### 31.9 Forecast model and simulated world are closely related
 

@@ -15,6 +15,10 @@ from .arm_agent_driver import (
     ORACLE_OBSERVATION_ACCESS_MODE,
     SENSOR_OBSERVATION_ACCESS_MODE,
 )
+from .config import (
+    SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+    SUMMARY_PLANNER_STATE_KIND,
+)
 from .version import code_version
 from .web_robot_model import load_robot_visual_model
 from .web_runtime import WebSimRuntime
@@ -154,7 +158,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8017)
     parser.add_argument("--canvas-size", type=int, default=256)
     parser.add_argument("--speed", type=float, default=1.0)
-    parser.add_argument("--planner-state-kind", choices=("summary", "spatial_material"), default="summary")
+    parser.add_argument(
+        "--planner-state-kind",
+        choices=(
+            SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+            SUMMARY_PLANNER_STATE_KIND,
+        ),
+        default=SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+        help=(
+            "planner representation; spatial_material is the provisional "
+            "low-level research baseline, while summary is an obsolete "
+            "compatibility fixture"
+        ),
+    )
     parser.add_argument("--spatial-grid-size", type=int, default=16)
     parser.add_argument("--stroke-tone-prior", choices=("black", "white", "random"), default="random")
     parser.add_argument("--save-every-paintings", type=int, default=5)
@@ -194,7 +210,12 @@ def resolved_bootstrap(args: argparse.Namespace) -> tuple[int, int]:
     if transitions is None:
         transitions = 96
     if train_steps is None:
-        train_steps = 24 if args.planner_state_kind == "spatial_material" else 180
+        train_steps = (
+            24
+            if args.planner_state_kind
+            == SPATIAL_MATERIAL_PLANNER_STATE_KIND
+            else 180
+        )
     return transitions, train_steps
 
 

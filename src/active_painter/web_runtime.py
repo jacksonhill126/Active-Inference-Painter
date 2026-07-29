@@ -16,7 +16,7 @@ from .arm_agent_driver import (
 )
 from .arm_control import scripted_contact_pressure, scripted_pose
 from .arm_sim import ArmPainterSim, JOINT_NAMES
-from .config import PainterConfig
+from .config import PainterConfig, SPATIAL_MATERIAL_PLANNER_STATE_KIND
 from .telemetry_log import ArmTelemetryLog
 from .version import CodeBuildInfo, code_build_info
 from .web_robot_model import load_robot_visual_model, retarget_legacy_robot_state
@@ -26,7 +26,7 @@ from .web_robot_model import load_robot_visual_model, retarget_legacy_robot_stat
 class WebSimRuntime:
     canvas_size: int = 256
     speed: float = 1.0
-    planner_state_kind: str = "summary"
+    planner_state_kind: str = SPATIAL_MATERIAL_PLANNER_STATE_KIND
     spatial_grid_size: int = 16
     stroke_tone_prior: float | None = None
     save_every_paintings: int = 5
@@ -34,7 +34,7 @@ class WebSimRuntime:
     telemetry_max_samples: int = 54_000
     telemetry_sample_period: float = 1.0 / 15.0
     driver_bootstrap_transitions: int = 96
-    driver_bootstrap_train_steps: int = 180
+    driver_bootstrap_train_steps: int = 24
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
     device: str | None = None

@@ -60,8 +60,10 @@ information gain.
 
 The summary state mixes fractions, deposition-unit averages, and maxima. Its
 configured scalar standard deviations therefore do not define a single
-physical measurement scale. Summary mode is retained for compatibility and
-debugging, not as evidence for sensor-equivalent research claims.
+physical measurement scale. Summary mode is formally obsolete and retained
+only for regression/reference/checkpoint compatibility. It is not a
+highest-level painting belief and supplies no sensor-equivalent research
+evidence.
 
 ## Normalization Rules
 

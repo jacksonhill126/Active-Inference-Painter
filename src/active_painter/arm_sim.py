@@ -520,18 +520,16 @@ class ContactState:
 class Brush:
     """Material state carried by the physical brush.
 
-    ``load`` is zero while the brush is unloaded and becomes a calibrated
-    fresh-paint deposition scale when :meth:`reload` is called.  Contact never
-    changes this state implicitly: a loaded brush deposits whenever it touches
-    the canvas, including during press, lift, or unintended contact.  The
-    current approximation keeps the fresh load constant within a stroke rather
-    than pretending to have a calibrated finite paint-volume reservoir.
+    ``load`` is a normalized finite fresh-paint reservoir. Contact depletes it
+    according to deposited fresh thickness, and a reload restores it to the
+    requested fraction. A loaded brush deposits whenever it touches the
+    canvas, including during press, lift, or unintended contact.
 
     The held reservoir stores paint skimmed off the canvas (the "dirty brush"
     that drives wet blending: held volume plus its pigment mass, exactly
     conserved against the canvas ledger), alongside a fixed bristle-furrow
-    pattern.  Loading once before a stroke keeps the whole realized mark a
-    deterministic function of the canvas and action.
+    pattern. Fresh load depletion is currently a calibrated-parameter-shaped
+    approximation rather than a bristle-resolved volume simulation.
     """
 
     config: PainterConfig
@@ -551,7 +549,7 @@ class Brush:
 
     @property
     def loaded(self) -> bool:
-        return self.load > 0.0
+        return self.load > 1e-8 or self.held_volume > 1e-8
 
     def unload(self) -> None:
         self.load = 0.0
@@ -564,7 +562,7 @@ class Brush:
         cfg = self.config
         frac = clip_scalar(amount, 0.0, 1.0)
         self.load_amount = frac
-        self.load = cfg.brush_load_min + (cfg.brush_load_max - cfg.brush_load_min) * frac
+        self.load = frac
         self.fresh_tone = float(tone >= 0.5)
         self.held_volume = 0.0
         self.held_black = 0.0
@@ -585,6 +583,14 @@ class Brush:
         self.streak_phases = self.rng.uniform(0.0, 1.0, size=count).astype(np.float32)
         self.wobble_phases = self.rng.uniform(0.0, 2.0 * np.pi, size=3).astype(np.float32)
         self.wobble_amps = self.rng.uniform(0.4, 1.0, size=3).astype(np.float32)
+
+    def consume(self, fresh_equivalent_thickness: float) -> None:
+        """Deplete the normalized fresh reservoir by deposited paint."""
+
+        capacity = max(1e-8, float(self.config.brush_load_capacity_thickness))
+        depletion = max(0.0, float(fresh_equivalent_thickness)) / capacity
+        self.load = max(0.0, self.load - depletion)
+        self.load_amount = self.load
 
     def bristle_gains_at(self, path_distance: float) -> np.ndarray:
         """Per-hair gains with intermittent dry gaps at this point on the path."""
@@ -708,6 +714,7 @@ class VerticalCanvas:
         motion: np.ndarray | None = None,
         brush: Brush | None = None,
         flow: float = 1.0,
+        amount: float = 1.0,
     ) -> float:
         """Deposit a stamp and return the peak thickness laid.
 
@@ -715,10 +722,10 @@ class VerticalCanvas:
         with a unit deposition scale and binary tone (relied on by direct-call
         tests). ``motion`` (world-space brush displacement since the previous
         deposition) sweeps the disc into a capsule so travel elongates the mark;
-        ``brush`` adds loading (a constant deposition scale, never depleting),
-        bristle furrows, canvas-grain texture, and wet-drag smear. ``flow`` in
-        [0, 1] tapers the brush width (stroke-end envelope). Paint never dries
-        or runs out.
+        ``brush`` adds finite loading, bristle furrows, canvas-grain texture,
+        and wet-drag smear. ``flow`` in [0, 1] tapers the brush width
+        (stroke-end envelope). ``amount`` is the selected mark's deposition
+        setting and is distinct from the persistent brush reservoir.
         """
 
         if pressure <= 0.001 or not self.contains(float(brush_world[0]), float(brush_world[2])):
@@ -819,10 +826,18 @@ class VerticalCanvas:
             float(self.config.paint_deposition_base_rate)
             + float(self.config.paint_deposition_pressure_rate) * pressure
         )
-        # Brush loading scales deposited thickness uniformly. Fresh-paint
-        # depletion is an explicit uncalibrated approximation, not an implicit
-        # controller switch.
-        load_scale = brush.load if brush is not None else 1.0
+        # The mark amount and persistent loading are distinct. The former is a
+        # selected action consequence; the latter is a hidden material state.
+        amount_fraction = clip_scalar(amount, 0.0, 1.0)
+        amount_scale = (
+            float(self.config.brush_load_min)
+            + (
+                float(self.config.brush_load_max)
+                - float(self.config.brush_load_min)
+            )
+            * amount_fraction
+        )
+        load_scale = brush.load * amount_scale if brush is not None else 1.0
         peak = float(dt) * max(0.0, deposition_rate) * load_scale
         region = np.s_[row0:row1, col0:col1]
         previous_thickness = self.thickness[region]
@@ -863,6 +878,10 @@ class VerticalCanvas:
         # of the swept footprint, so picked-up paint is pushed ahead of the
         # stroke -- the cheap core of wet-into-wet blending (ArtRage/Krita).
         fresh = peak * footprint
+        if brush is not None:
+            footprint_total = float(footprint.sum())
+            if footprint_total > 1e-12:
+                brush.consume(float(fresh.sum()) / footprint_total)
         dirty = np.zeros_like(fresh)
         held_tone = brush.fresh_tone if brush is not None else 0.0
         if brush is not None and brush.held_volume > 1e-12 and self.config.brush_release_fraction > 0.0:
@@ -923,11 +942,12 @@ class ArmPainterSim:
     actual_pose: ArmPose = field(init=False)
     target_pose: ArmPose = field(init=False)
     brush_tone: float = field(init=False)
+    deposition_amount: float = field(init=False)
     intended_contact_pressure: float = field(init=False)
     brush_flow: float = field(init=False)
     control_damping_multiplier: float = field(init=False)
     contact: ContactState = field(init=False)
-    brush: Brush = field(init=False)
+    brushes: dict[str, Brush] = field(init=False)
     _painting: bool = field(default=False, init=False)
     _previous_brush_world: np.ndarray | None = field(default=None, init=False)
     _tip_lag_world: np.ndarray | None = field(default=None, init=False)
@@ -938,10 +958,15 @@ class ArmPainterSim:
         self.target_pose = safe_home_pose()
         self.plant.reset_state(self.actual_pose)
         self.brush_tone = 1.0
+        self.deposition_amount = 1.0
         self.intended_contact_pressure = 0.0
         self.brush_flow = 1.0
         self.control_damping_multiplier = 1.0
-        self.brush = Brush(self.config, np.random.default_rng(int(self.config.brush_seed)))
+        seed = int(self.config.brush_seed)
+        self.brushes = {
+            "white": Brush(self.config, np.random.default_rng(seed)),
+            "black": Brush(self.config, np.random.default_rng(seed + 1)),
+        }
         self._painting = False
         self._previous_brush_world = None
         self.refresh_contact()
@@ -950,7 +975,8 @@ class ArmPainterSim:
         self.actual_pose = safe_home_pose()
         self.target_pose = safe_home_pose()
         self.plant.reset_state(self.actual_pose)
-        self.unload_brush()
+        self.unload_all_brushes()
+        self.deposition_amount = 1.0
         self.intended_contact_pressure = 0.0
         self.control_damping_multiplier = 1.0
         self._painting = False
@@ -961,19 +987,39 @@ class ArmPainterSim:
     def set_target(self, pose: ArmPose) -> None:
         self.target_pose = pose.clipped()
 
-    def load_brush(self, amount: float, tone: float) -> None:
-        """Load material before motion; later deposition is contact-driven."""
+    @property
+    def brush(self) -> Brush:
+        """The currently selected dedicated black or white physical brush."""
+
+        return self.brushes["black" if self.brush_tone >= 0.5 else "white"]
+
+    def select_brush(self, tone: float) -> None:
+        """Select a dedicated color brush without changing its material state."""
 
         self.brush_tone = float(tone >= 0.5)
-        self.brush.reload(amount, self.brush_tone)
         self._painting = False
         self._previous_brush_world = None
         self._tip_lag_world = None
 
+    def load_brush(self, amount: float, tone: float) -> None:
+        """Load material before motion; later deposition is contact-driven."""
+
+        self.select_brush(tone)
+        self.brush.reload(amount, self.brush_tone)
+
     def unload_brush(self) -> None:
-        """Remove paint availability without changing canvas or robot state."""
+        """Remove paint from the selected brush without changing the canvas."""
 
         self.brush.unload()
+        self._painting = False
+        self._previous_brush_world = None
+        self._tip_lag_world = None
+
+    def unload_all_brushes(self) -> None:
+        """Clear both dedicated brushes, used by a complete simulator reset."""
+
+        for brush in self.brushes.values():
+            brush.unload()
         self._painting = False
         self._previous_brush_world = None
         self._tip_lag_world = None
@@ -1040,6 +1086,7 @@ class ArmPainterSim:
                 motion=motion,
                 brush=self.brush,
                 flow=self.brush_flow,
+                amount=self.deposition_amount,
             )
             self._previous_brush_world = brush_world.copy()
         self._painting = painting

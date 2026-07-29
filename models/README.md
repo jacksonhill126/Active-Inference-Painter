@@ -19,7 +19,9 @@ Stable controller-facing names are:
 - state sensors: `<joint>_position_sensor` and `<joint>_velocity_sensor`;
 - brush pose/contact: `tip`, `tip_position_sensor`, `brush_touch_sensor`,
   `brush_force_sensor`, and `brush_compression_sensor`;
-- home keyframe: `safe_home`.
+- home/inspection keyframes: `safe_home`, `camera_clear_park`;
+- sensor camera frames: `canvas_right_oblique`, `canvas_left_oblique`,
+  `canvas_inspection_deployed`, and `brush_standoff_overhead`.
 
 MuJoCo supplies the generative process for joint motion, rigid-body geometry,
 brush compliance, and realized contact. It does **not** simulate paint.
@@ -209,6 +211,82 @@ brush/canvas measurements; Python wet-paint state does not yet modify them.
 The bend stiffness/damping values are likewise provisional and should
 eventually come from a simple lateral tip load-deflection/free-decay test.
 
+## Provisional Camera Rig
+
+The MJCF is now the source of truth for a separately versioned
+`provisional-multiview-v2` camera rig:
+
+| Camera | Position (m) | Role | Availability | Incidence |
+| --- | --- | --- | --- | ---: |
+| `canvas_right_oblique` | `0.775 -0.820 0.750` | brush/contact tracking | continuous | 31.75 deg |
+| `canvas_left_oblique` | `-0.625 -0.820 0.800` | brush/contact tracking | continuous | 32.57 deg |
+| `canvas_inspection_deployed` | `0.075 0.100 0.350` | head-on canvas inspection | park only | 0 deg |
+| `brush_standoff_overhead` | `0.075 0.250 1.250` | brush standoff profile | continuous | edge profile |
+
+The three canvas frames use provisional 1024 x 1024 ideal-pinhole metadata.
+The oblique cameras now use a 24 degree vertical field of view, filling the
+sensor more efficiently while retaining full-canvas framing. The deployed
+inspection reference uses 72 degrees to frame the 508 mm square canvas from
+382.6 mm away. Model-facing canvas observations are declared as 512 x 512
+normalized linear grayscale: 30 Hz for the oblique views and 5 Hz/on-demand
+for inspection.
+
+The overhead profile camera is a low-cost 640 x 480, 60 Hz grayscale
+global-shutter analogue. Its optical axis is tangent to the canvas plane and
+its registration is `canvas_edge_profile`; it must not be passed through the
+canvas homography. At the current geometry its image displacement is
+approximately 0.50-0.90 pixels per millimetre of brush/canvas normal motion
+across the canvas height.
+
+`camera_clear_park` places the physical tip at
+`0.075 0.4064 0.096` m: bottom-center height and 76.2 mm in front of the
+canvas. Ray tests from every camera to a dense canvas grid hit the canvas
+before any robot geometry in this pose. The controller's global hold uses the
+same legacy target: bottom center at a 3 in retract depth.
+After contact, it retains a local approximately Cartesian straight-back target
+until normal clearance is established, then interpolates toward the low park;
+this prevents the joint-space transfer from arcing the brush back toward the
+canvas.
+
+The inspection camera is an optical reference for the proposed fold-away
+stalk. It is not a claim that a fixed camera body can remain at that location
+during painting; the arm sweeps through that region. A later mechanical model
+must add the stowed/deployed mechanism, collision envelope, confirmation
+sensor, and hard motion interlock.
+
+`active_painter.camera_geometry` reads this rig directly from the XML. It
+provides ideal camera intrinsics, forward/inverse canvas homographies,
+incidence and axial-depth metrics, frustum masks, and Pillow rectification into
+canonical top-left canvas UV coordinates for the three canvas views. It also
+projects arbitrary world points for the edge-profile view. Lens distortion
+must be removed before rectification. Occlusion, focus, exposure, glare,
+timing, and camera-specific likelihood precision remain separate observation
+quantities. The web robot-model payload exports the same camera frames,
+grayscale contract, rates, input sizes, registrations, and calibration status
+for later frontend use.
+
+Each optical frame now has a visible, non-colliding provisional camera
+envelope in the same XML. The three canvas cameras use a 70 x 55 x 56 mm
+envelope behind a 42 mm lens barrel; the low-cost profile camera uses a
+smaller 44 x 36 x 36 mm body behind a 26 mm barrel. The optical center remains
+at the front glass and all housing geometry lies behind it along camera-local
++Z, so a sensor camera cannot see its own housing. These envelopes appear in
+both MuJoCo and the XML-driven Three.js viewer. They are sizing/orientation
+aids rather than vendor CAD; supports, cabling, the inspection-camera
+deployment mechanism, and their collision envelopes remain unspecified.
+
+The reproducible 9 x 9 x 3 contact-pose sweep and publication figures are
+documented in
+[`docs/CAMERA_OBSERVABILITY_BRIEF.md`](../docs/CAMERA_OBSERVABILITY_BRIEF.md).
+Across 243 contact poses, the opposing continuous oblique views have 100%
+combined bristle-tip visibility; the overhead profile view also has 100%
+sampled visibility. These are segmentation-based geometric results, not
+learned detector probabilities.
+
+This is geometry and preprocessing infrastructure only. It does not yet emit a
+sensor-equivalent observation, enable the fail-closed active-inference path,
+or make hidden material state camera-accessible.
+
 ## Exact, Vendor-Backed, And Approximate Fields
 
 - Exact interface contract: joint names/order/signs, `safe_home`, `tip`, SI
@@ -222,8 +300,10 @@ eventually come from a simple lateral tip load-deflection/free-decay test.
   joint-output torque/speed/current envelope but are not raw phase parameters.
 - Approximate: all brackets and links, body mass distribution and inertia,
   post height, physical joint ranges, shoulder/roll offsets, actuator
-  armature/friction, position-loop gains, brush stiffness/damping/friction, and
-  canvas contact parameters. Encoder observations are ideal and deterministic.
+  armature/friction, position-loop gains, brush stiffness/damping/friction,
+  canvas contact parameters, camera poses/FOV/resolution, and deployed
+  inspection-camera mechanism. Encoder observations are ideal and
+  deterministic.
 - Required measurements: CAD joint centers, assembled body masses/COM/inertia,
   output friction/backlash, safe cable-limited ranges, torque/current/thermal
   curves, motor step response and firmware configuration, brush geometry and
@@ -244,8 +324,9 @@ python -m mujoco.viewer --mjcf models\active_inference_painter.xml
 python -m pytest tests\test_mujoco_model.py
 ```
 
-The `safe_home` keyframe remains clear of the canvas. `contact_probe` creates
-bristle contact near the canvas center for contact/sensor inspection.
+The `safe_home` keyframe remains clear of the canvas. `camera_clear_park`
+provides an unoccluded inspection pose. `contact_probe` creates bristle
+contact near the canvas center for contact/sensor inspection.
 `lower_arm_down` holds the shoulder pitch at zero and the elbow at -80 degrees
 so the near-vertical downward forearm sweep can be checked.
 `bottom_edge_probe` contacts 10 mm above the lower edge using a negative elbow

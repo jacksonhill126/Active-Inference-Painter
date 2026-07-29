@@ -36,7 +36,8 @@
     <headlight ambient="0.35 0.35 0.35" diffuse="0.65 0.65 0.65"
                specular="0.15 0.15 0.15"/>
     <rgba haze="0.85 0.88 0.92 1"/>
-    <global azimuth="135" elevation="-18"/>
+    <global azimuth="135" elevation="-18"
+            offwidth="1024" offheight="1024"/>
   </visual>
 
   <custom>
@@ -50,12 +51,35 @@
     <text name="thermal_model" data="disabled_missing_vendor_constants"/>
     <text name="transmission_model" data="rigid_integrated_reducer_without_backlash"/>
     <text name="paint_process" data="external_VerticalCanvas"/>
+    <text name="camera_rig_version" data="provisional-multiview-v2"/>
+    <text name="sensor_camera_order"
+          data="canvas_right_oblique canvas_left_oblique canvas_inspection_deployed brush_standoff_overhead"/>
+    <text name="sensor_camera_roles"
+          data="contact_tracking contact_tracking canvas_inspection brush_standoff"/>
+    <text name="sensor_camera_availability"
+          data="continuous continuous park_only continuous"/>
+    <text name="sensor_camera_channels"
+          data="grayscale grayscale grayscale grayscale"/>
+    <text name="sensor_camera_registration"
+          data="canvas_plane_homography canvas_plane_homography canvas_plane_homography canvas_edge_profile"/>
+    <text name="camera_geometry_model" data="ideal_pinhole_without_distortion"/>
+    <text name="camera_calibration_status" data="provisional_simulation_geometry"/>
+    <text name="camera_normalization" data="role_dependent_v1"/>
+    <text name="camera_focus_model" data="fixed_manual_pending_lens_selection"/>
+    <text name="camera_observation_encoding"
+          data="linear_grayscale_float32_normalized_0_1"/>
+    <text name="camera_shutter_model" data="global_shutter"/>
+    <numeric name="sensor_camera_model_resolution_px"
+             data="512 512 512 512 512 512 640 480"/>
+    <numeric name="sensor_camera_sample_rate_hz" data="30 30 5 60"/>
     <numeric name="joint_range_rad"
              data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 -1.483529864195 2.617993877991"/>
     <numeric name="native_controller_joint_range_rad"
              data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 0 2.617993877991"/>
     <numeric name="safe_home_qpos_rad"
              data="0 -0.872664625997 0 1.745329251994 0 0 0"/>
+    <numeric name="camera_clear_park_qpos_rad"
+             data="0 -1.334725703904 0 1.413674247728 0 0 0"/>
     <numeric name="link_length_m" data="0.3302 0.3302"/>
     <numeric name="post_yaw_height_m" data="0.285"/>
     <numeric name="yaw_to_pitch_offset_m" data="0.075 0 0.106"/>
@@ -142,6 +166,12 @@
               specular="0.9" shininess="0.82"/>
     <material name="bristle_mat" rgba="0.35 0.20 0.08 1"
               specular="0.08" shininess="0.12"/>
+    <material name="camera_body_mat" rgba="0.075 0.085 0.105 1"
+              specular="0.45" shininess="0.42"/>
+    <material name="camera_barrel_mat" rgba="0.12 0.14 0.17 1"
+              specular="0.72" shininess="0.68"/>
+    <material name="camera_glass_mat" rgba="0.015 0.055 0.075 1"
+              specular="0.95" shininess="0.95" reflectance="0.04"/>
   </asset>
 
   <default>
@@ -156,6 +186,9 @@
       <geom contype="1" conaffinity="1" condim="4" group="0"
             margin="0.0005"/>
     </default>
+    <default class="camera_visual">
+      <geom contype="0" conaffinity="0" group="2"/>
+    </default>
   </default>
 
   <worldbody>
@@ -169,6 +202,30 @@
             xyaxes="1 0 0 0 0 1"/>
     <camera name="top_view" pos="0.075 0.25 1.25"
             xyaxes="1 0 0 0 1 0"/>
+    <!-- Provisional sensor frames. The two oblique cameras are continuously
+         available and aimed at canvas center. Their opposing views preserve
+         brush-tip visibility under contact occlusion. -->
+    <camera name="canvas_right_oblique" pos="0.775 -0.820 0.750"
+            xyaxes="0.880865989267 0.473365724311 0
+                    -0.123600957574 0.230003724765 0.965308805451"
+            fovy="24" resolution="1024 1024"/>
+    <camera name="canvas_left_oblique" pos="-0.625 -0.820 0.800"
+            xyaxes="0.880865989267 -0.473365724311 0
+                    0.137808815966 0.256442519539 0.956684882506"
+            fovy="24" resolution="1024 1024"/>
+    <!-- This is the deployed optical reference from the proposed fold-away
+         stalk. It is valid only at camera_clear_park; no fixed collision-safe
+         housing is claimed inside the arm's swept workspace. -->
+    <camera name="canvas_inspection_deployed" pos="0.075 0.100 0.350"
+            xyaxes="1 0 0 0 0 1"
+            fovy="72" resolution="1024 1024"/>
+    <!-- Continuous low-cost profile camera. Its optical axis is tangent to
+         the canvas plane, so it observes brush/canvas normal separation
+         against the upper canvas edge rather than a paintable surface image.
+         It deliberately does not participate in canvas-plane homography. -->
+    <camera name="brush_standoff_overhead" pos="0.075 0.250 1.250"
+            xyaxes="1 0 0 0 1 0"
+            fovy="45" resolution="640 480"/>
 
     <geom name="floor" type="plane" pos="0 0 -0.025" size="1.2 1.2 0.05"
           material="ground_mat" contype="0" conaffinity="0"/>
@@ -182,6 +239,63 @@
             size="0.275 0.008 0.275" material="frame_mat"/>
       <site name="canvas_center" type="sphere" pos="0 -0.00635 0"
             size="0.004" rgba="0.1 0.7 0.9 0.35"/>
+    </body>
+
+    <!-- Provisional camera housing envelopes. Each body has exactly the same
+         frame as its camera: local -Z is the viewing direction, the optical
+         center is at the body's origin, and all housing geometry stays behind
+         the optical center on local +Z. These static visual geoms do not
+         collide or contribute mass. Supports and final vendor CAD are pending
+         camera/lens selection. -->
+    <body name="canvas_right_camera_housing" pos="0.775 -0.820 0.750"
+          xyaxes="0.880865989267 0.473365724311 0
+                  -0.123600957574 0.230003724765 0.965308805451">
+      <geom name="canvas_right_camera_body" class="camera_visual" type="box"
+            pos="0 0 0.060" size="0.035 0.0275 0.028"
+            material="camera_body_mat"/>
+      <geom name="canvas_right_camera_barrel" class="camera_visual"
+            type="cylinder" fromto="0 0 0.002 0 0 0.034" size="0.021"
+            material="camera_barrel_mat"/>
+      <geom name="canvas_right_camera_glass" class="camera_visual"
+            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
+            material="camera_glass_mat"/>
+    </body>
+    <body name="canvas_left_camera_housing" pos="-0.625 -0.820 0.800"
+          xyaxes="0.880865989267 -0.473365724311 0
+                  0.137808815966 0.256442519539 0.956684882506">
+      <geom name="canvas_left_camera_body" class="camera_visual" type="box"
+            pos="0 0 0.060" size="0.035 0.0275 0.028"
+            material="camera_body_mat"/>
+      <geom name="canvas_left_camera_barrel" class="camera_visual"
+            type="cylinder" fromto="0 0 0.002 0 0 0.034" size="0.021"
+            material="camera_barrel_mat"/>
+      <geom name="canvas_left_camera_glass" class="camera_visual"
+            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
+            material="camera_glass_mat"/>
+    </body>
+    <body name="canvas_inspection_camera_housing" pos="0.075 0.100 0.350"
+          xyaxes="1 0 0 0 0 1">
+      <geom name="canvas_inspection_camera_body" class="camera_visual" type="box"
+            pos="0 0 0.060" size="0.035 0.0275 0.028"
+            material="camera_body_mat"/>
+      <geom name="canvas_inspection_camera_barrel" class="camera_visual"
+            type="cylinder" fromto="0 0 0.002 0 0 0.034" size="0.021"
+            material="camera_barrel_mat"/>
+      <geom name="canvas_inspection_camera_glass" class="camera_visual"
+            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
+            material="camera_glass_mat"/>
+    </body>
+    <body name="brush_standoff_camera_housing" pos="0.075 0.250 1.250"
+          xyaxes="1 0 0 0 1 0">
+      <geom name="brush_standoff_camera_body" class="camera_visual" type="box"
+            pos="0 0 0.040" size="0.022 0.018 0.018"
+            material="camera_body_mat"/>
+      <geom name="brush_standoff_camera_barrel" class="camera_visual"
+            type="cylinder" fromto="0 0 0.002 0 0 0.024" size="0.013"
+            material="camera_barrel_mat"/>
+      <geom name="brush_standoff_camera_glass" class="camera_visual"
+            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.010"
+            material="camera_glass_mat"/>
     </body>
 
     <body name="base">
@@ -385,6 +499,9 @@
     <key name="safe_home"
          qpos="0 -0.872664625997 0 1.745329251994 0 0 0"
          ctrl="0 -0.872664625997 0 1.745329251994"/>
+    <key name="camera_clear_park"
+         qpos="0 -1.334725703904 0 1.413674247728 0 0 0"
+         ctrl="0 -1.334725703904 0 1.413674247728"/>
     <key name="contact_probe"
          qpos="0 -0.824069157992 0 1.479812604153 0 0 0"
          ctrl="0 -0.824069157992 0 1.479812604153"/>

@@ -166,9 +166,9 @@ as their parents. Treating the parent fields and their deterministic
 transforms as independent Gaussian evidence can double-count information.
 `AI-103` owns that decision.
 
-### 5.3 Summary observation
+### 5.3 Obsolete summary compatibility observation
 
-Summary mode receives six exact aggregates:
+The obsolete summary compatibility fixture receives six exact aggregates:
 
 1. material coverage mean;
 2. mean thickness;
@@ -178,9 +178,10 @@ Summary mode receives six exact aggregates:
 6. painted-ground contrast.
 
 All six are derived from hidden process arrays. None is currently inferred
-from an image.
+from an image. They are retained for regression and tractable reference tests,
+not as a proposed high-level painting representation.
 
-### 5.4 Spatial observation
+### 5.4 Provisional spatial material observation
 
 Spatial mode receives native-pixel material means, configured log variances,
 and deterministic coarse-grained copies. Its six channels are thickness,
@@ -194,8 +195,14 @@ does not make the mean sensor-equivalent.
 
 The browser PNG is produced from perfect orthographic `observed_tone`. It is
 the closest current variable to a camera observation, but it has no camera
-pose, optics, occlusion, glare, latency, quantization, or sensor noise, and it
-is not fed into inference.
+optics, occlusion, glare, latency, quantization, or sensor noise, and it is not
+fed into inference.
+
+The MJCF now supplies provisional ideal-pinhole camera poses and a tested
+canvas-plane homography interface. That geometric normalization does not
+change the PNG's classification: no rendered camera frame, occlusion mask,
+photometric process, timing/noise process, or camera-conditioned likelihood is
+yet available to inference.
 
 ## 6. Bodily Variables
 
@@ -249,10 +256,20 @@ The process already emits plausible sensor analogues for:
 - motor current;
 - applied or reported voltage.
 
-These are currently exported to the web UI and telemetry CSV but are not
-assimilated by the painting posterior or used by the controller. In other
-words, the most physically legitimate bodily observations exist, while the
-live code mostly uses the hidden states they were meant to obscure.
+These are currently exported to the web UI and telemetry CSV. A reusable,
+sensor-only `BodyStateEstimator` now assimilates encoder position and velocity
+under an explicitly supplied Gaussian likelihood and transition prior; it can
+also assimilate optional contact-switch and force factors. It produces the
+agent-safe `BodyBeliefSnapshot` and a per-factor VFE decomposition without
+reading a process object.
+
+That estimator is not yet wired into the live painting posterior or controller,
+so it does not remove the existing oracle paths by itself. Its likelihood
+precision has no silent default and remains uncalibrated until a declared
+hardware or simulation profile is supplied. Motor current, bus voltage,
+temperature, tool deflection, and faults remain explicitly unassimilated:
+faults belong to hard safety, while current and deflection require conditional
+load/contact likelihoods rather than an informal confidence score.
 
 Computed torque and position error are derived signals. Exact friction,
 backlash, elastic deflection, load decomposition, process torque, and encoder
@@ -283,16 +300,22 @@ The brush process holds load, pigment contamination, carried tone, path
 distance, bristle gains, streak phases, edge-wobble phases, and RNG state.
 These are hidden causes of visible marks.
 
-The brush is intentionally loaded before each stroke action, which removes
-cross-stroke fresh-load memory from the current transition model. It then
-remains loaded continuously, and contact/pressure alone determine deposition;
-tracking error cannot toggle paint. Even so, the motor planner deep-copies the
-exact brush and its RNG. The rollout therefore knows a random bristle
-realization that a physical agent could not know before contact.
+The process has separate persistent white and black brushes. Fresh load is
+finite, contact depletes it, canvas pickup contaminates it, and instantaneous
+reload restores the selected brush to full uniformly selected-color paint.
+Tracking error still cannot toggle deposition.
 
-Longer term, commanded paint load and nominal brush identity may be known.
-Actual loading, contamination, bristle state, and tip lag should remain latent
-and be inferred from sensory consequences.
+The model maintains compact load and average-pigment beliefs per dedicated
+brush and infers preserve versus reload from an explicit preparation-policy
+prior and conditional mark-outcome EFE. Motor forecasts overwrite process
+loading and average mixture with this belief rather than reading exact load.
+The copied brush RNG and bristle realization remain privileged, however. The
+local camera-derived load likelihood is declared but cannot yet be assimilated
+because the camera/material observation path is not implemented.
+
+Nominal brush identity and issued reload commands are known. Actual loading,
+contamination, bristle state, and tip lag remain latent and must ultimately be
+inferred from sensory consequences.
 
 ## 8. Counterfactual Forecast Leakage
 
@@ -302,7 +325,8 @@ snapshot includes:
 - exact material fields;
 - true pose and plant dynamic state;
 - exact contact state;
-- exact brush state;
+- exact brush RNG and bristle realization (load/average mixture are replaced
+  from the model belief for the stroke forecast);
 - exact process parameters;
 - plant RNG state;
 - brush RNG state.
@@ -388,6 +412,13 @@ makes the next questions concrete:
 5. What units and normalizations define each retained likelihood?
 6. Which proprioceptive channels are independently observed versus derived?
 7. How are contact and force represented when no direct force sensor exists?
+
+The initial bodily answer is deliberately narrow: encoder angle and velocity
+are independent Gaussian likelihood factors; a present contact switch is a
+Bernoulli likelihood; and a present force sample is a Gaussian latent-force
+likelihood. Force is not yet treated as independent evidence for the contact
+factor, avoiding accidental double-counting until their joint likelihood is
+specified.
 
 ## 13. Maintenance Contract
 

@@ -7,6 +7,12 @@ from xml.etree import ElementTree
 
 import numpy as np
 
+from .camera_geometry import (
+    canvas_axial_depth_range_m,
+    canvas_incidence_angle_deg,
+    load_camera_rig,
+)
+
 
 INCH_TO_M = 0.0254
 ROBOT_MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "active_inference_painter.xml"
@@ -51,13 +57,21 @@ def _joint_payload(element: ElementTree.Element) -> dict[str, Any]:
 
 
 def _body_payload(element: ElementTree.Element) -> dict[str, Any]:
-    return {
+    payload = {
         "name": element.get("name", ""),
         "position": _vec3(element.get("pos")),
         "joints": [_joint_payload(joint) for joint in element.findall("joint")],
         "geoms": [_geom_payload(geom) for geom in element.findall("geom")],
         "bodies": [_body_payload(body) for body in element.findall("body")],
     }
+    xyaxes = _numbers(element.get("xyaxes"))
+    if xyaxes:
+        if len(xyaxes) != 6:
+            raise ValueError(
+                f"body {element.get('name')!r} must declare six xyaxes values"
+            )
+        payload["xyAxes"] = xyaxes
+    return payload
 
 
 def _material_payload(element: ElementTree.Element) -> dict[str, Any]:
@@ -96,6 +110,7 @@ def _actuator_assignments(value: str) -> dict[str, str]:
 @lru_cache(maxsize=4)
 def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
     root = ElementTree.parse(model_path).getroot()
+    camera_rig = load_camera_rig(model_path)
     custom = root.find("custom")
     if custom is None:
         raise ValueError("MuJoCo model has no custom metadata")
@@ -204,6 +219,43 @@ def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
             "center": canvas_center,
             "contactY": canvas_center[1],
             "nativeContactY": numeric["native_canvas_contact_y_m"][0],
+        },
+        "cameraRig": {
+            "version": camera_rig.version,
+            "geometryModel": camera_rig.geometry_model,
+            "calibrationStatus": camera_rig.calibration_status,
+            "normalization": camera_rig.normalization,
+            "focusModel": camera_rig.focus_model,
+            "observationEncoding": camera_rig.observation_encoding,
+            "shutterModel": camera_rig.shutter_model,
+            "canvasUvConvention": "origin_top_left_u_right_v_down",
+            "cameras": [
+                {
+                    "name": camera.name,
+                    "role": camera.role,
+                    "availability": camera.availability,
+                    "channels": camera.channels,
+                    "registration": camera.registration,
+                    "positionM": list(camera.position_m),
+                    "rotationCameraToWorld": [
+                        list(row) for row in camera.rotation_camera_to_world
+                    ],
+                    "fovyDeg": camera.fovy_deg,
+                    "resolutionPx": list(camera.resolution_px),
+                    "modelInputResolutionPx": list(
+                        camera.model_input_resolution_px
+                    ),
+                    "sampleRateHz": camera.sample_rate_hz,
+                    "incidenceDeg": canvas_incidence_angle_deg(
+                        camera, camera_rig.canvas
+                    ),
+                    "axialDepthRangeM": list(
+                        canvas_axial_depth_range_m(camera, camera_rig.canvas)
+                    ),
+                    "distortionModel": camera_rig.geometry_model,
+                }
+                for camera in camera_rig.cameras
+            ],
         },
         "brush": {
             "diameter": 2.0 * _numbers(bristle_contact.get("size"))[0],

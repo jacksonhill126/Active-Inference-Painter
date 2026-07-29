@@ -196,7 +196,17 @@ function buildBody(definition, parent) {
   const body = new THREE.Group();
   body.name = definition.name;
   body.position.copy(v3(definition.position));
+  if (definition.xyAxes) {
+    const xAxis = v3(definition.xyAxes.slice(0, 3)).normalize();
+    const yAxis = v3(definition.xyAxes.slice(3, 6));
+    yAxis.addScaledVector(xAxis, -yAxis.dot(xAxis)).normalize();
+    const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize();
+    body.quaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis),
+    );
+  }
   body.userData.basePosition = body.position.clone();
+  body.userData.baseQuaternion = body.quaternion.clone();
   parent.add(body);
   for (const joint of definition.joints) {
     jointNodes.set(joint.name, { node: body, definition: joint });
@@ -247,7 +257,7 @@ function applyJoint(name, value) {
 function updateRobot(robotState, contact) {
   for (const node of new Set([...jointNodes.values()].map((entry) => entry.node))) {
     node.position.copy(node.userData.basePosition);
-    node.quaternion.identity();
+    node.quaternion.copy(node.userData.baseQuaternion);
   }
   const q = robotState.jointPositionDeg;
   for (const name of robotModel.jointOrder) {

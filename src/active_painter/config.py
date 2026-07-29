@@ -3,6 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+SUMMARY_PLANNER_STATE_KIND = "summary"
+SPATIAL_MATERIAL_PLANNER_STATE_KIND = "spatial_material"
+SUMMARY_PLANNER_DEPRECATION = (
+    "planner_state_kind='summary' is an obsolete six-aggregate compatibility "
+    "fixture. It is non-spatial, predictively insufficient for image-making, "
+    "and must not be treated as a highest-level painting belief. Use "
+    "'spatial_material' only as the current provisional low-level material "
+    "baseline while the learned perceptual hierarchy is implemented."
+)
+
+
 @dataclass(slots=True)
 class PainterConfig:
     canvas_size: int = 48
@@ -18,17 +29,35 @@ class PainterConfig:
     base_observation_std: float = 0.008
     smear_observation_std: float = 0.02
     # Brush paint-handling model (generative process, below the policy
-    # boundary). Oil paint does not dry within a session: paint is laid at a
-    # consistent rate along a stroke and the canvas keeps its wetness (there is
-    # no wetness decay). The stroke's `amount` sets how heavily the brush is
-    # loaded before motion, which scales deposited thickness/opacity uniformly
-    # along the mark (a fuller brush lays thicker paint). The loaded/unloaded
-    # material state is physical: once loaded, contact and pressure determine
-    # deposition through press, sweep, and lift. Finite fresh-paint depletion
-    # is not yet calibrated, so load does not thin within a stroke.
-    # `amount` 0 -> brush_load_min, 1 -> brush_load_max.
+    # boundary). Oil paint does not dry within a session: the canvas keeps its
+    # wetness (there is no wetness decay). Brush load is a
+    # persistent normalized reservoir. The selected mark's `amount` scales its
+    # requested deposition, while the current load scales how much of that
+    # consequence can be realized. Contact consumes load; reloading resets it
+    # to full and resets its mixture to the selected brush color.
+    # `amount` 0 -> brush_load_min, 1 -> brush_load_max deposition scale.
     brush_load_min: float = 0.55
     brush_load_max: float = 1.45
+    # Mean deposited-film thickness that consumes one full normalized fresh
+    # load. Provisional until measured with repeated real brushmarks.
+    brush_load_capacity_thickness: float = 1.6
+    # Compact brush-loading generative-model assumptions. These values are
+    # provisional simulation priors, not claimed hardware calibration.
+    brush_initial_load_std: float = 0.03
+    brush_reload_load_std: float = 0.025
+    brush_reload_mixture_std: float = 0.02
+    brush_load_process_std: float = 0.06
+    brush_mixture_process_std: float = 0.10
+    brush_belief_depletion_per_mark: float = 0.32
+    brush_mark_amount_preference_std: float = 0.14
+    brush_mark_pigment_preference_std: float = 0.10
+    brush_deposition_likelihood_std: float = 0.08
+    brush_mixture_likelihood_std: float = 0.08
+    brush_reload_policy_prior: float = 0.08
+    brush_policy_precision: float = 1.0
+    brush_material_risk_precision: float = 1.0
+    brush_pigment_risk_precision: float = 1.0
+    brush_ambiguity_precision: float = 1.0
     # Directional (swept-capsule) footprint: each deposition step paints the
     # disc swept from the previous contact point, so travel elongates and
     # connects the mark. Round brush to start: the cross-stroke radius is
@@ -88,7 +117,10 @@ class PainterConfig:
 
     state_dim: int = 6
     action_dim: int = 12
-    planner_state_kind: str = "summary"
+    # Deprecated library default retained temporarily for checkpoint/test
+    # compatibility. Runtime entry points default to spatial_material and
+    # constructing an active driver with summary emits a FutureWarning.
+    planner_state_kind: str = SUMMARY_PLANNER_STATE_KIND
     spatial_grid_size: int = 16
     material_pyramid_levels: tuple[int, ...] = (64, 32, 16)
     spatial_material_channels: int = 6
@@ -236,9 +268,10 @@ class PainterConfig:
     post_stroke_retract_seconds: float = 0.35
     passage_local_retract_seconds: float = 0.12
     passage_center_retract_seconds: float = 0.65
-    global_planning_retract_depth: float = 4.0
+    global_planning_retract_depth: float = 3.0
     global_planning_clearance_fraction: float = 0.60
     global_planning_park_x_fraction: float = 0.0
+    global_planning_park_z_fraction: float = -0.5
     local_passage_retract_depth: float = 1.0
     hold_damping_multiplier: float = 3.5
     hold_target_joint_speed_deg_s: float = 60.0

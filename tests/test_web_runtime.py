@@ -36,6 +36,12 @@ from active_painter.web_robot_model import (
 
 def oracle_runtime(*args, **kwargs) -> WebSimRuntime:
     kwargs.setdefault("observation_access_mode", ORACLE_OBSERVATION_ACCESS_MODE)
+    # Most runtime contract tests intentionally retain the obsolete fast
+    # summary fixture. Tests of the research path opt into spatial_material
+    # explicitly.
+    kwargs.setdefault("planner_state_kind", "summary")
+    if kwargs["planner_state_kind"] == "summary":
+        kwargs.setdefault("driver_bootstrap_train_steps", 180)
     return WebSimRuntime(*args, **kwargs)
 
 
@@ -48,6 +54,10 @@ def test_web_runtime_defaults_to_fail_closed_sensor_boundary() -> None:
 
     assert runtime.agent_enabled is False
     assert runtime.agent_driver.trained_transitions == 0
+    assert runtime.planner_state_kind == "spatial_material"
+    assert runtime.agent_driver.diagnostics()["stateRepresentationLifecycle"][
+        "status"
+    ] == "provisional_low_level_material_baseline"
     assert runtime.agent_driver.diagnostics()["observationBoundary"][
         "modelAccessBlocked"
     ] is True
@@ -134,8 +144,8 @@ def test_web_runtime_uses_bounded_passage_planning_budget() -> None:
 def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     parser = build_parser()
 
-    spatial = parser.parse_args(["--planner-state-kind", "spatial_material"])
-    summary = parser.parse_args([])
+    spatial = parser.parse_args([])
+    summary = parser.parse_args(["--planner-state-kind", "summary"])
     overridden = parser.parse_args(
         [
             "--planner-state-kind",
@@ -157,6 +167,7 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert summary.checkpoint_save_every_transitions == 10
     assert summary.plant_backend == "native"
     assert summary.observation_mode == SENSOR_OBSERVATION_ACCESS_MODE
+    assert spatial.planner_state_kind == "spatial_material"
     assert parser.parse_args(["--plant-backend", "mujoco"]).plant_backend == "mujoco"
 
 
@@ -403,6 +414,56 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
     assert model["kinematics"]["upperArmLength"] == pytest.approx(0.3302)
     assert model["kinematics"]["lowerArmLength"] == pytest.approx(0.3302)
     assert model["canvas"]["center"] == pytest.approx([0.075, 0.4826, 0.350])
+    assert model["cameraRig"]["version"] == "provisional-multiview-v2"
+    assert model["cameraRig"]["normalization"] == "role_dependent_v1"
+    assert model["cameraRig"]["calibrationStatus"] == (
+        "provisional_simulation_geometry"
+    )
+    assert model["cameraRig"]["observationEncoding"] == (
+        "linear_grayscale_float32_normalized_0_1"
+    )
+    assert model["cameraRig"]["shutterModel"] == "global_shutter"
+    cameras = {
+        camera["name"]: camera for camera in model["cameraRig"]["cameras"]
+    }
+    assert set(cameras) == {
+        "canvas_right_oblique",
+        "canvas_left_oblique",
+        "canvas_inspection_deployed",
+        "brush_standoff_overhead",
+    }
+    assert cameras["canvas_right_oblique"]["incidenceDeg"] == pytest.approx(
+        31.7548481366
+    )
+    assert cameras["canvas_left_oblique"]["incidenceDeg"] == pytest.approx(
+        32.5724697676
+    )
+    assert cameras["canvas_inspection_deployed"]["availability"] == "park_only"
+    assert cameras["canvas_inspection_deployed"]["incidenceDeg"] == pytest.approx(
+        0.0
+    )
+    assert cameras["canvas_right_oblique"]["channels"] == "grayscale"
+    assert cameras["canvas_right_oblique"]["registration"] == (
+        "canvas_plane_homography"
+    )
+    assert cameras["canvas_right_oblique"]["modelInputResolutionPx"] == [
+        512,
+        512,
+    ]
+    assert cameras["canvas_right_oblique"]["sampleRateHz"] == pytest.approx(
+        30.0
+    )
+    assert cameras["brush_standoff_overhead"]["role"] == "brush_standoff"
+    assert cameras["brush_standoff_overhead"]["registration"] == (
+        "canvas_edge_profile"
+    )
+    assert cameras["brush_standoff_overhead"]["modelInputResolutionPx"] == [
+        640,
+        480,
+    ]
+    assert cameras["brush_standoff_overhead"]["sampleRateHz"] == pytest.approx(
+        60.0
+    )
     assert model["brush"]["diameter"] == pytest.approx(0.0127)
     assert model["brush"]["bendRangeRad"] == pytest.approx(
         [-0.349065850399, 0.349065850399]
@@ -430,8 +491,33 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         0.000453448276
     )
 
-    world_body_names = [body["name"] for body in model["world"]["bodies"]]
-    assert world_body_names == ["canvas", "base"]
+    world_bodies = {body["name"]: body for body in model["world"]["bodies"]}
+    assert set(world_bodies) == {
+        "canvas",
+        "canvas_right_camera_housing",
+        "canvas_left_camera_housing",
+        "canvas_inspection_camera_housing",
+        "brush_standoff_camera_housing",
+        "base",
+    }
+    assert world_bodies["canvas_right_camera_housing"]["xyAxes"] == pytest.approx(
+        [
+            0.880865989267,
+            0.473365724311,
+            0.0,
+            -0.123600957574,
+            0.230003724765,
+            0.965308805451,
+        ]
+    )
+    assert {
+        geom["name"]
+        for geom in world_bodies["canvas_inspection_camera_housing"]["geoms"]
+    } == {
+        "canvas_inspection_camera_body",
+        "canvas_inspection_camera_barrel",
+        "canvas_inspection_camera_glass",
+    }
 
 
 def test_web_robot_payload_tracks_physical_xml_edits() -> None:

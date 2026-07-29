@@ -9,6 +9,7 @@ import numpy as np
 
 from .arm_control import ik_pose_for_canvas_point
 from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES, clip_scalar
+from .brush_loading import BrushLoadBelief
 from .env import StrokeAction
 from .policies import MotorPrimitiveLatent
 
@@ -511,6 +512,8 @@ def _forecast_stroke_execution_once(
     motor_primitive: MotorPrimitiveLatent | None = None,
     dt: float = 1.0 / 90.0,
     noise_sample_index: int = 0,
+    brush_reload: bool = True,
+    brush_belief: BrushLoadBelief | None = None,
 ) -> ExecutionForecast:
     timing = timing or adaptive_stroke_timing(sim, action)
     controller = controller or controller_for_motor_primitive(motor_primitive)
@@ -519,7 +522,16 @@ def _forecast_stroke_execution_once(
     working.plant.select_forecast_noise_sample(noise_sample_index)
     _jitter_body_parameters(working, noise_sample_index)
     before_state = summary_fn(working)
-    working.load_brush(action.amount, action.tone)
+    working.select_brush(action.tone)
+    working.deposition_amount = action.amount
+    if brush_reload:
+        working.load_brush(1.0, action.tone)
+    elif brush_belief is not None:
+        # Generative-model forecast from q(brush), never from the exact process
+        # brush reservoir hidden inside the simulator snapshot.
+        working.brush.reload(brush_belief.load_mean, action.tone)
+        working.brush.fresh_tone = brush_belief.black_fraction_mean
+        working.brush.carried_tone = brush_belief.black_fraction_mean
     controller.reset(working, action, timing)
 
     intended_points: list[tuple[float, float]] = []
@@ -762,6 +774,8 @@ def forecast_stroke_execution(
     motor_primitive: MotorPrimitiveLatent | None = None,
     dt: float = 1.0 / 90.0,
     rollout_samples: int | None = None,
+    brush_reload: bool = True,
+    brush_belief: BrushLoadBelief | None = None,
 ) -> ExecutionForecast:
     """Monte Carlo predictive density over canvas and proprioceptive outcomes."""
 
@@ -779,6 +793,8 @@ def forecast_stroke_execution(
             motor_primitive=motor_primitive,
             dt=dt,
             noise_sample_index=index,
+            brush_reload=brush_reload,
+            brush_belief=brush_belief,
         )
         for index in range(sample_count)
     ]
@@ -848,7 +864,15 @@ def forecast_stroke_execution(
 
 def forecast_stroke_executions_batch(
     sim: ArmPainterSim,
-    requests: Sequence[tuple[StrokeAction, MotorPrimitiveLatent | None]],
+    requests: Sequence[
+        tuple[StrokeAction, MotorPrimitiveLatent | None]
+        | tuple[
+            StrokeAction,
+            MotorPrimitiveLatent | None,
+            bool,
+            BrushLoadBelief | None,
+        ]
+    ],
     summary_fn: Callable[[ArmPainterSim], np.ndarray],
     *,
     dt: float = 1.0 / 90.0,
@@ -867,8 +891,21 @@ def forecast_stroke_executions_batch(
     if not request_list:
         return []
 
-    def run(request: tuple[StrokeAction, MotorPrimitiveLatent | None]) -> ExecutionForecast:
-        action, motor_primitive = request
+    def run(
+        request: tuple[StrokeAction, MotorPrimitiveLatent | None]
+        | tuple[
+            StrokeAction,
+            MotorPrimitiveLatent | None,
+            bool,
+            BrushLoadBelief | None,
+        ],
+    ) -> ExecutionForecast:
+        if len(request) == 2:
+            action, motor_primitive = request
+            brush_reload = True
+            brush_belief = None
+        else:
+            action, motor_primitive, brush_reload, brush_belief = request
         return forecast_stroke_execution(
             sim,
             action,
@@ -876,6 +913,8 @@ def forecast_stroke_executions_batch(
             motor_primitive=motor_primitive,
             dt=dt,
             rollout_samples=rollout_samples,
+            brush_reload=brush_reload,
+            brush_belief=brush_belief,
         )
 
     worker_count = min(len(request_list), max(1, int(max_workers)))

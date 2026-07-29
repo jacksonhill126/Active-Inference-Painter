@@ -397,6 +397,60 @@ def test_half_inch_brush_has_axial_compliance_and_bounded_canvas_contact() -> No
     assert _floats(canvas.attrib["size"]) == pytest.approx((0.254, 0.00635, 0.254))
 
 
+def test_camera_housing_envelopes_share_optical_frames_and_stay_behind_lenses() -> None:
+    root = _root()
+    worldbody = root.find("./worldbody")
+    assert worldbody is not None
+    defaults = {
+        element.attrib["class"]: element
+        for element in root.findall("./default/default")
+    }
+    camera_visual = defaults["camera_visual"].find("./geom")
+    assert camera_visual is not None
+    assert camera_visual.attrib["contype"] == "0"
+    assert camera_visual.attrib["conaffinity"] == "0"
+    assert camera_visual.attrib["group"] == "2"
+
+    cameras = _named_elements(root, "./worldbody/camera")
+    bodies = _named_elements(root, "./worldbody/body")
+    for camera_name in (
+        "canvas_right_oblique",
+        "canvas_left_oblique",
+        "canvas_inspection_deployed",
+        "brush_standoff_overhead",
+    ):
+        housing_name = {
+            "canvas_right_oblique": "canvas_right_camera_housing",
+            "canvas_left_oblique": "canvas_left_camera_housing",
+            "canvas_inspection_deployed": "canvas_inspection_camera_housing",
+            "brush_standoff_overhead": "brush_standoff_camera_housing",
+        }[camera_name]
+        camera = cameras[camera_name]
+        housing = bodies[housing_name]
+        assert _floats(housing.attrib["pos"]) == pytest.approx(
+            _floats(camera.attrib["pos"])
+        )
+        assert _floats(housing.attrib["xyaxes"]) == pytest.approx(
+            _floats(camera.attrib["xyaxes"])
+        )
+        geoms = list(housing.findall("./geom"))
+        assert len(geoms) == 3
+        assert all(geom.attrib["class"] == "camera_visual" for geom in geoms)
+
+        body_geom = next(geom for geom in geoms if geom.attrib["type"] == "box")
+        body_position = _floats(body_geom.attrib["pos"])
+        body_half_size = _floats(body_geom.attrib["size"])
+        assert body_position[2] - body_half_size[2] > 0.0
+
+        axial_geoms = [
+            geom for geom in geoms if geom.attrib["type"] == "cylinder"
+        ]
+        assert all(
+            min(_floats(geom.attrib["fromto"])[2::3]) > 0.0
+            for geom in axial_geoms
+        )
+
+
 def test_mujoco_compiles_with_stable_adapter_names_and_separated_anchors() -> None:
     mujoco = pytest.importorskip("mujoco")
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
@@ -409,7 +463,19 @@ def test_mujoco_compiles_with_stable_adapter_names_and_separated_anchors() -> No
     assert model.pair_friction[0] == pytest.approx(
         (0.85, 0.85, 0.03, 0.001, 0.001)
     )
-    assert model.nkey == 4
+    assert model.nkey == 5
+    assert [
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_CAMERA, index)
+        for index in range(model.ncam)
+    ] == [
+        "overview",
+        "canvas_view",
+        "top_view",
+            "canvas_right_oblique",
+            "canvas_left_oblique",
+            "canvas_inspection_deployed",
+            "brush_standoff_overhead",
+        ]
     assert [
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, index)
         for index in range(model.njnt)

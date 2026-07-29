@@ -1,0 +1,139 @@
+{
+  "schema_version": "camera-pose-sweep-v1",
+  "model_path": "C:\\Users\\hilljx\\Downloads\\active_inference_painter_python_v0_1\\models\\active_inference_painter.xml",
+  "camera_rig_version": "provisional-multiview-v2",
+  "grid_size": 9,
+  "roll_sweep_deg": [
+    -32.0,
+    0.0,
+    32.0
+  ],
+  "contact_pose_count": 243,
+  "ray_grid_size": 9,
+  "max_ik_residual_m": 2.2011216082454675e-09,
+  "continuous_contact_tip_visible_union_fraction": 1.0,
+  "cameras": {
+    "canvas_right_oblique": {
+      "role": "contact_tracking",
+      "availability": "continuous",
+      "registration": "canvas_plane_homography",
+      "channels": "grayscale",
+      "model_input_resolution_px": [
+        512,
+        512
+      ],
+      "sample_rate_hz": 30.0,
+      "tip_in_frame_fraction": 1.0,
+      "tip_visible_fraction": 0.9958847736625515,
+      "canvas_visible_fraction_min": 0.8395061728395061,
+      "canvas_visible_fraction_mean": 0.9383732154651223,
+      "by_roll": {
+        "-32": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.8765432098765432
+        },
+        "+0": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.8395061728395061
+        },
+        "+32": {
+          "tip_visible_fraction": 0.9876543209876543,
+          "canvas_visible_fraction_min": 0.8641975308641975
+        }
+      }
+    },
+    "canvas_left_oblique": {
+      "role": "contact_tracking",
+      "availability": "continuous",
+      "registration": "canvas_plane_homography",
+      "channels": "grayscale",
+      "model_input_resolution_px": [
+        512,
+        512
+      ],
+      "sample_rate_hz": 30.0,
+      "tip_in_frame_fraction": 1.0,
+      "tip_visible_fraction": 0.9835390946502057,
+      "canvas_visible_fraction_min": 0.8024691358024691,
+      "canvas_visible_fraction_mean": 0.9365442259818118,
+      "by_roll": {
+        "-32": {
+          "tip_visible_fraction": 0.9506172839506173,
+          "canvas_visible_fraction_min": 0.8024691358024691
+        },
+        "+0": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.8518518518518519
+        },
+        "+32": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.8148148148148148
+        }
+      }
+    },
+    "canvas_inspection_deployed": {
+      "role": "canvas_inspection",
+      "availability": "park_only",
+      "registration": "canvas_plane_homography",
+      "channels": "grayscale",
+      "model_input_resolution_px": [
+        512,
+        512
+      ],
+      "sample_rate_hz": 5.0,
+      "tip_in_frame_fraction": 1.0,
+      "tip_visible_fraction": 0.9917695473251029,
+      "canvas_visible_fraction_min": 0.0,
+      "canvas_visible_fraction_mean": 0.7967789462988366,
+      "by_roll": {
+        "-32": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.0
+        },
+        "+0": {
+          "tip_visible_fraction": 0.9753086419753086,
+          "canvas_visible_fraction_min": 0.0
+        },
+        "+32": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.0
+        }
+      }
+    },
+    "brush_standoff_overhead": {
+      "role": "brush_standoff",
+      "availability": "continuous",
+      "registration": "canvas_edge_profile",
+      "channels": "grayscale",
+      "model_input_resolution_px": [
+        640,
+        480
+      ],
+      "sample_rate_hz": 60.0,
+      "tip_in_frame_fraction": 1.0,
+      "tip_visible_fraction": 1.0,
+      "canvas_visible_fraction_min": 0.9012345679012346,
+      "canvas_visible_fraction_mean": 0.9681959050957681,
+      "by_roll": {
+        "-32": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.9012345679012346
+        },
+        "+0": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.9012345679012346
+        },
+        "+32": {
+          "tip_visible_fraction": 1.0,
+          "canvas_visible_fraction_min": 0.9012345679012346
+        }
+      }
+    }
+  },
+  "approximations": [
+    "Camera and mount visual geoms are excluded from sensor rays.",
+    "The deployed inspection camera is evaluated during contact only as a hypothetical optical reference; it is park-only.",
+    "MuJoCo grayscale shading does not include paint appearance, lens distortion, glare, blur, exposure dynamics, or sensor noise.",
+    "Bristle visibility is segmentation-based at model input resolution; it is not a learned detector score."
+  ]
+}

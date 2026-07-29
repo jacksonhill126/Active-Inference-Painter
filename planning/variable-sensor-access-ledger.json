@@ -1,7 +1,7 @@
 {
   "schema_version": "sensor-access-ledger-v0",
   "accepted_date": "2026-07-24",
-  "updated_date": "2026-07-28",
+  "updated_date": "2026-07-29",
   "baseline": {
     "id": "baseline-oracle-v0",
     "observation_mode": "oracle_material_state",
@@ -55,6 +55,7 @@
       "values": [
         "target_pose",
         "brush_tone",
+        "deposition_amount",
         "intended_contact_pressure",
         "brush_flow",
         "control_damping_multiplier"
@@ -75,7 +76,7 @@
         "canvas",
         "actual_pose",
         "contact",
-        "brush",
+        "brushes",
         "_painting",
         "_previous_brush_world",
         "_tip_lag_world"
@@ -350,9 +351,9 @@
         "wobble_amps"
       ],
       "classification": "hidden_state",
-      "consumers": ["paint process", "motor forecast initialization"],
-      "current_access": ["privileged forecast state", "privileged future-noise state"],
-      "likelihood_status": "The complete brush state and RNG are copied into planning rollouts.",
+      "consumers": ["paint process", "simulator diagnostics"],
+      "current_access": ["generative-process truth", "privileged future-noise state"],
+      "likelihood_status": "The process keeps exact brush state. Planner forecasts now overwrite load and average pigment from q(brush), but copied brush RNG remains privileged.",
       "physical_analogue": "Brush load and contamination require latent-state inference; random bristle realization is unobservable before contact.",
       "research_status": "oracle_only",
       "blockers": ["AI-202", "AI-203", "AI-204", "AI-205", "AI-216"]
@@ -434,7 +435,7 @@
         "deep copy of ArmPainterSim",
         "exact JointPlant dynamic state",
         "exact JointPlant RNG state",
-        "exact Brush state",
+        "exact Brush bristle and RNG state; load and average mixture overwritten from q(brush)",
         "exact Brush RNG state",
         "exact VerticalCanvas material state",
         "exact ContactState"

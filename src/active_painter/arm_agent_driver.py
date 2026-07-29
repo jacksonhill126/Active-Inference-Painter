@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import time
 from typing import Any, Callable
+import warnings
 
 import numpy as np
 import torch
@@ -14,7 +15,17 @@ from .action_encoding import encoded_action_vector
 from .agent import ActiveInferencePainter
 from .arm_control import ik_pose_for_canvas_point
 from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES
-from .config import PainterConfig
+from .brush_loading import (
+    BrushLoadBelief,
+    BrushLoadingModel,
+    BrushPreparationInference,
+)
+from .config import (
+    PainterConfig,
+    SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+    SUMMARY_PLANNER_DEPRECATION,
+    SUMMARY_PLANNER_STATE_KIND,
+)
 from .canvas_hierarchy import PASSAGE_STEP_DESCRIPTOR_DIM
 from .efe import EFEComponents
 from .env import StrokeAction
@@ -26,7 +37,14 @@ from .motor_planning import (
     motor_realization_policy_alternatives,
 )
 from .motor_reliability import MotionReliabilityLedger, execution_error_ratio_sq
-from .policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy, policy_stop_log_prior
+from .policies import (
+    BrushPreparationPolicy,
+    MotorPrimitiveLatent,
+    PassageLatent,
+    PassagePlanLatent,
+    Policy,
+    policy_stop_log_prior,
+)
 from .passage_inference import PassageBelief, infer_passage_observation
 from .spatial_agent import SpatialActiveInferencePainter
 from .spatial_efe import SpatialEFEComponents
@@ -70,6 +88,7 @@ class StrokeExecution:
     initial_state: np.ndarray | SpatialCanvasState | None = None
     forecast: ExecutionForecast | None = None
     motor_primitive: MotorPrimitiveLatent | None = None
+    brush_preparation: BrushPreparationPolicy | None = None
     timing: StrokeTiming = field(default_factory=StrokeTiming)
     controller: ContactAwareStrokeController = field(default_factory=ContactAwareStrokeController)
     initialized: bool = False
@@ -178,9 +197,24 @@ class ArmActiveInferenceDriver:
     _cached_belief_gap: float | None = field(default=None, init=False)
     _cached_passage_trajectory: dict[str, object] | None = field(default=None, init=False)
     motion_reliability: MotionReliabilityLedger = field(init=False)
+    brush_loading_model: BrushLoadingModel = field(init=False)
+    brush_load_beliefs: dict[str, BrushLoadBelief] = field(init=False)
+    last_brush_preparation: BrushPreparationInference | None = field(default=None, init=False)
     _observation_boundary_blocked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        if self.config.planner_state_kind == SUMMARY_PLANNER_STATE_KIND:
+            warnings.warn(
+                SUMMARY_PLANNER_DEPRECATION,
+                FutureWarning,
+                stacklevel=2,
+            )
+        elif self.config.planner_state_kind != SPATIAL_MATERIAL_PLANNER_STATE_KIND:
+            raise ValueError(
+                "planner_state_kind must be "
+                f"{SUMMARY_PLANNER_STATE_KIND!r} or "
+                f"{SPATIAL_MATERIAL_PLANNER_STATE_KIND!r}."
+            )
         if self.observation_access_mode not in {
             SENSOR_OBSERVATION_ACCESS_MODE,
             ORACLE_OBSERVATION_ACCESS_MODE,
@@ -203,6 +237,11 @@ class ArmActiveInferenceDriver:
         else:
             self.agent = ActiveInferencePainter(self.config, seed=17, device=self.device)
         self.motion_reliability = MotionReliabilityLedger(self.config)
+        self.brush_loading_model = BrushLoadingModel(self.config)
+        self.brush_load_beliefs = {
+            "white": self.brush_loading_model.unloaded_belief(0.0),
+            "black": self.brush_loading_model.unloaded_belief(1.0),
+        }
         self.belief = self.agent.belief
         self.checkpoint_architecture = self._checkpoint_architecture_metadata()
         loaded = self._load_checkpoint_if_available()
@@ -471,11 +510,16 @@ class ArmActiveInferenceDriver:
             self._contact_release_count = 0
             self._cached_belief_gap = None
             self._cached_passage_trajectory = None
+            self.brush_load_beliefs = {
+                "white": self.brush_loading_model.unloaded_belief(0.0),
+                "black": self.brush_loading_model.unloaded_belief(1.0),
+            }
+            self.last_brush_preparation = None
         if self._observation_boundary_blocked:
             # Do not even touch the process object from the model-facing reset
             # path.  A separate execution/runtime reset owns plant mutations.
             return
-        sim.unload_brush()
+        sim.unload_all_brushes()
         state = self._observe(sim)
         if isinstance(self.agent, SpatialActiveInferencePainter) and isinstance(state, SpatialCanvasState):
             self.agent.reset_hierarchy_beliefs(state)
@@ -488,7 +532,10 @@ class ArmActiveInferenceDriver:
         return self.belief
 
     def _uses_spatial_planner(self) -> bool:
-        return self.config.planner_state_kind == "spatial_material"
+        return (
+            self.config.planner_state_kind
+            == SPATIAL_MATERIAL_PLANNER_STATE_KIND
+        )
 
     def _planner_state(self, sim: ArmPainterSim) -> np.ndarray | SpatialCanvasState:
         self._require_oracle_diagnostic_mode("planner state construction")
@@ -513,6 +560,22 @@ class ArmActiveInferenceDriver:
         if isinstance(state, SpatialCanvasState):
             return state.material_coverage_mean(self.config.paint_presence_threshold)
         return float(state[0])
+
+    @staticmethod
+    def _brush_key(tone: float) -> str:
+        return "black" if tone >= 0.5 else "white"
+
+    def _infer_brush_preparation(
+        self,
+        action: StrokeAction,
+    ) -> BrushPreparationInference:
+        """Infer an instantaneous preparation policy from q(brush load)."""
+
+        key = self._brush_key(action.tone)
+        return self.brush_loading_model.infer_preparation(
+            self.brush_load_beliefs[key],
+            action,
+        )
 
     def _reset_agent_belief(self, state: np.ndarray | SpatialCanvasState) -> None:
         if self._uses_spatial_planner():
@@ -669,27 +732,51 @@ class ArmActiveInferenceDriver:
 
     def _contact_escape_pose(self, sim: ArmPainterSim, scope: str) -> ArmPose | None:
         tip = sim.kinematics.tip(sim.actual_pose)
-        near_or_on_canvas = sim.contact.on_canvas and (
-            sim.contact.pressure > 0.01 or float(tip[1]) > sim.canvas.distance - 0.08
+        depth = (
+            self.config.local_passage_retract_depth
+            if scope == "passage"
+            else self.config.global_planning_retract_depth
         )
-        if not near_or_on_canvas:
+        required_clearance = max(0.35, 0.5 * depth)
+        if scope == "global":
+            required_clearance = max(
+                required_clearance,
+                0.5,
+                float(self.config.global_planning_clearance_fraction) * depth,
+            )
+        near_contact = sim.contact.on_canvas and (
+            sim.contact.pressure > 0.01
+            or float(tip[1]) > sim.canvas.distance - 0.08
+        )
+        escape_in_progress = self._hold_pose is None or self._hold_scope != scope
+        if not near_contact and not escape_in_progress:
+            return None
+        # Continue the approximately Cartesian straight-back escape after
+        # contact releases. Otherwise joint-space interpolation toward the low
+        # camera-clear park can arc the tip back toward the canvas before
+        # sufficient normal clearance has been established.
+        if (
+            sim.contact.pressure <= 0.01
+            and float(tip[1]) <= sim.canvas.distance - required_clearance
+        ):
             return None
         lateral_limit = 0.46 * min(sim.canvas.width, sim.canvas.height)
         x = float(np.clip(tip[0], -lateral_limit, lateral_limit))
         z = float(np.clip(tip[2], -lateral_limit, lateral_limit))
         if not np.isfinite(x) or not np.isfinite(z):
             x, z = self._active_passage_world_center(sim) if scope == "passage" else (0.0, 0.0)
-        depth = self.config.local_passage_retract_depth if scope == "passage" else self.config.global_planning_retract_depth
         pose = ik_pose_for_canvas_point(x, z, sim.canvas.distance - depth)
         tip = sim.kinematics.tip(pose)
-        min_clearance = max(0.35, 0.5 * depth)
-        if not np.all(np.isfinite(tip)) or float(tip[1]) > sim.canvas.distance - min_clearance:
+        if (
+            not np.all(np.isfinite(tip))
+            or float(tip[1]) > sim.canvas.distance - required_clearance
+        ):
             return self._passage_hold_pose(sim) if scope == "passage" else self._global_hold_pose(sim)
         return pose
 
     def _global_hold_pose(self, sim: ArmPainterSim) -> ArmPose:
         x = float(self.config.global_planning_park_x_fraction) * sim.canvas.width
-        z = 0.0
+        z = float(self.config.global_planning_park_z_fraction) * sim.canvas.height
         return ik_pose_for_canvas_point(x, z, sim.canvas.distance - self.config.global_planning_retract_depth)
 
     def _global_retraction_ready(self, sim: ArmPainterSim) -> bool:
@@ -869,8 +956,14 @@ class ArmActiveInferenceDriver:
                     efe=component,
                     posterior=float(posterior),
                     initial_state=self._planner_state(body_snapshot),
-                    forecast=self._profiled_forecast_action(body_snapshot, policy.actions[0], primitive),
+                    forecast=self._profiled_forecast_action(
+                        body_snapshot,
+                        policy.actions[0],
+                        primitive,
+                        policy.brush_preparation,
+                    ),
                     motor_primitive=primitive,
+                    brush_preparation=policy.brush_preparation,
                     controller=controller_for_motor_primitive(primitive),
                 )
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
@@ -1038,8 +1131,14 @@ class ArmActiveInferenceDriver:
                     efe=efe,
                     posterior=float(prob),
                     initial_state=state,
-                    forecast=self._profiled_forecast_action(body_snapshot, action, motor_primitive),
+                    forecast=self._profiled_forecast_action(
+                        body_snapshot,
+                        action,
+                        motor_primitive,
+                        policy.brush_preparation,
+                    ),
                     motor_primitive=motor_primitive,
+                    brush_preparation=policy.brush_preparation,
                     controller=controller_for_motor_primitive(motor_primitive),
                 )
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
@@ -1116,16 +1215,29 @@ class ArmActiveInferenceDriver:
         sim: ArmPainterSim | None,
         action: StrokeAction,
         motor_primitive: MotorPrimitiveLatent | None = None,
+        brush_preparation: BrushPreparationPolicy | None = None,
     ) -> ExecutionForecast | None:
         if sim is None or action.stop:
             return None
-        key = self._forecast_cache_key(action, motor_primitive)
+        belief = self.brush_load_beliefs[self._brush_key(action.tone)]
+        key = self._forecast_cache_key(
+            action,
+            motor_primitive,
+            brush_preparation,
+            belief,
+        )
         cached = self._planning_forecast_cache.get(key)
         if cached is not None:
             self._profile_increment("selectedForecastCacheHits")
             return cached
         started = time.perf_counter()
-        forecast = self._forecast_action(sim, action, motor_primitive)
+        forecast = self._forecast_action(
+            sim,
+            action,
+            motor_primitive,
+            brush_preparation,
+            belief,
+        )
         self._profile_add_seconds("selectedForecastSeconds", time.perf_counter() - started)
         return forecast
 
@@ -1133,9 +1245,27 @@ class ArmActiveInferenceDriver:
         self,
         action: StrokeAction,
         motor_primitive: MotorPrimitiveLatent | None,
+        brush_preparation: BrushPreparationPolicy | None = None,
+        brush_belief: BrushLoadBelief | None = None,
     ) -> tuple[object, ...]:
         primitive_key = "" if motor_primitive is None else motor_primitive.kind
-        return tuple(float(x) for x in action.vector()) + (primitive_key,)
+        preparation_key = (
+            "reload"
+            if brush_preparation is None
+            else brush_preparation.kind
+        )
+        belief_key: tuple[object, ...] = ()
+        if brush_belief is not None:
+            belief_key = (
+                brush_belief.revision,
+                round(brush_belief.load_mean, 6),
+                round(brush_belief.black_fraction_mean, 6),
+            )
+        return (
+            tuple(float(x) for x in action.vector())
+            + (primitive_key, preparation_key)
+            + belief_key
+        )
 
     def _refresh_composition_diagnostics(self, policy: Policy | None = None) -> None:
         # Cached so UI polling never runs a model forward concurrently with
@@ -1227,11 +1357,13 @@ class ArmActiveInferenceDriver:
         if not self._passage_queue:
             return
         action = self._passage_queue.pop(0)
+        preparation = self._infer_brush_preparation(action)
         self.current = StrokeExecution(
             action=action,
             efe=self.last_components if self.last_components is not None else EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             posterior=1.0,
             initial_state=self._planner_state(sim),
+            brush_preparation=preparation.selected,
             controller=ContactAwareStrokeController(),
         )
         self._hold_pose = None
@@ -1245,7 +1377,21 @@ class ArmActiveInferenceDriver:
         self._hold_command_velocity = {}
         if not ex.initialized:
             ex.timing = adaptive_stroke_timing(sim, ex.action)
-            sim.load_brush(ex.action.amount, ex.action.tone)
+            preparation = self._infer_brush_preparation(ex.action)
+            if ex.brush_preparation is None:
+                ex.brush_preparation = preparation.selected
+            self.last_brush_preparation = preparation
+            key = self._brush_key(ex.action.tone)
+            sim.select_brush(ex.action.tone)
+            sim.deposition_amount = ex.action.amount
+            if ex.brush_preparation.kind == "reload":
+                sim.load_brush(1.0, ex.action.tone)
+                self.brush_load_beliefs[key] = (
+                    self.brush_loading_model.reload_transition(
+                        self.brush_load_beliefs[key],
+                        ex.action.tone,
+                    )
+                )
             ex.controller.reset(sim, ex.action, ex.timing)
             ex.initialized = True
         ex.t += dt
@@ -1275,6 +1421,11 @@ class ArmActiveInferenceDriver:
             ex.realized_contact_samples += 1
         if ex.t >= ex.total:
             self._observe_motion_reliability(ex)
+            key = self._brush_key(ex.action.tone)
+            self.brush_load_beliefs[key] = self.brush_loading_model.stroke_transition(
+                self.brush_load_beliefs[key],
+                ex.action,
+            )
             self.stroke_count += 1
             self.last_execution_forecast = ex.forecast
             self.current = None
@@ -1406,10 +1557,24 @@ class ArmActiveInferenceDriver:
         resolved: list[ExecutionForecast | None] = [None] * len(motor_policies)
         missing_indices: list[int] = []
         missing_keys: list[tuple[object, ...]] = []
-        missing_requests: list[tuple[StrokeAction, MotorPrimitiveLatent | None]] = []
+        missing_requests: list[
+            tuple[
+                StrokeAction,
+                MotorPrimitiveLatent | None,
+                bool,
+                BrushLoadBelief | None,
+            ]
+        ] = []
         for index, motor_policy in enumerate(motor_policies):
             primitive = motor_policy.motor_primitive
-            key = self._forecast_cache_key(action, primitive)
+            preparation = motor_policy.brush_preparation
+            belief = self.brush_load_beliefs[self._brush_key(action.tone)]
+            key = self._forecast_cache_key(
+                action,
+                primitive,
+                preparation,
+                belief,
+            )
             cached = forecast_cache.get(key)
             if cached is not None:
                 resolved[index] = cached
@@ -1417,7 +1582,14 @@ class ArmActiveInferenceDriver:
                 continue
             missing_indices.append(index)
             missing_keys.append(key)
-            missing_requests.append((action, primitive))
+            missing_requests.append(
+                (
+                    action,
+                    primitive,
+                    preparation is None or preparation.kind == "reload",
+                    belief,
+                )
+            )
 
         if missing_requests:
             started = time.perf_counter()
@@ -1467,7 +1639,21 @@ class ArmActiveInferenceDriver:
         believed_coverage = float(belief.mean[0].item())
         stop_indices = [i for i, policy in enumerate(policies) if policy.actions[0].stop]
         non_stop_indices = [i for i, policy in enumerate(policies) if not policy.actions[0].stop]
-        non_stop_indices = sorted(non_stop_indices, key=lambda i: base_components[i].total)
+        brush_inferences: dict[int, BrushPreparationInference] = {}
+        for index in non_stop_indices:
+            inference = self._infer_brush_preparation(policies[index].actions[0])
+            brush_inferences[index] = inference
+            policies[index] = replace(
+                policies[index],
+                brush_preparation=inference.selected,
+            )
+        non_stop_indices = sorted(
+            non_stop_indices,
+            key=lambda i: (
+                self.config.policy_precision * base_components[i].total
+                - brush_inferences[i].log_evidence
+            ),
+        )
         forecast_budget = max(1, self.config.motor_forecast_candidates)
         components: list[EFEComponents] = list(base_components)
         rejections = 0
@@ -1486,6 +1672,7 @@ class ArmActiveInferenceDriver:
             first_action = policy.actions[0]
             if first_action.stop:
                 return True
+            brush_inference = brush_inferences[index]
             alternatives: list[tuple[Policy, EFEComponents, bool]] = []
             motor_policies = motor_realization_policy_alternatives(policy, self.config)
             motor_primitive_candidates += len(motor_policies)
@@ -1546,7 +1733,12 @@ class ArmActiveInferenceDriver:
             )
             policies[index] = best_policy
             components[index] = best_component
-            painting_log_evidence[index] = log_evidence
+            # Approximation: preparation is marginalized under its explicit
+            # mark-outcome EFE, while motor likelihoods are forecast only for
+            # the modal preparation policy to keep rollout cost bounded.
+            painting_log_evidence[index] = (
+                log_evidence + brush_inference.log_evidence
+            )
             forecasted_indices.add(index)
             if best_feasible:
                 active_indices.append(index)
@@ -1582,6 +1774,10 @@ class ArmActiveInferenceDriver:
         )
         active_posterior = torch.softmax(active_logits - active_logits.max(), dim=0)
         self._profile_set("motorRealizationMarginalization", "logsumexp over declared motor policy prior")
+        self._profile_set(
+            "brushPreparationMarginalization",
+            "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        )
         posterior_values = [0.0 for _ in policies]
         for index, prob in zip(active_indices, active_posterior.detach().cpu().tolist()):
             posterior_values[index] = prob
@@ -1620,7 +1816,21 @@ class ArmActiveInferenceDriver:
         believed_coverage = belief.material_coverage_mean(self.config.paint_presence_threshold)
         stop_indices = [i for i, policy in enumerate(policies) if policy.actions[0].stop]
         non_stop_indices = [i for i, policy in enumerate(policies) if not policy.actions[0].stop]
-        non_stop_indices = sorted(non_stop_indices, key=lambda i: base_components[i].total)
+        brush_inferences: dict[int, BrushPreparationInference] = {}
+        for index in non_stop_indices:
+            inference = self._infer_brush_preparation(policies[index].actions[0])
+            brush_inferences[index] = inference
+            policies[index] = replace(
+                policies[index],
+                brush_preparation=inference.selected,
+            )
+        non_stop_indices = sorted(
+            non_stop_indices,
+            key=lambda i: (
+                self.config.policy_precision * base_components[i].total
+                - brush_inferences[i].log_evidence
+            ),
+        )
         forecast_budget = max(1, self.config.motor_forecast_candidates)
         components: list[SpatialEFEComponents] = list(base_components)
         rejections = 0
@@ -1655,6 +1865,7 @@ class ArmActiveInferenceDriver:
             first_action = policy.actions[0]
             if first_action.stop:
                 return True
+            brush_inference = brush_inferences[index]
             alternatives: list[tuple[Policy, SpatialEFEComponents, bool]] = []
             motor_policies = motor_realization_policy_alternatives(policy, self.config)
             motor_primitive_candidates += len(motor_policies)
@@ -1734,7 +1945,12 @@ class ArmActiveInferenceDriver:
             )
             policies[index] = best_policy
             components[index] = best_component
-            painting_log_evidence[index] = log_evidence
+            # Approximation: preparation is marginalized under its explicit
+            # mark-outcome EFE, while motor likelihoods are forecast only for
+            # the modal preparation policy to keep rollout cost bounded.
+            painting_log_evidence[index] = (
+                log_evidence + brush_inference.log_evidence
+            )
             forecasted_indices.add(index)
             if best_feasible:
                 active_indices.append(index)
@@ -1770,6 +1986,10 @@ class ArmActiveInferenceDriver:
         )
         active_posterior = torch.softmax(active_logits - active_logits.max(), dim=0)
         self._profile_set("motorRealizationMarginalization", "logsumexp over declared motor policy prior")
+        self._profile_set(
+            "brushPreparationMarginalization",
+            "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        )
         posterior_values = [0.0 for _ in policies]
         for index, prob in zip(active_indices, active_posterior.detach().cpu().tolist()):
             posterior_values[index] = prob
@@ -1817,6 +2037,8 @@ class ArmActiveInferenceDriver:
         sim: ArmPainterSim | None,
         action: StrokeAction,
         motor_primitive: MotorPrimitiveLatent | None = None,
+        brush_preparation: BrushPreparationPolicy | None = None,
+        brush_belief: BrushLoadBelief | None = None,
     ) -> ExecutionForecast | None:
         if sim is None or action.stop:
             return None
@@ -1826,6 +2048,11 @@ class ArmActiveInferenceDriver:
             canvas_summary_state,
             motor_primitive=motor_primitive,
             dt=1.0 / 45.0,
+            brush_reload=(
+                brush_preparation is None
+                or brush_preparation.kind == "reload"
+            ),
+            brush_belief=brush_belief,
         )
 
     def diagnostics(self) -> dict[str, Any]:
@@ -1933,6 +2160,65 @@ class ArmActiveInferenceDriver:
             "motorPrimitiveCandidateCount": self.last_motor_primitive_candidates,
             "motorPrimitivePosteriorMass": motor_posterior_mass,
             "executionForecast": self._execution_forecast_diagnostics(),
+            "stateRepresentationLifecycle": (
+                {
+                    "kind": SUMMARY_PLANNER_STATE_KIND,
+                    "status": "obsolete_compatibility_fixture",
+                    "architecturalRole": (
+                        "regression, tractable-reference, and checkpoint compatibility only"
+                    ),
+                    "notValidAs": (
+                        "a highest-level painting belief or image-making representation"
+                    ),
+                    "replacementDirection": (
+                        "learned multiscale perceptual latents optimized and validated "
+                        "for prediction; spatial_material is only an interim low-level baseline"
+                    ),
+                }
+                if self.config.planner_state_kind
+                == SUMMARY_PLANNER_STATE_KIND
+                else {
+                    "kind": SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+                    "status": "provisional_low_level_material_baseline",
+                    "architecturalRole": (
+                        "localized material transition prediction and simulator research"
+                    ),
+                    "notValidAs": (
+                        "the final abstract or painting-level latent hierarchy"
+                    ),
+                    "replacementDirection": (
+                        "learned camera-conditioned perceptual and slower predictive latents"
+                    ),
+                }
+            ),
+            "brushLoading": {
+                "beliefs": {
+                    key: asdict(belief)
+                    for key, belief in self.brush_load_beliefs.items()
+                },
+                "currentPreparation": (
+                    asdict(self.current.brush_preparation)
+                    if (
+                        self.current is not None
+                        and self.current.brush_preparation is not None
+                    )
+                    else None
+                ),
+                "lastPreparationInference": (
+                    asdict(self.last_brush_preparation)
+                    if self.last_brush_preparation is not None
+                    else None
+                ),
+                "lastLoadObservationVFE": (
+                    asdict(self.brush_loading_model.last_vfe)
+                    if self.brush_loading_model.last_vfe is not None
+                    else None
+                ),
+                "modelAccess": (
+                    "persistent q(load, black_fraction) per dedicated brush; "
+                    "no exact process brush state"
+                ),
+            },
             "stateRepresentation": self._state_representation_diagnostics(),
             "transitionModel": self._transition_model_diagnostics(),
             "spatialTransitionMode": (
@@ -1959,6 +2245,11 @@ class ArmActiveInferenceDriver:
                 if self.current is not None and self.current.motor_primitive is not None
                 else None
             ),
+            "executingBrushPreparation": (
+                asdict(self.current.brush_preparation)
+                if self.current is not None and self.current.brush_preparation is not None
+                else None
+            ),
             "motionReliability": self.motion_reliability.summary(),
             "efe": efe,
             "vfe": vfe,
@@ -1973,6 +2264,11 @@ class ArmActiveInferenceDriver:
                     "passageStartIndex": policy.passage_start_index,
                     "passageBoundaries": [list(boundary) for boundary in policy.passage_boundaries],
                     "motorPrimitive": asdict(policy.motor_primitive) if policy.motor_primitive is not None else None,
+                    "brushPreparation": (
+                        asdict(policy.brush_preparation)
+                        if policy.brush_preparation is not None
+                        else None
+                    ),
                     "posterior": prob,
                     "total": comp.total,
                     "terminalRisk": comp.terminal_risk,
@@ -2053,7 +2349,11 @@ class ArmActiveInferenceDriver:
                 "material fields: thickness, wetness, conserved black_mass, surface_tone, ground_contrast, material_coverage; "
                 "six canvas summaries are diagnostics only"
             )
-        return "Gaussian q(s) over six canvas summary states; spatial hierarchy is not active in this runtime mode"
+        return (
+            "OBSOLETE compatibility fixture: Gaussian q(s) over six "
+            "hand-selected canvas aggregates; non-spatial and not a valid "
+            "highest-level painting representation"
+        )
 
     def _transition_model_diagnostics(self) -> str:
         if isinstance(self.agent, SpatialActiveInferencePainter):
@@ -2111,7 +2411,13 @@ def canvas_summary_state(sim: ArmPainterSim) -> np.ndarray:
     )
 
 
-def execute_stroke_action(sim: ArmPainterSim, action: StrokeAction, dt: float = 1.0 / 120.0) -> None:
+def execute_stroke_action(
+    sim: ArmPainterSim,
+    action: StrokeAction,
+    dt: float = 1.0 / 120.0,
+    *,
+    reload: bool = True,
+) -> None:
     ex = StrokeExecution(
         action=action,
         efe=EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
@@ -2119,7 +2425,10 @@ def execute_stroke_action(sim: ArmPainterSim, action: StrokeAction, dt: float = 
         initial_state=canvas_summary_state(sim),
     )
     ex.timing = adaptive_stroke_timing(sim, action)
-    sim.load_brush(action.amount, action.tone)
+    sim.select_brush(action.tone)
+    sim.deposition_amount = action.amount
+    if reload:
+        sim.load_brush(1.0, action.tone)
     ex.controller.reset(sim, ex.action, ex.timing)
     ex.initialized = True
     while ex.t < ex.total:

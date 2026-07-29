@@ -9,6 +9,20 @@ from .env import StrokeAction
 
 
 @dataclass(frozen=True, slots=True)
+class BrushPreparationPolicy:
+    """Instantaneous tool-preparation policy below a selected mark policy."""
+
+    kind: str
+    selected_tone: float
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"preserve", "reload"}:
+            raise ValueError("Brush preparation kind must be preserve or reload.")
+        if self.selected_tone not in {0.0, 1.0}:
+            raise ValueError("selected_tone must be binary white/black.")
+
+
+@dataclass(frozen=True, slots=True)
 class MotorPrimitiveLatent:
     """Embodied realization latent for the first non-stop mark in a policy.
 
@@ -122,6 +136,7 @@ class Policy:
     passage: PassageLatent | None = None
     passage_plan: PassagePlanLatent | None = None
     motor_primitive: MotorPrimitiveLatent | None = None
+    brush_preparation: BrushPreparationPolicy | None = None
     # Local receding-horizon inference can begin partway through a persistent
     # passage. Zero denotes a globally proposed complete passage.
     passage_start_index: int = 0
@@ -148,6 +163,12 @@ class Policy:
                 raise ValueError("Passage metadata does not contain all policy marks.")
         if self.motor_primitive is not None and self.actions[0].stop:
             raise ValueError("A motor realization latent requires a non-stop first action.")
+        if self.brush_preparation is not None:
+            if self.actions[0].stop:
+                raise ValueError("A brush-preparation policy requires a non-stop first action.")
+            selected_tone = float(self.actions[0].tone >= 0.5)
+            if self.brush_preparation.selected_tone != selected_tone:
+                raise ValueError("Brush preparation must select the first action's dedicated color brush.")
         if self.passage_plan is not None:
             if self.passage_plan.passage_count < 2:
                 raise ValueError("A passage-plan policy must contain multiple passages.")
@@ -255,12 +276,18 @@ class PolicySampler:
             passage = replace(policy.passage, tone=tone) if policy.passage is not None else None
             passage_plan = self._passage_plan_with_tone(policy.passage_plan, tone)
             actions = tuple(self._action_with_tone(action, tone) for action in policy.actions)
+            brush_preparation = (
+                replace(policy.brush_preparation, selected_tone=float(tone))
+                if policy.brush_preparation is not None
+                else None
+            )
             alternatives.append(
                 Policy(
                     actions,
                     passage=passage,
                     passage_plan=passage_plan,
                     motor_primitive=policy.motor_primitive,
+                    brush_preparation=brush_preparation,
                     passage_start_index=policy.passage_start_index,
                 )
             )

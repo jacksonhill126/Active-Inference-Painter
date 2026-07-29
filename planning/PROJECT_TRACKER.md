@@ -290,8 +290,17 @@ Notes: Boundary enforcement began 2026-07-28: the live default is now
 `sensor-boundary-v0`, which skips oracle bootstrap and blocks policy inference,
 learning, and planner-state construction from `ArmPainterSim`. The legacy
 `oracle_material_state` path requires explicit diagnostic opt-in. AI-201
-remains blocked/not accepted because camera channels, rates, noise, and the
-model-facing observation package are not yet defined.
+remains blocked/not accepted because sensor noise and the complete
+model-facing observation package are not yet defined. A
+`provisional-multiview-v2` MJCF rig and role-dependent registration interface
+were added 2026-07-29, establishing versioned geometry, grayscale channels,
+model-input resolutions, rates, roles, availability, an ideal-pinhole
+normalization contract for canvas views, a separate overhead brush-standoff
+edge profile, and optical-frame-aligned generic camera housing envelopes
+without claiming sensor equivalence or final mechanical mounts. The current
+provisional contract is 512 x 512 at 30 Hz for each continuous oblique view,
+512 x 512 at 5 Hz/on-demand for parked inspection, and 640 x 480 at 60 Hz for
+the standoff profile.
 
 ### AI-202 Implement the fixed-view observation generative process
 
@@ -301,6 +310,16 @@ Depends on: AI-201, T-101, T-102
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: The process emits sensor-equivalent observations while hidden material arrays remain evaluation-only.
+Notes: Geometry/preprocessing work began 2026-07-29 with forward/inverse
+canvas homographies, frustum masks, image rectification, a camera-clear park,
+arbitrary world-point projection for an edge-profile camera, and XML-derived
+web metadata. A reproducible 9 x 9 x 3 MuJoCo contact-pose sweep now reports
+100% combined tip visibility from the opposing oblique cameras across 243
+sampled poses; the overhead standoff profile also retains 100%. The brief,
+figures, per-pose CSVs, approximations, and hardware-class rationale are in
+`docs/CAMERA_OBSERVABILITY_BRIEF.md`. AI-202 remains blocked/not accepted: no
+camera-rendered Python material observation, calibrated occlusion/
+photometric/noise process, or model-facing likelihood exists yet.
 
 ### AI-203 Specify and implement the observation likelihood
 
@@ -310,6 +329,14 @@ Depends on: AI-201, AI-202
 Owner: Jackson/Codex  
 Estimate: 3-5 days  
 Acceptance: Canvas, proprioceptive, current, and contact likelihoods are explicit, calibrated, and avoid double-counting deterministic transforms.
+Notes: A bounded body-likelihood slice was added 2026-07-29 as
+`body-inference-v0`: encoder position/velocity and optional contact-switch/force
+factors are explicit and require a versioned, nondefault precision profile.
+Current, voltage, deflection, temperature, and faults remain explicitly
+unassimilated. A scalar camera-derived mark-deposition likelihood and VFE
+fixture now exist for brush loading, but no image observation supplies it yet.
+AI-203 remains blocked because these parameters are not calibrated and the
+camera/material/current likelihoods are not implemented.
 
 ### AI-204 Build the compact state-inference path
 
@@ -319,6 +346,19 @@ Depends on: AI-203
 Owner: Jackson/Codex  
 Estimate: 4-6 days  
 Acceptance: An explicit compact posterior fuses transition priors with permitted observations and reports calibrated hidden-state uncertainty.
+Notes: `BodyStateEstimator` now maps `PhysicalSensorPacket` to
+`BodyBeliefSnapshot` with a constant-velocity transition prior, conjugate
+Gaussian/Bernoulli updates, and global/per-factor VFE decomposition. It never
+receives the simulator process object. `BrushLoadingModel` now maintains
+persistent compact load/average-pigment beliefs for dedicated white and black
+brushes, with explicit depletion/reload transitions and preserve/reload policy
+inference. The process has matching finite reservoirs and pure-color reloads.
+AI-204 remains blocked because camera evidence is not yet wired into this
+brush posterior, the body component is not yet wired into live painting
+inference, and no material/camera posterior exists. On 2026-07-29 the
+six-aggregate summary planner was formally marked
+`obsolete_compatibility_fixture`; it is not an acceptable compact posterior
+for AI-204.
 
 ### AI-205 Align local dynamics training with live execution
 
@@ -346,6 +386,12 @@ Depends on: AI-101, AI-204
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Pixel, mark, tile, passage, and painting levels have explicit priors, likelihood messages, posterior updates, precision, and persistence.
+Notes: The hierarchy must learn feature contents through camera-conditioned
+predictive likelihoods rather than replace the obsolete six summaries with
+another hand-selected global feature list. Hand-defined material variables are
+restricted to local physical prediction, diagnostics, or declared terminal
+readouts/preferences. Latents require held-out predictive and temporal
+intervention evidence.
 
 ### AI-208 Make the global canvas latent predictively necessary
 
@@ -355,6 +401,9 @@ Depends on: AI-206, AI-207
 Owner: Jackson/Codex  
 Estimate: 3-5 days  
 Acceptance: A modest hierarchy improves held-out future prediction and responds correctly to spatial interventions without collapse.
+Notes: `spatial_material` is an interim low-level baseline, not the accepted
+global representation. AI-208 must establish predictive necessity for flexible
+learned canvas latents before they enter painting-level inference claims.
 
 ### AI-209 Replace or demote deterministic relational beliefs
 

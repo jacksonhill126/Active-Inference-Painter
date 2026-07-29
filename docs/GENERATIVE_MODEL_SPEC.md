@@ -14,7 +14,7 @@ implements, including approximations and ordinary engineering outside the
 active-inference model. It covers:
 
 - the native arm, brush, canvas, and material generative process;
-- summary and spatial planner modes;
+- the obsolete summary compatibility fixture and provisional spatial planner;
 - local material transitions and their learned parameter ensemble;
 - pixel, canvas, relational, and passage beliefs;
 - variational state inference;
@@ -35,6 +35,32 @@ fixed-camera, encoder, current, and contact likelihoods and a
 sensor-conditioned posterior. `oracle_material_state` remains an explicit
 diagnostic-only opt-in. The complete access audit is maintained in
 `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`.
+
+A first non-oracle M2 body-inference factorization is implemented but is not
+yet connected to painting policy inference. For each joint it uses
+
+```text
+p(q_t | q_(t-1), dq_(t-1))  diagonal constant-velocity Gaussian prior
+p(dq_t | dq_(t-1))           diagonal Gaussian random-walk prior
+p(o_encoder_q | q_t)         Gaussian likelihood
+p(o_encoder_dq | dq_t)       Gaussian likelihood
+```
+
+and, when the corresponding physical samples are present,
+
+```text
+p(o_switch | c_t)            Bernoulli likelihood
+p(o_force | f_t)             Gaussian likelihood
+```
+
+The Gaussian and Bernoulli posteriors are conjugate mean-field updates, so the
+reported body VFE is the exact factorized
+`KL[q(x_t)||p(x_t)] - E_q[log p(o_t|x_t)]` under those assumptions. Its
+transition and observation precisions must be supplied in a versioned
+`BodyLikelihoodSpec`; they are not inferred from simulator truth. Current,
+voltage, temperature, deflection, and fault samples do not enter this
+likelihood yet. This is a declared incomplete factorization, not evidence that
+the full sensor-equivalent posterior exists.
 
 This specification is "executable" in the limited engineering sense that every
 factor and free-energy term maps to a named implementation location. It does
@@ -94,7 +120,8 @@ x_material_tau[p] = {
 }
 
 x_brush_tau = {
-    fresh load and tone,
+    selected dedicated brush,
+    persistent normalized fresh load and tone for white/black brushes,
     held wet-paint volume and black mass,
     bristle and edge realization,
     path distance
@@ -138,11 +165,51 @@ present. A policy may carry:
 
 - a `PassageLatent` generating several related marks;
 - a `PassagePlanLatent` generating several passages;
-- a first-stroke `MotorPrimitiveLatent`.
+- a first-stroke `MotorPrimitiveLatent`;
+- an instantaneous first-stroke `BrushPreparationPolicy` in
+  `{preserve, reload}`.
 
 These are defined in `policies.py`.
 
-### 3.3 Summary belief state
+### 3.2.1 Brush-loading belief and preparation policy
+
+For each dedicated color brush, the compact generative model maintains:
+
+```text
+q(b_t) = q(load_t) q(black_fraction_t)
+```
+
+as bounded Gaussian moments. The preserve transition depletes expected load
+after a mark and increases load/mixture uncertainty. The reload transition is
+instantaneous:
+
+```text
+load' = 1
+black_fraction' = selected_tone
+```
+
+with small declared reload variance. Preparation inference compares preserve
+and reload using conditional mark-outcome EFE:
+
+```text
+G_brush =
+    precision_material * risk(deposited amount | selected mark)
+  + precision_pigment  * risk(black fraction | selected tone)
+  + precision_ambiguity * ambiguity
+
+q(pi_brush) proportional to
+    p(pi_brush) exp(-precision_policy * G_brush)
+```
+
+The reload prior is explicit (`brush_reload_policy_prior`); there is no hard
+load threshold. Current motor planning marginalizes preparation evidence but
+uses the modal preparation in the expensive physical rollout, a named
+approximation. `BrushLoadingModel.infer_load_from_mark` supplies a scalar
+Gaussian deposition likelihood and separately logged VFE for a future
+camera-derived local-patch observation. No exact process brush state is passed
+to this update.
+
+### 3.3 Obsolete summary compatibility belief
 
 Summary mode uses a six-dimensional diagonal-Gaussian belief:
 
@@ -161,7 +228,14 @@ The exact process summary is produced by `canvas_summary_state()` in
 `arm_agent_driver.py`. The state dimension is configured by
 `PainterConfig.state_dim`.
 
-### 3.4 Spatial belief state
+This representation is formally deprecated. It is non-spatial, not
+predictively sufficient for image-making, and must not be interpreted as a
+highest-level painting latent. It remains only for regression, analytic
+reference tests, and old checkpoints. The runtime default is the provisional
+spatial-material baseline while a camera-conditioned learned perceptual
+hierarchy is implemented.
+
+### 3.4 Provisional spatial material belief
 
 Spatial mode uses six channels:
 
@@ -192,6 +266,12 @@ limitation.
 The material pyramid is a deterministic set of mean-pooled fields at pixel,
 tile, and planner scales. Material coverage is pooled from binary pixel
 occupancy, not re-thresholded from mean thickness. See `spatial_state.py`.
+
+These material fields are hand-defined physical factors for local transition
+modeling, not the desired learned abstract feature hierarchy. The intended
+higher layers must infer flexible latent causes from permitted observations and
+be retained by held-out predictive necessity rather than by a hand-authored
+feature list.
 
 ### 3.5 Slower beliefs
 
@@ -261,7 +341,7 @@ They are not transition rewards.
 
 ## 5. Transition Likelihoods
 
-### 5.1 Summary transition
+### 5.1 Obsolete summary-fixture transition
 
 `DynamicsEnsemble` implements a diagonal Gaussian:
 
@@ -644,24 +724,28 @@ research claims.
 | --- | --- | --- | --- | --- |
 | GP-BODY | Generative process | `p(x_body_tau+1|x_body_tau,u_tau)` | `arm_sim.JointPlant`, `ArmPainterSim` | Representative, uncalibrated |
 | GP-MATERIAL | Generative process | wet material and brush transfer | `arm_sim.VerticalCanvas.paint_at`, `Brush` | Hand-designed process |
-| GM-SUM-TRANS | Transition likelihood | `p_theta(s_t+1|s_t,a_t,m_t)` | `models.DynamicsEnsemble` | Learned diagonal Gaussian |
+| GM-SUM-TRANS | Transition likelihood | `p_theta(s_t+1|s_t,a_t,m_t)` | `models.DynamicsEnsemble` | Obsolete compatibility fixture |
 | GM-PIX-TRANS | Transition likelihood | local `p_theta(s^P_t+1|s^P_t,a^P_t,m_t)` | `models.LocalSpatialDynamicsEnsemble`, `local_spatial.py` | Learned sparse approximation |
-| GM-SUM-OBS | Observation likelihood | `p(o_t|s_t)` | `models.ObservationModel` | Oracle summary, provisional |
+| GM-SUM-OBS | Observation likelihood | `p(o_t|s_t)` | `models.ObservationModel` | Obsolete oracle compatibility fixture |
 | GM-PIX-OBS | Observation likelihood | `p(o^pixel_t|s^pixel_t)` | `spatial_inference.py` | Oracle material, provisional |
-| Q-SUM | Posterior | diagonal `q(s_t)` | `inference.VariationalStateEstimator` | MC variational optimization |
+| Q-SUM | Posterior | diagonal `q(s_t)` | `inference.VariationalStateEstimator` | Obsolete compatibility fixture |
 | Q-PIX | Posterior | factorized `q(s^pixel_t)` | `spatial_inference.SpatialVariationalStateEstimator` | Analytic diagonal fusion |
 | Q-CANVAS | Posterior/likelihood | `q(z_canvas)`, decoder likelihood | `canvas_hierarchy.HierarchicalCanvasModel` | Online diagonal latent |
 | Q-REL | Posterior/likelihood | `q(z_relation)`, decoder likelihood | `canvas_hierarchy.py` | Deterministic slots plus latent |
 | Q-PASSAGE | Slow posterior | `q(z_passage)` | `passage_inference.PassageBelief` | Mixed pseudo-likelihood |
+| Q-BRUSH | Material posterior | `q(load_t)q(black_fraction_t)` per dedicated brush | `brush_loading.BrushLoadingModel` | Compact bounded Gaussian moments; camera update not wired |
+| TRANS-BRUSH | Transition likelihood | preserve depletion/uncertainty or pure full reload | `brush_loading.py`, `arm_sim.Brush` | Explicit provisional approximation |
 | PREF-COVERAGE | Prior preference | `p*(C_T|stop)` | `preferences.py`, `efe_common.py` | Explicit terminal Beta |
 | PREF-COMP | Prior preference | energy from compression gap | `canvas_hierarchy.py`, `spatial_efe.py` | Unresolved closed loop |
 | PREF-MOTOR | Prior preference | homeostatic outcome densities | `motor_planning.motor_efe_terms` | Explicit diagonal approximation |
 | PRIOR-STOP | Policy prior | `p(stop-first|coverage belief)` | `policies.policy_stop_log_prior` | Explicit |
 | PRIOR-PASSAGE | Transition prior | `p(z_passage_r+1|z_passage_r)` | `PassageBelief.transition_log_prior` | Explicit local prior |
 | PRIOR-MOTOR | Policy prior | uniform `p(m|pi)` | `motor_planning.py` | Explicit |
+| PRIOR-BRUSH | Policy prior | `p(preserve/reload)` | `brush_loading.py` | Explicit |
 | PROP-PAINT | Proposal only | finite `q_proposal(pi)` | `policies.PolicySampler` | Uncorrected finite proposal |
 | EFE-PIX | Expected free energy | risk/ambiguity hierarchy | `spatial_efe.py` | Approximate, decomposed |
 | EFE-MOTOR | Expected free energy | proprioceptive EFE | `motor_planning.py`, driver | Approximate, decomposed |
+| EFE-BRUSH | Expected free energy | conditional material/pigment risk and ambiguity | `brush_loading.py`, driver | Approximate, decomposed |
 | SAFE | External constraint | hard feasibility and stop | plant, controller, future hardware safety | Not active inference |
 
 ## 13. Approximation Register
@@ -689,6 +773,8 @@ details:
 15. The web process and planner can use different canvas resolutions.
 16. Continuous-density constants and modality reductions require independent
     unit/sign verification.
+17. Brush preparation is analytically marginalized, but only its modal policy
+    is sent through the expensive motor/material rollout.
 
 ## 14. Required Next Decisions
 

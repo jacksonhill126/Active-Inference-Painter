@@ -43,6 +43,7 @@ def motor_realization_policy_alternatives(policy: Policy, config: PainterConfig)
                 passage=policy.passage,
                 passage_plan=policy.passage_plan,
                 motor_primitive=_motor_primitive(kind, config),
+                brush_preparation=policy.brush_preparation,
                 passage_start_index=policy.passage_start_index,
             )
         )

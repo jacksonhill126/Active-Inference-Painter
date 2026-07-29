@@ -7,6 +7,12 @@ root `README.md`.
 This is a clean Python/PyTorch starting point for the painter architecture.
 It implements one feature rigorously: **policies are inferred so that the eventual `stop` state is expected to occur near a preferred material coverage of roughly 80–90%**.
 
+> **Obsolete compatibility path:** `planner_state_kind="summary"` is retained
+> only for regression tests, tractable reference fixtures, and old
+> checkpoints. Its six hand-selected global aggregates are predictively
+> insufficient for image-making and are not a candidate highest-level painting
+> representation. Explicit construction emits a deprecation warning.
+
 It deliberately separates:
 
 - **Generative process**: stochastic wet-into-wet oil deposition with persistent
@@ -27,20 +33,21 @@ an already occupied pixel does not add coverage.
 ## Brush paint-handling
 
 The arm's brush (`VerticalCanvas.paint_at` / `Brush` in `arm_sim.py`) is a round
-contact patch with hard support, enriched with four physical behaviors. All of
+contact patch with hard support, enriched with several physical behaviors. All of
 this lives in the generative *process*, below the painting-policy boundary; the
 learned transition model observes the resulting canvas transitions and adapts.
-It is oil: paint does not dry within a session and the brush does not run out
-mid-stroke — deposition is consistent along a mark and the canvas keeps its
-wetness (there is no wetness decay).
+It is oil: paint does not dry within a session and the canvas keeps its wetness
+(there is no wetness decay). Fresh paint carried by a brush is finite and can
+decline within and across marks.
 
-- **Brush loading.** The stroke's `amount` sets how heavily the brush is loaded
-  before approach, which scales deposited thickness/opacity uniformly along the
-  mark (a fuller brush lays thicker paint). Loaded/unloaded is material state,
-  not a controller paint gate: any positive-pressure canvas contact deposits,
-  including press, lift, and unintended contact. Finite fresh-paint depletion
-  is not yet calibrated, so the load does not thin toward the end
-  (`brush_load_min`/`brush_load_max`).
+- **Brush loading.** Each dedicated white or black brush has a persistent
+  normalized fresh-paint reservoir. The selected mark's `amount` controls its
+  deposition setting; the latent brush load controls how fully that consequence
+  can be realized. Contact consumes fresh load according to deposited film
+  thickness (`brush_load_capacity_thickness`). Loaded/unloaded remains material
+  state, not a controller paint gate: any positive-pressure canvas contact
+  deposits, including press, lift, and unintended contact. The depletion
+  calibration is provisional.
 - **Directional shape.** Each deposition step paints the disc swept from the
   previous contact point, so travel elongates and connects the mark. The
   cross-stroke radius is unchanged (round brush); only the along-travel extent
@@ -73,13 +80,22 @@ wetness (there is no wetness decay).
 The policy sampler also biases proposed strokes toward longer sweeps (a declared
 empirical policy prior), since a round brush over a short span reads as a dab.
 
-Loading and carried tone are set before stroke motion from the action. The
-brush stays loaded through approach, press, sweep, lift, and retraction, and is
-reloaded for the next action or explicitly unloaded on reset. This makes
-incidental contact a real predicted paint consequence while preserving a
-deterministic transition at the action boundary. Brush tilt relative to the
-canvas normal is not yet modeled in the 2-D deposition footprint; the round
-footprint is oriented only by travel direction.
+The model maintains a compact `q(load, black_fraction)` for each dedicated
+color brush. Before a selected mark it infers `preserve` versus instantaneous
+`reload`; these are explicit preparation policies with a declared policy prior
+and conditional expected-free-energy terms for the selected mark's material
+amount and pigment outcome. There is no procedural low-load threshold. Reload
+sets the selected brush to full and uniformly its nominal color, clearing
+picked-up material. Preserve carries process and belief state across the mark.
+The current load transition is an approximation and increases uncertainty
+about canvas pickup. `infer_load_from_mark` defines the local camera-derived
+deposition likelihood and VFE update, but the camera material posterior is not
+yet implemented, so live sensory assimilation remains blocked.
+
+This makes incidental contact a real predicted paint consequence while keeping
+paint preparation inside policy inference. Brush tilt relative to the canvas
+normal is not yet modeled in the 2-D deposition footprint; the round footprint
+is oriented only by travel direction.
 
 ## Core expected-free-energy terms
 
@@ -266,11 +282,12 @@ EFE, not composition rewards.
   keeping member disagreement usable as an approximate parameter posterior;
   calibration tests cover held-out z-scores and off-distribution disagreement.
 
-## Spatial material planner mode
+## Provisional spatial material planner mode
 
-The default planner still runs on six global canvas summaries for compatibility
-and speed. An explicit spatial material planner can be enabled with
-`planner_state_kind="spatial_material"` or:
+The web entry point now defaults to `planner_state_kind="spatial_material"`.
+This is an interim low-level material-transition baseline, not the final
+painting-level representation. The obsolete summary fixture can still be
+requested explicitly for compatibility:
 
 ```bash
 python -m active_painter.web_server --planner-state-kind spatial_material
@@ -324,6 +341,16 @@ canvas outcomes rather than entering as a reward-like motor-ease term. The six
 summaries remain diagnostics in this mode. No balance, flow, or composition
 reward has been added.
 
+The intended replacement architecture uses flexible multiscale latent layers
+trained to explain and predict permitted camera observations and later
+consequences. Spatial locality, temporal depth, and information bottlenecks are
+structural assumptions; the feature contents are not a hand-written list of
+"useful" aesthetics. Latents must demonstrate held-out predictive information,
+calibration, and causal effects on later inference under freeze/shuffle/reset
+tests. Thickness, wetness, and mobility remain local physical causes for
+contact prediction rather than global image-making features. Coverage remains
+a terminal material preference/readout, not the canvas representation.
+
 ## Install and run
 
 ```bash
@@ -372,10 +399,59 @@ inference core. Three.js builds the direct-drive robot body hierarchy from
 the arm, controls, telemetry, and the Python material image from
 `/api/canvas.png`. MuJoCo is not used as a paint renderer.
 
+The same XML now declares a provisional four-camera rig: opposing continuous
+oblique brush/contact views, a park-only deployed head-on inspection
+reference, and a continuous overhead brush-standoff profile.
+`/api/robot-model` exports their poses, roles, availability, grayscale
+channels, model-input sizes, sample rates, registrations, ideal
+FOV/resolution, incidence, axial canvas-depth range, and provisional
+calibration status. `active_painter.camera_geometry` maps the three surface
+views to a shared top-left canvas UV frame with an ideal planar homography.
+The tangent standoff camera instead uses `canvas_edge_profile` and arbitrary
+world-point projection; it is intentionally excluded from homographic
+rectification.
+
+The reproducible 243-pose sweep in
+`active_painter.camera_pose_sweep` evaluates a 9 x 9 contact grid at -32, 0,
+and +32 degrees of upper-arm roll. The two continuous oblique views have 100%
+combined segmentation-based brush-tip visibility, and the overhead profile
+retains 100% visibility in the sampled workspace. Publication-ready frames,
+maps, CSVs, and interpretation are in
+`docs/CAMERA_OBSERVABILITY_BRIEF.md`.
+
+This is not yet the M2 observation process: the Python material appearance
+has not been inserted into camera frames, and distortion, occlusion masks,
+focus, glare, timing, noise, and likelihood precision remain unimplemented.
+The perfect `/api/canvas.png` is still diagnostic-only. The
+`provisional-multiview-v2` XML carries non-colliding generic camera body/lens
+envelopes, aligned exactly with the optical frames and rendered by both MuJoCo
+and the Three.js viewer. They do not yet specify mounts, cables, or the
+park-only inspection camera's stow/deploy mechanism.
+
 The default `sensor_equivalent` observation mode currently fails closed:
 the viewer and scripted execution remain available, but policy inference,
 learning, oracle bootstrap, and process-derived planner-state construction are
-disabled. To reproduce the legacy upper-bound comparator, opt in explicitly:
+disabled.
+
+The first compact sensor-conditioned bodily inference component now exists in
+`active_painter.body_inference`. `BodyStateEstimator` constructs a diagonal
+constant-velocity transition prior and assimilates encoder position, encoder
+velocity, an optional contact switch, and optional contact-force samples
+through separately named Gaussian/Bernoulli likelihood factors. The conjugate
+mean-field updates report complexity and expected negative log likelihood
+separately, in nats, both globally and per factor. Its precision values are
+required through a versioned `BodyLikelihoodSpec`; the implementation has no
+silent numerical defaults and is not called calibrated until hardware or
+declared simulation measurements supply them.
+
+This is not yet wired into painting policy inference. Motor current, bus
+voltage, tool deflection, temperature, and fault flags are explicitly reported
+as unassimilated by this posterior. Faults remain hard-safety inputs, while
+current/deflection need declared conditional likelihoods before they may
+provide contact or load evidence. The material/camera posterior is still
+absent, so the live sensor-equivalent painting path remains fail-closed.
+
+To reproduce the legacy upper-bound comparator, opt in explicitly:
 
 ```bash
 python -m active_painter.web_server --observation-mode oracle_material_state

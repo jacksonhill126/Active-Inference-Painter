@@ -88,6 +88,29 @@ def test_active_inference_driver_reports_policy_and_state_distributions() -> Non
     assert 0.0 < diag["topPolicies"][0]["posterior"] <= 1.0
 
 
+def test_summary_planner_is_explicitly_obsolete_in_warning_and_diagnostics() -> None:
+    config = PainterConfig(
+        candidate_policies=2,
+        planning_horizon=1,
+        planner_state_kind="summary",
+    )
+
+    with pytest.warns(FutureWarning, match="obsolete"):
+        driver = ArmActiveInferenceDriver(
+            config=config,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            observation_access_mode=ORACLE_OBSERVATION_ACCESS_MODE,
+        )
+
+    lifecycle = driver.diagnostics()["stateRepresentationLifecycle"]
+    assert lifecycle["status"] == "obsolete_compatibility_fixture"
+    assert "highest-level" in lifecycle["notValidAs"]
+    assert driver.diagnostics()["stateRepresentation"].startswith(
+        "OBSOLETE compatibility fixture"
+    )
+
+
 def test_active_inference_driver_reports_passage_posterior_mass() -> None:
     cfg = PainterConfig(candidate_policies=4, passage_proposal_mix=0.0)
     driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
@@ -547,7 +570,7 @@ def test_planning_hold_target_does_not_chase_actual_pose_drift() -> None:
     driver = oracle_driver(bootstrap_transitions=0, bootstrap_train_steps=0)
     driver.planning = True
 
-    for _ in range(240):
+    for _ in range(360):
         driver.step(sim, 1.0 / 240.0)
         sim.step(1.0 / 240.0)
     held_target = sim.target_pose
@@ -585,16 +608,20 @@ def test_global_hold_targets_visible_planning_clearance() -> None:
     sim = ArmPainterSim(cfg)
     driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
 
-    for _ in range(160):
+    for _ in range(300):
         driver._hold_retracted(sim, 1.0 / 240.0, scope="global")
         sim.step(1.0 / 240.0)
     target_tip = sim.kinematics.tip(sim.target_pose)
     actual_tip = sim.kinematics.tip(sim.actual_pose)
+    desired_tip = sim.kinematics.tip(driver._global_hold_pose(sim))
 
-    assert float(target_tip[1]) <= sim.canvas.distance - 3.5
+    assert target_tip == pytest.approx(desired_tip, abs=0.1)
     assert float(actual_tip[1]) <= sim.canvas.distance - 1.5
     assert abs(float(target_tip[0])) < 0.1
-    assert abs(float(target_tip[2])) < 0.1
+    assert float(target_tip[2]) == pytest.approx(
+        cfg.global_planning_park_z_fraction * sim.canvas.height,
+        abs=0.1,
+    )
 
 
 def test_driver_reports_current_background_planning_elapsed_time() -> None:
@@ -778,6 +805,19 @@ def test_global_planning_waits_for_retraction_timer_and_physical_clearance(monke
     driver.step(sim, 0.01)
 
     assert len(calls) == 1
+
+
+def test_global_hold_pose_uses_camera_clear_bottom_center_park() -> None:
+    sim = ArmPainterSim(PainterConfig())
+    driver = oracle_driver(
+        config=sim.config,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+
+    park = driver._global_hold_pose(sim)
+
+    assert sim.kinematics.tip(park) == pytest.approx((0.0, 14.0, -10.0))
 
 
 def test_stale_planner_generation_cannot_publish_after_reset() -> None:

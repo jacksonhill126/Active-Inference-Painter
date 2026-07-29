@@ -251,9 +251,8 @@ def test_paint_at_legacy_call_is_isotropic_with_unit_deposition() -> None:
 
 
 def test_brush_oil_does_not_dry_thickness_holds_along_a_long_stroke() -> None:
-    # Oil: a loaded brush lays paint at a consistent rate; the mark must not
-    # fade/thin from start to end of even a long stroke.
-    cfg = PainterConfig(canvas_size=96)
+    # Isolate "oil does not dry" from the separate finite-reservoir behavior.
+    cfg = PainterConfig(canvas_size=96, brush_load_capacity_thickness=1e6)
     canvas = VerticalCanvas(cfg)
     brush = Brush(cfg, np.random.default_rng(0))
     brush.reload(amount=0.5, tone=1.0)
@@ -263,12 +262,11 @@ def test_brush_oil_does_not_dry_thickness_holds_along_a_long_stroke() -> None:
     nz = np.nonzero(profile)[0]
     start = profile[nz[0] + len(nz) // 6:nz[0] + len(nz) // 3].mean()
     end = profile[nz[-1] - len(nz) // 3:nz[-1] - len(nz) // 6].mean()
-    assert end > 0.7 * start  # no drying out toward the end
+    assert end > 0.7 * start
 
 
 def test_brush_loading_from_amount_scales_deposited_thickness() -> None:
-    # `amount` sets brush loading -> more paint means thicker, more opaque
-    # deposition, uniformly (not faster depletion).
+    # Manual partial reloads still scale the finite fresh reservoir.
     cfg = PainterConfig(canvas_size=64)
     thin_canvas = VerticalCanvas(cfg)
     thick_canvas = VerticalCanvas(cfg)
@@ -278,6 +276,46 @@ def test_brush_loading_from_amount_scales_deposited_thickness() -> None:
     thin_canvas.paint_at(point, 0.6, 1.0, 1.0 / 90.0, brush=light)
     thick_canvas.paint_at(point, 0.6, 1.0, 1.0 / 90.0, brush=heavy)
     assert thick_canvas.thickness.max() > 1.5 * thin_canvas.thickness.max()
+
+
+def test_brush_load_is_finite_and_persists_between_marks_without_reload() -> None:
+    cfg = PainterConfig(canvas_size=64, brush_load_capacity_thickness=0.35)
+    canvas = VerticalCanvas(cfg)
+    brush = Brush(cfg, np.random.default_rng(4))
+    brush.reload(amount=1.0, tone=1.0)
+
+    _drag(canvas, brush, x0=-7.0, x1=-1.0, z=-2.0, pressure=0.6, tone=1.0, steps=40)
+    after_first = brush.load
+    _drag(canvas, brush, x0=1.0, x1=7.0, z=2.0, pressure=0.6, tone=1.0, steps=40)
+
+    assert 0.0 < after_first < 1.0
+    assert brush.load < after_first
+    assert brush.load_amount == pytest.approx(brush.load)
+
+
+def test_dedicated_color_brushes_preserve_independent_load_and_reload_purifies() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=32))
+    sim.load_brush(0.63, 0.0)
+    sim.brush.held_volume = 0.2
+    sim.brush.held_black = 0.15
+    white = sim.brush
+
+    sim.load_brush(0.41, 1.0)
+    black = sim.brush
+
+    assert black is not white
+    assert black.load == pytest.approx(0.41)
+    assert white.load == pytest.approx(0.63)
+    assert white.held_volume == pytest.approx(0.2)
+
+    sim.load_brush(1.0, 0.0)
+
+    assert sim.brush is white
+    assert white.load == pytest.approx(1.0)
+    assert white.fresh_tone == 0.0
+    assert white.held_volume == 0.0
+    assert white.held_black == 0.0
+    assert white.carried_tone == 0.0
 
 
 def test_brush_travel_direction_elongates_the_footprint() -> None:
