@@ -214,22 +214,56 @@ eventually come from a simple lateral tip load-deflection/free-decay test.
 ## Provisional Camera Rig
 
 The MJCF is now the source of truth for a separately versioned
-`provisional-multiview-v2` camera rig:
+`provisional-multiview-v4` camera rig:
 
 | Camera | Position (m) | Role | Availability | Incidence |
 | --- | --- | --- | --- | ---: |
-| `canvas_right_oblique` | `0.775 -0.820 0.750` | brush/contact tracking | continuous | 31.75 deg |
-| `canvas_left_oblique` | `-0.625 -0.820 0.800` | brush/contact tracking | continuous | 32.57 deg |
+| `canvas_right_oblique` | `0.824 -0.911182 0.778` | brush/contact tracking | continuous | 31.75 deg |
+| `canvas_left_oblique` | `-0.674 -0.911182 0.8315` | brush/contact tracking | continuous | 32.57 deg |
 | `canvas_inspection_deployed` | `0.075 0.100 0.350` | head-on canvas inspection | park only | 0 deg |
 | `brush_standoff_overhead` | `0.075 0.250 1.250` | brush standoff profile | continuous | edge profile |
 
-The three canvas frames use provisional 1024 x 1024 ideal-pinhole metadata.
-The oblique cameras now use a 24 degree vertical field of view, filling the
-sensor more efficiently while retaining full-canvas framing. The deployed
+The three canvas frames use provisional 1024 x 1024 ideal-pinhole simulation
+reference metadata. The owned OM System OM-1 with its confirmed 25 mm lens and
+Sony A7R II with its confirmed 35 mm lens are assigned provisionally to the
+right and left continuous oblique views. The A7R II capture mode is Super 35;
+the resulting nominal full-frame equivalents are 50 and 52.5 mm. Each camera
+declares a 3840 x 2160 clean-HDMI acquisition, a 512 x 512 global grayscale
+input, and a 256 x 256 foveal product sampled directly from the native frame.
+The left/right assignment may swap after physical mount and latency tests.
+
+The nominal 16:9 vertical fields of view are 22.03 degrees for the OM-1 and
+21.39 degrees for the A7R II. These are calculated from provisional 17.3 and
+23.5 mm active widths and must be replaced by calibrated intrinsics. Both
+optical centers were moved 7% farther from canvas center than the v3 poses,
+preserving incidence while leaving about 4-8% vertical framing margin. At 4K,
+the 12.7 mm brush is approximately 40-48 pixels across depending on view and
+canvas direction. The deployed
 inspection reference uses 72 degrees to frame the 508 mm square canvas from
 382.6 mm away. Model-facing canvas observations are declared as 512 x 512
 normalized linear grayscale: 30 Hz for the oblique views and 5 Hz/on-demand
 for inspection.
+
+Both owned cameras use rolling shutters. The extra fixed head-on inspection
+camera and low-cost global-shutter overhead camera are still planned hardware;
+neither owned body is claimed at two fixed poses. The current MuJoCo process
+emits a native grayscale frame, an independently derived global product, and
+any explicitly requested foveal products under
+`camera-observation-interface-v1`. This simulates the declared 4K acquisition
+shape; it is not live HDMI capture or a physically calibrated camera model.
+
+The same camera entries declare provisional per-view model-error standard
+deviations, inlier probabilities, and broad outlier standard deviations for
+`camera-spatial-likelihood-v0`. That active-inference likelihood consumes only
+canvas-registered global/foveal pixels, predicts superficial grayscale from
+latent thickness and surface tone, and infers occlusion responsibilities from
+residuals. MuJoCo segmentation and exact visibility never cross the model
+boundary. The parameters remain simulation priors pending real captures.
+
+Generate and solve the physical intrinsic-calibration target with
+`python -m active_painter.camera_calibration`; the exact capture procedure and
+quality gates are documented in `calibration/cameras/README.md`. Calibration
+results are reviewed before replacing the nominal XML values.
 
 The overhead profile camera is a low-cost 640 x 480, 60 Hz grayscale
 global-shutter analogue. Its optical axis is tangent to the canvas plane and

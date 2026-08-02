@@ -86,8 +86,10 @@ planner state from `ArmPainterSim` raises `PrivilegedStateAccessError`.
 
 This is boundary enforcement, not completed sensor inference. The default
 therefore reports `sensor_equivalent=false` and `model_access_blocked=true`
-until the fixed-camera/body likelihood and sensor-conditioned posterior are
-implemented. The old behavior is available only through the explicit
+until the sensor-conditioned body posterior initializes motor forecasts and
+the action-conditioned transition/camera update is scheduled in the live
+loop. The camera-conditioned painting posterior is now implemented but does
+not weaken those remaining blocks. The old behavior is available only through the explicit
 `oracle_material_state` diagnostic mode.
 
 ## 4. Temporary Oracle Baseline
@@ -198,11 +200,48 @@ the closest current variable to a camera observation, but it has no camera
 optics, occlusion, glare, latency, quantization, or sensor noise, and it is not
 fed into inference.
 
-The MJCF now supplies provisional ideal-pinhole camera poses and a tested
-canvas-plane homography interface. That geometric normalization does not
-change the PNG's classification: no rendered camera frame, occlusion mask,
-photometric process, timing/noise process, or camera-conditioned likelihood is
-yet available to inference.
+This browser visualization remains privileged even though a separate
+model-facing camera process now exists.
+
+### 5.6 Model-facing camera observations
+
+`CameraObservationProcess` renders MuJoCo geometry and occlusion, composites
+only the superficial grayscale canvas appearance into visible canvas pixels,
+then applies XML-declared provisional read/signal noise, quantization, delay,
+and a weak rendered-lighting specular residual once at the native-frame
+boundary. Homography views are rectified to shared canvas UV; the overhead
+standoff camera retains a native frame and emits an edge-profile product.
+
+Agent-facing `CameraFrame` contains only grayscale pixels, a static
+calibration-validity mask, timestamps, sequence, role, registration, product,
+sampling, source-resolution, and version metadata. Native, global, and foveal
+products from the same exposure share capture identity. The internal dynamic
+segmentation used by the generative process, exact visibility, pose, contact,
+and material fields are not returned. White-on-white material coverage is
+intentionally unobservable in this provisional model.
+
+`CameraSpatialLikelihood` consumes only registered global/foveal products.
+It predicts superficial grayscale from the spatial posterior's thickness and
+surface-tone factors and gives wetness and black pigment mass zero direct
+image Jacobian. A latent inlier/outlier mixture handles rendered occluders from
+pixel residuals; it receives no visibility mask. Global and foveal products
+from one native exposure are mosaicked before one likelihood update to avoid
+double-counting their correlated acquisition noise. The separately logged VFE
+contains state complexity, occlusion complexity, and expected negative log
+likelihood. Its precisions are XML-declared simulation priors pending physical
+calibration.
+
+The `provisional-multiview-v4` acquisition contract assigns the owned OM-1
+with its 25 mm lens and A7R II with its 35 mm lens to separate oblique views at
+3840 x 2160. The Sony is provisionally configured for Super 35. Nominal
+intrinsics live in the XML but remain hidden calibration parameters, not
+agent observations. The contract declares independent 512 x 512 global and
+256 x 256 foveal products. The simulator now retains the native frame, emits
+the global product, and samples each explicitly requested fovea directly from
+native pixels. A `FoveaRequest` is addressed in canvas UV and may be selected
+from a sensor posterior, a policy prediction, or an operator diagnostic. No
+request means no fovea. Exact simulator pose, segmentation, contact, material,
+and visibility state may not select or populate it.
 
 ## 6. Bodily Variables
 
@@ -310,8 +349,8 @@ brush and infers preserve versus reload from an explicit preparation-policy
 prior and conditional mark-outcome EFE. Motor forecasts overwrite process
 loading and average mixture with this belief rather than reading exact load.
 The copied brush RNG and bristle realization remain privileged, however. The
-local camera-derived load likelihood is declared but cannot yet be assimilated
-because the camera/material observation path is not implemented.
+camera/material path is now implemented, but the local per-mark deposition
+statistic has not yet been derived from it for the brush-load likelihood.
 
 Nominal brush identity and issued reload commands are known. Actual loading,
 contamination, bristle state, and tip lag remain latent and must ultimately be

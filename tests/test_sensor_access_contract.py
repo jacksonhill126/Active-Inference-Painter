@@ -145,6 +145,8 @@ def test_default_model_boundary_fails_closed_without_reading_process_truth() -> 
     assert boundary["modelAccessBlocked"] is True
     assert boundary["materialStateAccess"] == "denied"
     assert boundary["bodyForecastInitialization"] == "denied"
+    assert boundary["cameraPosteriorConnected"] is False
+    assert "spatial_material" in boundary["blockedReason"]
 
     with pytest.raises(PrivilegedStateAccessError, match="denied"):
         driver._planner_state(process)  # type: ignore[arg-type]

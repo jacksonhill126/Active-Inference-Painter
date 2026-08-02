@@ -39,15 +39,52 @@ def _pil_perspective_coefficients(matrix: np.ndarray) -> tuple[float, ...]:
 def test_mjcf_camera_rig_has_versioned_roles_and_canonical_projection() -> None:
     rig = load_camera_rig(MODEL_PATH)
 
-    assert rig.version == "provisional-multiview-v2"
+    assert rig.version == "provisional-multiview-v4"
     assert rig.geometry_model == "ideal_pinhole_without_distortion"
-    assert rig.calibration_status == "provisional_simulation_geometry"
+    assert (
+        rig.calibration_status
+        == "nominal_lens_geometry_pending_physical_calibration"
+    )
     assert rig.normalization == "role_dependent_v1"
-    assert rig.focus_model == "fixed_manual_pending_lens_selection"
+    assert (
+        rig.focus_model
+        == "fixed_manual_confirmed_primes_pending_focus_measurement"
+    )
     assert rig.observation_encoding == (
         "linear_grayscale_float32_normalized_0_1"
     )
-    assert rig.shutter_model == "global_shutter"
+    assert rig.shutter_model == "heterogeneous_per_camera_v1"
+    assert rig.observation_model == "mujoco_native_global_foveal_composite_v1"
+    assert rig.product_contract == "native_global_requested_fovea_v1"
+    assert rig.fovea_addressing == "canvas_uv_center_and_span"
+    assert (
+        rig.fovea_selection_boundary
+        == "external_observation_space_request_without_oracle_default"
+    )
+    assert (
+        rig.noise_model
+        == "gaussian_read_plus_signal_dependent_approximation_v0"
+    )
+    assert rig.noise_status == "provisional_not_calibrated"
+    assert (
+        rig.likelihood_model
+        == "registered_grayscale_occlusion_mixture_linearized_v0"
+    )
+    assert (
+        rig.likelihood_status
+        == "provisional_simulation_prior_pending_physical_calibration"
+    )
+    assert (
+        rig.specular_model
+        == "mujoco_lighting_residual_mix_approximation_v0"
+    )
+    assert rig.provisional_specular_strength == pytest.approx(0.08)
+    assert [camera.likelihood_model_error_std for camera in rig.cameras] == pytest.approx(
+        [0.035, 0.035, 0.030, 0.040]
+    )
+    assert [camera.likelihood_inlier_probability for camera in rig.cameras] == pytest.approx(
+        [0.960, 0.960, 0.995, 0.950]
+    )
     assert [camera.name for camera in rig.cameras] == [
         "canvas_right_oblique",
         "canvas_left_oblique",
@@ -73,6 +110,84 @@ def test_mjcf_camera_rig_has_versioned_roles_and_canonical_projection() -> None:
         "canvas_plane_homography",
         "canvas_edge_profile",
     ]
+    assert [camera.hardware_baseline for camera in rig.cameras] == [
+        "OM_SYSTEM_OM-1",
+        "Sony_ILCE-7RM2",
+        "additional_head_on_TBD",
+        "low_cost_global_shutter_TBD",
+    ]
+    assert [camera.hardware_status for camera in rig.cameras] == [
+        "owned",
+        "owned",
+        "planned",
+        "planned",
+    ]
+    assert [camera.lens_status for camera in rig.cameras] == [
+        "confirmed_focal_length",
+        "confirmed_focal_length",
+        "TBD",
+        "TBD",
+    ]
+    assert [camera.capture_mode for camera in rig.cameras] == [
+        "MFT_full_width_16x9",
+        "Super35_full_width_16x9",
+        "TBD",
+        "native_4x3_TBD",
+    ]
+    assert [camera.focal_length_mm for camera in rig.cameras] == [
+        25.0,
+        35.0,
+        None,
+        None,
+    ]
+    assert [camera.active_sensor_width_mm for camera in rig.cameras] == [
+        17.3,
+        23.5,
+        None,
+        None,
+    ]
+    assert [
+        camera.full_frame_equivalent_focal_length_mm for camera in rig.cameras
+    ] == [50.0, 52.5, None, None]
+    assert [camera.fovy_deg for camera in rig.cameras] == pytest.approx(
+        (22.027017404218, 21.387533133508, 72.0, 45.0)
+    )
+    for camera in rig.cameras[:2]:
+        assert camera.focal_length_mm is not None
+        assert camera.active_sensor_width_mm is not None
+        active_height_mm = camera.active_sensor_width_mm * 9.0 / 16.0
+        derived_fovy_deg = np.rad2deg(
+            2.0
+            * np.arctan(
+                active_height_mm / (2.0 * camera.focal_length_mm)
+            )
+        )
+        assert camera.fovy_deg == pytest.approx(derived_fovy_deg, abs=1e-12)
+    assert [camera.shutter_model for camera in rig.cameras] == [
+        "rolling",
+        "rolling",
+        "TBD",
+        "global",
+    ]
+    assert [camera.acquisition_resolution_px for camera in rig.cameras] == [
+        (3840, 2160),
+        (3840, 2160),
+        (3840, 2160),
+        (1456, 1088),
+    ]
+    assert [camera.foveal_resolution_px for camera in rig.cameras] == [
+        (256, 256),
+        (256, 256),
+        (256, 256),
+        None,
+    ]
+    assert [camera.read_noise_std for camera in rig.cameras] == pytest.approx(
+        (0.003, 0.003, 0.002, 0.004)
+    )
+    assert [
+        camera.signal_noise_std for camera in rig.cameras
+    ] == pytest.approx((0.006, 0.006, 0.004, 0.008))
+    assert [camera.quantization_bits for camera in rig.cameras] == [8, 8, 8, 8]
 
     expected_incidence = (
         31.7548481366,
@@ -81,8 +196,8 @@ def test_mjcf_camera_rig_has_versioned_roles_and_canonical_projection() -> None:
         75.5092986784,
     )
     expected_depth = (
-        (1.3495300677, 1.7143020165),
-        (1.3567525452, 1.7346980916),
+        (1.4567641907, 1.8215361394),
+        (1.4649533175, 1.8428988639),
         (0.3826, 0.3826),
         (0.646, 1.154),
     )

@@ -27,6 +27,8 @@ from .config import (
     SUMMARY_PLANNER_STATE_KIND,
 )
 from .canvas_hierarchy import PASSAGE_STEP_DESCRIPTOR_DIM
+from .camera_inference import CAMERA_SPATIAL_LIKELIHOOD_VERSION
+from .camera_observation import CameraObservationBundle
 from .efe import EFEComponents
 from .env import StrokeAction
 from .models import GaussianBelief
@@ -201,6 +203,7 @@ class ArmActiveInferenceDriver:
     brush_load_beliefs: dict[str, BrushLoadBelief] = field(init=False)
     last_brush_preparation: BrushPreparationInference | None = field(default=None, init=False)
     _observation_boundary_blocked: bool = field(default=False, init=False)
+    camera_observation_count: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         if self.config.planner_state_kind == SUMMARY_PLANNER_STATE_KIND:
@@ -228,9 +231,10 @@ class ArmActiveInferenceDriver:
             self.observation_access_mode == SENSOR_OBSERVATION_ACCESS_MODE
         )
         if self._observation_boundary_blocked:
-            # Fail closed until the fixed-camera/body likelihood and posterior
-            # path exist.  In this mode neither bootstrap nor live planning may
-            # obtain an ArmPainterSim-derived material/body state.
+            # The camera-conditioned painting posterior now exists. Fail
+            # closed until the sensor-conditioned body posterior initializes
+            # motor forecasts; neither bootstrap nor live planning may obtain
+            # an ArmPainterSim-derived material/body state in the meantime.
             self.enabled = False
         if self._uses_spatial_planner():
             self.agent = SpatialActiveInferencePainter(self.config, seed=17, device=self.device)
@@ -308,6 +312,7 @@ class ArmActiveInferenceDriver:
             "thickness_scale": cfg.thickness_scale,
             "paint_presence_threshold": cfg.paint_presence_threshold,
             "canvas_ground_tone": cfg.canvas_ground_tone,
+            "camera_spatial_likelihood_version": CAMERA_SPATIAL_LIKELIHOOD_VERSION,
         }
 
     def _checkpoint_file(self) -> Path | None:
@@ -515,6 +520,7 @@ class ArmActiveInferenceDriver:
                 "black": self.brush_loading_model.unloaded_belief(1.0),
             }
             self.last_brush_preparation = None
+            self.camera_observation_count = 0
         if self._observation_boundary_blocked:
             # Do not even touch the process object from the model-facing reset
             # path.  A separate execution/runtime reset owns plant mutations.
@@ -546,6 +552,29 @@ class ArmActiveInferenceDriver:
     @property
     def observation_boundary_blocked(self) -> bool:
         return self._observation_boundary_blocked
+
+    def ingest_camera_observation(
+        self,
+        observation: CameraObservationBundle,
+    ) -> SpatialCanvasState:
+        """Assimilate permitted image products without dereferencing process truth.
+
+        This completes the painting-state camera likelihood boundary. The
+        full sensor-equivalent controller remains fail-closed until its body
+        posterior replaces exact simulator initialization in motor forecasts.
+        """
+
+        if not isinstance(self.agent, SpatialActiveInferencePainter):
+            raise RuntimeError(
+                "camera likelihood requires planner_state_kind='spatial_material'"
+            )
+        posterior = self.agent.assimilate_camera_observation(observation)
+        self.belief = posterior
+        self.camera_observation_count += sum(
+            factor.observed_cell_count > 0
+            for factor in (self.agent.last_camera_vfe.factors if self.agent.last_camera_vfe else ())
+        )
+        return posterior
 
     def _require_oracle_diagnostic_mode(self, operation: str) -> None:
         if self._observation_boundary_blocked:
@@ -2059,6 +2088,12 @@ class ArmActiveInferenceDriver:
         action = asdict(self.current.action) if self.current is not None else None
         efe = asdict(self.last_components) if self.last_components is not None else None
         vfe = asdict(self.agent.last_vfe) if self.agent.last_vfe is not None else None
+        camera_vfe = (
+            asdict(self.agent.last_camera_vfe)
+            if isinstance(self.agent, SpatialActiveInferencePainter)
+            and self.agent.last_camera_vfe is not None
+            else None
+        )
         posterior_values = [prob for _, _, prob in self.last_ranked]
         posterior_entropy = float(
             -sum(prob * np.log(max(prob, 1e-12)) for prob in posterior_values)
@@ -2111,6 +2146,11 @@ class ArmActiveInferenceDriver:
                 "mode": self.observation_access_mode,
                 "sensorEquivalent": False,
                 "modelAccessBlocked": self._observation_boundary_blocked,
+                "cameraLikelihood": CAMERA_SPATIAL_LIKELIHOOD_VERSION,
+                "cameraPosteriorConnected": isinstance(
+                    self.agent, SpatialActiveInferencePainter
+                ),
+                "cameraExposureCount": self.camera_observation_count,
                 "materialStateAccess": (
                     "exact VerticalCanvas fields and deterministic transforms; "
                     "explicit diagnostic-only exception"
@@ -2124,8 +2164,15 @@ class ArmActiveInferenceDriver:
                     else "denied"
                 ),
                 "blockedReason": (
-                    "fixed-camera/body likelihood and sensor-conditioned "
-                    "posterior are not implemented"
+                    (
+                        "camera-conditioned painting posterior is implemented; "
+                        "sensor-conditioned body posterior and motor-forecast "
+                        "initialization, plus action-conditioned live observation "
+                        "scheduling, are not connected"
+                        if isinstance(self.agent, SpatialActiveInferencePainter)
+                        else "camera likelihood requires the spatial_material planner; "
+                        "summary mode is obsolete"
+                    )
                     if self._observation_boundary_blocked
                     else None
                 ),
@@ -2253,6 +2300,7 @@ class ArmActiveInferenceDriver:
             "motionReliability": self.motion_reliability.summary(),
             "efe": efe,
             "vfe": vfe,
+            "cameraVfe": camera_vfe,
             "phase": self.phase_label(),
             "posterior": self.current.posterior if self.current is not None else None,
             "topPolicies": [

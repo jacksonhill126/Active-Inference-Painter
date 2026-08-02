@@ -727,8 +727,28 @@ def _summary_payload(
             "availability": camera.availability,
             "registration": camera.registration,
             "channels": camera.channels,
+            "hardware_baseline": camera.hardware_baseline,
+            "hardware_status": camera.hardware_status,
+            "lens_status": camera.lens_status,
+            "capture_mode": camera.capture_mode,
+            "transport": camera.transport,
+            "shutter_model": camera.shutter_model,
+            "focal_length_mm": camera.focal_length_mm,
+            "active_sensor_width_mm": camera.active_sensor_width_mm,
+            "full_frame_equivalent_focal_length_mm": (
+                camera.full_frame_equivalent_focal_length_mm
+            ),
+            "vertical_field_of_view_deg": camera.fovy_deg,
+            "acquisition_resolution_px": list(
+                camera.acquisition_resolution_px
+            ),
             "model_input_resolution_px": list(
                 camera.model_input_resolution_px
+            ),
+            "foveal_resolution_px": (
+                list(camera.foveal_resolution_px)
+                if camera.foveal_resolution_px is not None
+                else None
             ),
             "sample_rate_hz": camera.sample_rate_hz,
             "tip_in_frame_fraction": float(

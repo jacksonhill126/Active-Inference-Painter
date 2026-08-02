@@ -22,6 +22,10 @@ from .version import CodeBuildInfo, code_build_info
 from .web_robot_model import load_robot_visual_model, retarget_legacy_robot_state
 
 
+FOVEA_TRACE_INTERFACE_VERSION = "fovea-trace-v0"
+DEFAULT_FOVEA_TRACE_RETENTION_S = 10.0
+
+
 @dataclass(slots=True)
 class WebSimRuntime:
     canvas_size: int = 256
@@ -40,6 +44,7 @@ class WebSimRuntime:
     device: str | None = None
     plant_backend: str = "native"
     observation_access_mode: str = OBSERVATION_ACCESS_MODE
+    fovea_trace_retention_s: float = DEFAULT_FOVEA_TRACE_RETENTION_S
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)
@@ -56,8 +61,18 @@ class WebSimRuntime:
     _thread: threading.Thread | None = field(default=None, init=False)
     _next_telemetry_time: float = field(default=0.0, init=False)
     _last_robot_joint_position_deg: dict[str, float] | None = field(default=None, init=False)
+    _camera_process: Any | None = field(default=None, init=False)
+    _fovea_trace: list[dict[str, Any]] = field(default_factory=list, init=False)
+    _pending_fovea_delivery_deadlines: dict[str, float] = field(
+        default_factory=dict,
+        init=False,
+    )
+    _next_camera_delivery_poll_time_s: float = field(default=0.0, init=False)
+    _operator_fovea_sequence: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
+        if not np.isfinite(self.fovea_trace_retention_s) or self.fovea_trace_retention_s <= 0.0:
+            raise ValueError("fovea_trace_retention_s must be finite and positive")
         self.code_build = code_build_info()
         self.robot_model = load_robot_visual_model()
         sim_config = PainterConfig(
@@ -122,6 +137,9 @@ class WebSimRuntime:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        if self._camera_process is not None:
+            self._camera_process.close()
+            self._camera_process = None
         close = getattr(self.sim.plant, "close", None)
         if callable(close):
             close()
@@ -166,6 +184,7 @@ class WebSimRuntime:
             self.sim.set_target(scripted_pose(self.sim_time))
             self.sim.intended_contact_pressure = scripted_contact_pressure(self.sim_time)
         self.sim.step(fixed_dt)
+        self._advance_pending_camera_delivery()
         self._record_telemetry()
 
     def _record_telemetry(self, *, force: bool = False) -> None:
@@ -196,6 +215,9 @@ class WebSimRuntime:
             elif action == "reset":
                 self.sim.reset_pose()
                 self.sim.canvas.clear()
+                if self._camera_process is not None:
+                    self._camera_process.reset()
+                self._clear_fovea_trace()
                 self.sim_time = 0.0
                 self.painting_count = 0
                 self.last_saved_canvas = None
@@ -205,6 +227,7 @@ class WebSimRuntime:
                 self._record_telemetry(force=True)
             elif action == "clear":
                 self.sim.canvas.clear()
+                self._clear_fovea_trace()
                 self.agent_driver.reset(self.sim)
             elif action == "clear_telemetry":
                 self.telemetry_log.clear()
@@ -220,8 +243,10 @@ class WebSimRuntime:
                     return {
                         "ok": False,
                         "error": (
-                            "active inference is fail-closed: the sensor-equivalent "
-                            "camera/body likelihood is not implemented"
+                            "active inference is fail-closed: camera-conditioned "
+                            "painting inference is connected, but sensor-conditioned "
+                            "body initialization and the action-conditioned live "
+                            "observation loop are not"
                         ),
                     }
                 self.agent_enabled = not self.agent_enabled
@@ -233,6 +258,11 @@ class WebSimRuntime:
                 self.sim.brush_tone = tone
                 if self.sim.brush.loaded:
                     self.sim.load_brush(self.sim.brush.load_amount, tone)
+            elif action == "request_fovea":
+                try:
+                    self._request_operator_fovea(data)
+                except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                    return {"ok": False, "error": str(exc)}
             else:
                 return {"ok": False, "error": f"unknown command: {action}"}
         return {"ok": True, "state": self.state()}
@@ -277,6 +307,37 @@ class WebSimRuntime:
                 "depositingPaint": self.sim.depositing_paint,
                 "brushLoadAmount": self.sim.brush.load_amount,
                 "plantBackend": self.plant_backend,
+                "cameraObservation": {
+                    "available": self.plant_backend == "mujoco",
+                    "interfaceVersion": "camera-observation-interface-v1",
+                    "productContract": (
+                        self.robot_model["cameraRig"]["productContract"]
+                    ),
+                    "nativeFrameRetained": True,
+                    "derivedProducts": [
+                        "global_canvas",
+                        "fovea_canvas",
+                        "edge_profile",
+                    ],
+                    "foveaAddressing": (
+                        self.robot_model["cameraRig"]["foveaAddressing"]
+                    ),
+                    "foveaDefault": None,
+                    "modelInputEndpoint": (
+                        "/api/camera/{camera_name}.png"
+                        if self.plant_backend == "mujoco"
+                        else None
+                    ),
+                    "consumedByInference": True,
+                    "likelihoodModel": self.robot_model["cameraRig"][
+                        "likelihoodModel"
+                    ],
+                    "consumptionBoundary": (
+                        "registered global/foveal products only; native and "
+                        "edge products ignored by painting-state likelihood"
+                    ),
+                    "foveation": self._foveation_state(),
+                },
                 "counterfactualPlantBackend": getattr(
                     self.sim.plant,
                     "counterfactual_backend_id",
@@ -344,6 +405,245 @@ class WebSimRuntime:
         out = io.BytesIO()
         image.save(out, format="PNG")
         return out.getvalue()
+
+    def camera_png(self, camera_name: str) -> bytes:
+        """Render the global/edge derived product for diagnostics."""
+
+        with self._lock:
+            process, backend = self._camera_backend()
+            camera = process.rig.camera(camera_name)
+            inspection_available = self._inspection_camera_available(
+                process,
+                backend,
+            )
+            if camera.availability == "park_only" and not inspection_available:
+                raise RuntimeError(
+                    f"camera {camera_name!r} is available only at camera_clear_park"
+                )
+            frame = process.render_immediate(
+                camera_name,
+                monotonic_time_s=float(backend.data.time),
+                qpos=backend.data.qpos.copy(),
+                canvas_grayscale=1.0 - self.sim.canvas.observed_tone(),
+            )
+        image = Image.fromarray(
+            np.rint(frame.grayscale * 255.0).astype(np.uint8),
+            mode="L",
+        )
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        return out.getvalue()
+
+    def camera_observations(self, *, fovea_requests: tuple[Any, ...] = ()) -> Any:
+        """Deliver due camera products to inference and the fovea trace."""
+
+        with self._lock:
+            return self._camera_observations_locked(fovea_requests=fovea_requests)
+
+    def _camera_observations_locked(
+        self,
+        *,
+        fovea_requests: tuple[Any, ...] = (),
+    ) -> Any:
+        process, backend = self._camera_backend()
+        now = float(backend.data.time)
+        for request in fovea_requests:
+            self._pending_fovea_delivery_deadlines[request.request_id] = max(
+                float(request.expires_time_s),
+                now,
+            ) + float(process.rig.camera(request.camera_name).latency_s) + 0.5
+        observation = process.observe(
+            now,
+            qpos=backend.data.qpos.copy(),
+            canvas_grayscale=1.0 - self.sim.canvas.observed_tone(),
+            inspection_available=self._inspection_camera_available(
+                process,
+                backend,
+            ),
+            fovea_requests=fovea_requests,
+        )
+        if self.observation_access_mode == OBSERVATION_ACCESS_MODE:
+            self.agent_driver.ingest_camera_observation(observation)
+        self._record_fovea_observations(observation)
+        return observation
+
+    def _request_operator_fovea(self, data: dict[str, Any]) -> None:
+        if self.plant_backend != "mujoco":
+            raise RuntimeError("fovea requests require the MuJoCo camera backend")
+        from .camera_observation import FoveaRequest
+
+        process, backend = self._camera_backend()
+        camera_name = str(data.get("cameraName", "canvas_right_oblique"))
+        camera = process.rig.camera(camera_name)
+        if camera.registration != "canvas_plane_homography" or camera.foveal_resolution_px is None:
+            raise ValueError(f"camera {camera_name!r} has no canvas foveal product")
+        center = self._normalized_pair(data.get("centerCanvasUv"), "centerCanvasUv")
+        span = self._normalized_pair(
+            data.get("spanCanvasUv", (0.22, 0.22)),
+            "spanCanvasUv",
+            strictly_positive=True,
+        )
+        now = float(backend.data.time)
+        request_id = f"operator-{self._operator_fovea_sequence}"
+        self._operator_fovea_sequence += 1
+        request = FoveaRequest(
+            request_id=request_id,
+            camera_name=camera_name,
+            requested_time_s=now,
+            expires_time_s=now + 1.0,
+            center_canvas_uv=center,
+            span_canvas_uv=span,
+            selection_basis="operator_diagnostic",
+            selection_revision="web-viewer-pointer-v0",
+        )
+        self._camera_observations_locked(fovea_requests=(request,))
+
+    @staticmethod
+    def _normalized_pair(
+        value: Any,
+        name: str,
+        *,
+        strictly_positive: bool = False,
+    ) -> tuple[float, float]:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"{name} must contain two normalized values")
+        pair = (float(value[0]), float(value[1]))
+        lower_valid = all(component > 0.0 for component in pair) if strictly_positive else all(
+            component >= 0.0 for component in pair
+        )
+        if not lower_valid or any(component > 1.0 for component in pair) or not all(
+            np.isfinite(component) for component in pair
+        ):
+            interval = "(0, 1]" if strictly_positive else "[0, 1]"
+            raise ValueError(f"{name} must lie in {interval}")
+        return pair
+
+    def _advance_pending_camera_delivery(self) -> None:
+        if self.plant_backend != "mujoco" or not self._pending_fovea_delivery_deadlines:
+            return
+        _, backend = self._camera_backend()
+        now = float(backend.data.time)
+        self._pending_fovea_delivery_deadlines = {
+            request_id: deadline
+            for request_id, deadline in self._pending_fovea_delivery_deadlines.items()
+            if deadline >= now - 1e-12
+        }
+        if (
+            not self._pending_fovea_delivery_deadlines
+            or now + 1e-12 < self._next_camera_delivery_poll_time_s
+        ):
+            return
+        self._next_camera_delivery_poll_time_s = now + 1.0 / 120.0
+        self._camera_observations_locked()
+
+    def _record_fovea_observations(self, observation: Any) -> None:
+        from .camera_observation import FOVEA_CANVAS_PRODUCT
+
+        for frame in observation.frames:
+            if frame.product_kind != FOVEA_CANVAS_PRODUCT:
+                continue
+            event = {
+                "eventId": f"{frame.camera_name}:{frame.sequence}:{frame.fovea_request_id}",
+                "requestId": frame.fovea_request_id,
+                "cameraName": frame.camera_name,
+                "sequence": frame.sequence,
+                "captureTimeS": frame.capture_time_s,
+                "availableTimeS": frame.available_time_s,
+                "centerCanvasUv": list(frame.center_canvas_uv),
+                "spanCanvasUv": list(frame.span_canvas_uv),
+                "selectionBasis": frame.selection_basis,
+                "selectionRevision": frame.selection_revision,
+            }
+            self._fovea_trace.append(event)
+            self._pending_fovea_delivery_deadlines.pop(
+                str(frame.fovea_request_id),
+                None,
+            )
+        if len(self._fovea_trace) > 512:
+            self._fovea_trace = self._fovea_trace[-512:]
+        self._prune_fovea_trace(float(observation.monotonic_time_s))
+
+    def _foveation_state(self) -> dict[str, Any]:
+        now = self._camera_time_s()
+        retention, retention_source, memory_horizon = self._fovea_retention_contract()
+        self._prune_fovea_trace(now, retention_s=retention)
+        events = [
+            {
+                **event,
+                "ageSeconds": max(0.0, now - float(event["availableTimeS"])),
+            }
+            for event in self._fovea_trace
+        ]
+        return {
+            "interfaceVersion": FOVEA_TRACE_INTERFACE_VERSION,
+            "traceRetentionSeconds": retention,
+            "retentionSource": retention_source,
+            "memoryHorizonSeconds": memory_horizon,
+            "active": events[-1] if events else None,
+            "trace": events,
+            "pendingRequestCount": len(self._pending_fovea_delivery_deadlines),
+            "operatorRequestCommand": "request_fovea",
+        }
+
+    def _fovea_retention_contract(self) -> tuple[float, str, float | None]:
+        horizon = getattr(self.agent_driver.agent, "foveation_memory_horizon_s", None)
+        if horizon is not None and np.isfinite(horizon) and float(horizon) > 0.0:
+            value = float(horizon)
+            return value, "agent_foveation_memory_horizon", value
+        return (
+            float(self.fovea_trace_retention_s),
+            "visualization_default_no_foveation_memory_model_declared",
+            None,
+        )
+
+    def _camera_time_s(self) -> float:
+        backend = getattr(self.sim.plant, "backend", None)
+        if backend is not None:
+            return float(backend.data.time)
+        return float(self.sim_time)
+
+    def _prune_fovea_trace(
+        self,
+        now_s: float,
+        *,
+        retention_s: float | None = None,
+    ) -> None:
+        retention = (
+            self._fovea_retention_contract()[0]
+            if retention_s is None
+            else float(retention_s)
+        )
+        cutoff = now_s - retention
+        self._fovea_trace = [
+            event
+            for event in self._fovea_trace
+            if float(event["availableTimeS"]) >= cutoff - 1e-12
+        ]
+
+    def _clear_fovea_trace(self) -> None:
+        self._fovea_trace.clear()
+        self._pending_fovea_delivery_deadlines.clear()
+        self._next_camera_delivery_poll_time_s = 0.0
+
+    def _camera_backend(self) -> tuple[Any, Any]:
+        backend = getattr(self.sim.plant, "backend", None)
+        if self.plant_backend != "mujoco" or backend is None:
+            raise RuntimeError(
+                "model-facing camera rendering requires --plant-backend mujoco"
+            )
+        if self._camera_process is None:
+            from .camera_observation import CameraObservationProcess
+
+            self._camera_process = CameraObservationProcess()
+        return self._camera_process, backend
+
+    @staticmethod
+    def _inspection_camera_available(process: Any, backend: Any) -> bool:
+        park_qpos = backend.keyframe_qpos("camera_clear_park")
+        return bool(
+            np.max(np.abs(backend.data.qpos[:4] - park_qpos[:4]))
+            <= np.deg2rad(2.0)
+        )
 
     def _restart_after_stop_if_needed(self) -> bool:
         if not self.agent_driver.stopped:

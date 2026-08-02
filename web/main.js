@@ -5,6 +5,8 @@ const readout = document.getElementById("readout");
 const specs = document.getElementById("specs");
 const miniCanvas = document.getElementById("miniCanvas");
 const miniCtx = miniCanvas.getContext("2d");
+const foveaCameraSelect = document.getElementById("foveaCamera");
+const foveaStatus = document.getElementById("foveaStatus");
 const robotModel = await fetch("/api/robot-model", { cache: "no-store" }).then((response) => {
   if (!response.ok) throw new Error(`robot model HTTP ${response.status}`);
   return response.json();
@@ -74,6 +76,21 @@ canvasMesh.position.set(
   robotModel.canvas.center[2],
 );
 scene.add(canvasMesh);
+
+const foveaTrailGroup = new THREE.Group();
+foveaTrailGroup.name = "delivered_fovea_trace";
+scene.add(foveaTrailGroup);
+let latestFoveation = null;
+
+const fovealCameras = (robotModel.cameraRig?.cameras || []).filter(
+  (entry) => entry.registration === "canvas_plane_homography" && entry.fovealResolutionPx,
+);
+for (const entry of fovealCameras) {
+  const option = document.createElement("option");
+  option.value = entry.name;
+  option.textContent = `${entry.name} · ${entry.role}`;
+  foveaCameraSelect.appendChild(option);
+}
 
 const materialCache = new Map();
 const jointNodes = new Map();
@@ -281,11 +298,21 @@ function v3(p) {
 }
 
 async function command(type, value = undefined) {
-  await fetch("/api/command", {
+  const payload = value === undefined
+    ? { type }
+    : (value && typeof value === "object" && !Array.isArray(value))
+      ? { type, ...value }
+      : { type, value };
+  const response = await fetch("/api/command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(value === undefined ? { type } : { type, value }),
+    body: JSON.stringify(payload),
   });
+  const result = await response.json();
+  if (!response.ok || !result.ok) {
+    throw new Error(result.error || `command HTTP ${response.status}`);
+  }
+  return result;
 }
 
 document.getElementById("btnMax").onclick = () => command("toggle_max_speed");
@@ -299,6 +326,22 @@ document.getElementById("btnFaceCanvas").onclick = () => setFaceCanvasView();
 document.getElementById("btnTopView").onclick = () => setTopView();
 document.getElementById("btnBlack").onclick = () => command("tone", "black");
 document.getElementById("btnWhite").onclick = () => command("tone", "white");
+
+miniCanvas.addEventListener("click", (event) => {
+  if (!foveaCameraSelect.value) return;
+  const bounds = miniCanvas.getBoundingClientRect();
+  const u = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+  const v = clamp((event.clientY - bounds.top) / bounds.height, 0, 1);
+  foveaStatus.textContent = "Fovea requested; awaiting delivered frame";
+  command("request_fovea", {
+    cameraName: foveaCameraSelect.value,
+    centerCanvasUv: [u, v],
+    spanCanvasUv: [0.22, 0.22],
+  }).catch((error) => {
+    foveaStatus.textContent = error.message;
+    console.error(error);
+  });
+});
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "f") command("toggle_max_speed");
@@ -411,6 +454,128 @@ async function updateCanvasTexture() {
   canvasTexture.needsUpdate = true;
   miniCtx.imageSmoothingEnabled = true;
   miniCtx.drawImage(img, 0, 0, miniCanvas.width, miniCanvas.height);
+  drawMiniFoveaOverlay();
+}
+
+function cameraTraceColor(cameraName) {
+  if (cameraName.includes("right")) return new THREE.Color(0x5ad1c4);
+  if (cameraName.includes("left")) return new THREE.Color(0xd68cff);
+  return new THREE.Color(0xffc857);
+}
+
+function canvasUvToWorld(u, v) {
+  return new THREE.Vector3(
+    robotModel.canvas.center[0] + (u - 0.5) * robotModel.canvas.width,
+    robotModel.canvas.contactY - 0.0012,
+    robotModel.canvas.center[2] + (0.5 - v) * robotModel.canvas.height,
+  );
+}
+
+function foveaRectanglePoints(event) {
+  const [u, v] = event.centerCanvasUv;
+  const [su, sv] = event.spanCanvasUv;
+  return [
+    canvasUvToWorld(u - su / 2, v - sv / 2),
+    canvasUvToWorld(u + su / 2, v - sv / 2),
+    canvasUvToWorld(u + su / 2, v + sv / 2),
+    canvasUvToWorld(u - su / 2, v + sv / 2),
+  ];
+}
+
+function traceLine(points, color, opacity, { loop = false } = {}) {
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const line = loop ? new THREE.LineLoop(geometry, material) : new THREE.LineSegments(geometry, material);
+  line.renderOrder = 20;
+  return line;
+}
+
+function clearFoveaTraceGroup() {
+  for (const child of [...foveaTrailGroup.children]) {
+    child.geometry?.dispose();
+    child.material?.dispose();
+    foveaTrailGroup.remove(child);
+  }
+}
+
+function updateFoveaVisualization(foveation) {
+  latestFoveation = foveation || null;
+  clearFoveaTraceGroup();
+  const trace = latestFoveation?.trace || [];
+  const retention = Math.max(0.001, latestFoveation?.traceRetentionSeconds || 10);
+  for (const event of trace) {
+    const remaining = clamp(1 - (event.ageSeconds || 0) / retention, 0, 1);
+    const opacity = 0.08 + 0.38 * remaining * remaining;
+    foveaTrailGroup.add(
+      traceLine(foveaRectanglePoints(event), cameraTraceColor(event.cameraName), opacity, { loop: true }),
+    );
+  }
+  const active = latestFoveation?.active;
+  if (active) {
+    const color = cameraTraceColor(active.cameraName);
+    foveaTrailGroup.add(traceLine(foveaRectanglePoints(active), color, 0.98, { loop: true }));
+    const [u, v] = active.centerCanvasUv;
+    const [su, sv] = active.spanCanvasUv;
+    const crosshair = [
+      canvasUvToWorld(u - 0.08 * su, v),
+      canvasUvToWorld(u + 0.08 * su, v),
+      canvasUvToWorld(u, v - 0.08 * sv),
+      canvasUvToWorld(u, v + 0.08 * sv),
+    ];
+    foveaTrailGroup.add(traceLine(crosshair, color, 1.0));
+    foveaStatus.textContent = `${active.cameraName} · ${active.selectionBasis} · ${active.ageSeconds.toFixed(1)} s ago`;
+  } else {
+    foveaStatus.textContent = latestFoveation?.pendingRequestCount
+      ? "Fovea requested; awaiting delivered frame"
+      : "No delivered fovea";
+  }
+}
+
+function drawMiniFoveaOverlay() {
+  const trace = latestFoveation?.trace || [];
+  const retention = Math.max(0.001, latestFoveation?.traceRetentionSeconds || 10);
+  miniCtx.save();
+  miniCtx.lineWidth = 1.25;
+  for (const event of trace) {
+    const remaining = clamp(1 - (event.ageSeconds || 0) / retention, 0, 1);
+    const [u, v] = event.centerCanvasUv;
+    const [su, sv] = event.spanCanvasUv;
+    miniCtx.strokeStyle = event.cameraName.includes("left")
+      ? `rgba(214, 140, 255, ${0.12 + 0.5 * remaining * remaining})`
+      : `rgba(90, 209, 196, ${0.12 + 0.5 * remaining * remaining})`;
+    miniCtx.strokeRect(
+      (u - su / 2) * miniCanvas.width,
+      (v - sv / 2) * miniCanvas.height,
+      su * miniCanvas.width,
+      sv * miniCanvas.height,
+    );
+  }
+  const active = latestFoveation?.active;
+  if (active) {
+    const [u, v] = active.centerCanvasUv;
+    const [su, sv] = active.spanCanvasUv;
+    miniCtx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+    miniCtx.lineWidth = 2;
+    miniCtx.strokeRect(
+      (u - su / 2) * miniCanvas.width,
+      (v - sv / 2) * miniCanvas.height,
+      su * miniCanvas.width,
+      sv * miniCanvas.height,
+    );
+    miniCtx.beginPath();
+    miniCtx.moveTo((u - 0.02) * miniCanvas.width, v * miniCanvas.height);
+    miniCtx.lineTo((u + 0.02) * miniCanvas.width, v * miniCanvas.height);
+    miniCtx.moveTo(u * miniCanvas.width, (v - 0.02) * miniCanvas.height);
+    miniCtx.lineTo(u * miniCanvas.width, (v + 0.02) * miniCanvas.height);
+    miniCtx.stroke();
+  }
+  miniCtx.restore();
 }
 
 let lastCanvasUpdate = 0;
@@ -422,6 +587,7 @@ async function pollState() {
     document.title = `Active-Inference Arm Painter ${versionText}`;
   }
   updateRobot(state.robot, state.contact);
+  updateFoveaVisualization(state.cameraObservation?.foveation);
 
   document.getElementById("btnMax").textContent = `Max speed: ${state.maxSpeed ? "on" : "off"}`;
   document.getElementById("btnMax").classList.toggle("active", state.maxSpeed);
@@ -450,6 +616,7 @@ async function pollState() {
     ? materialPyramid.map((level) => `${level.name}:${level.gridSize}`).join(" -> ")
     : "-";
   const telemetryLog = state.telemetryLog || {};
+  const foveation = state.cameraObservation?.foveation || {};
   const planningProfile = state.agent?.planningProfile || {};
   const topPolicies = state.agent?.topPolicies || [];
   const policyRows = topPolicies.slice(0, 4).map((p, i) =>
@@ -509,6 +676,9 @@ async function pollState() {
     row("Telemetry window", `${num(telemetryLog.windowSeconds)} s`),
     row("Telemetry rate", `${num(telemetryLog.estimatedSampleHz)} Hz`),
     row("Telemetry retention", telemetryLog.retentionPolicy || "-"),
+    row("Fovea trace", `${foveation.trace?.length || 0} events / ${num(foveation.traceRetentionSeconds)} s`),
+    row("Fovea retention source", foveation.retentionSource || "-"),
+    row("Fovea pending", String(foveation.pendingRequestCount ?? 0)),
     row("Telemetry CSV", `<a href="${telemetryLog.csvEndpoint || "/api/telemetry.csv"}">download</a>`),
     row("Paintings completed", String(state.paintingCount ?? 0)),
     row("Last saved canvas", state.lastSavedCanvas || "-"),

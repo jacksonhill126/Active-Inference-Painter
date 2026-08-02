@@ -11,6 +11,12 @@ from active_painter.plant_interface import (
     PlantCommand,
     SimulatorEvaluationTruth,
 )
+from active_painter.camera_observation import (
+    CameraFrame,
+    CameraObservationBundle,
+    FoveaRequest,
+)
+from active_painter.camera_inference import CameraVFEComponents, CameraVFEFactor
 
 
 JOINTS = ("yaw", "pitch", "roll", "elbow")
@@ -79,6 +85,11 @@ def test_sensor_packet_rejects_shape_mismatch() -> None:
 def test_agent_facing_records_exclude_simulator_truth_and_process_objects() -> None:
     agent_facing_types = (
         PhysicalSensorPacket,
+        CameraFrame,
+        CameraObservationBundle,
+        FoveaRequest,
+        CameraVFEFactor,
+        CameraVFEComponents,
         PlantCommand,
         BodyBeliefSnapshot,
         CounterfactualRolloutRequest,

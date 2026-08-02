@@ -94,6 +94,12 @@ class CameraSpec:
     availability: str
     channels: str
     registration: str
+    hardware_baseline: str
+    hardware_status: str
+    lens_status: str
+    capture_mode: str
+    transport: str
+    shutter_model: str
     position_m: tuple[float, float, float]
     rotation_camera_to_world: tuple[
         tuple[float, float, float],
@@ -102,8 +108,65 @@ class CameraSpec:
     ]
     fovy_deg: float
     resolution_px: tuple[int, int]
+    acquisition_resolution_px: tuple[int, int]
     model_input_resolution_px: tuple[int, int]
+    foveal_resolution_px: tuple[int, int] | None
+    focal_length_mm: float | None
+    active_sensor_width_mm: float | None
+    full_frame_equivalent_focal_length_mm: float | None
     sample_rate_hz: float
+    read_noise_std: float
+    signal_noise_std: float
+    likelihood_model_error_std: float
+    likelihood_inlier_probability: float
+    likelihood_outlier_std: float
+    latency_s: float
+    dropout_probability: float
+    quantization_bits: int
+
+    def __post_init__(self) -> None:
+        if min(self.acquisition_resolution_px) <= 1:
+            raise ValueError("camera acquisition resolution must be usable")
+        if self.foveal_resolution_px is not None and min(
+            self.foveal_resolution_px
+        ) <= 1:
+            raise ValueError("camera foveal resolution must be usable when present")
+        optical_values = (
+            self.focal_length_mm,
+            self.active_sensor_width_mm,
+            self.full_frame_equivalent_focal_length_mm,
+        )
+        if any(
+            value is not None and (value <= 0.0 or not np.isfinite(value))
+            for value in optical_values
+        ):
+            raise ValueError("known camera optical dimensions must be positive")
+        if self.sample_rate_hz <= 0.0 or not np.isfinite(self.sample_rate_hz):
+            raise ValueError("camera sample_rate_hz must be finite and positive")
+        if (
+            self.read_noise_std < 0.0
+            or self.signal_noise_std < 0.0
+            or not np.isfinite(self.read_noise_std)
+            or not np.isfinite(self.signal_noise_std)
+        ):
+            raise ValueError(
+                "camera noise parameters must be finite and non-negative"
+            )
+        if (
+            self.likelihood_model_error_std <= 0.0
+            or self.likelihood_outlier_std <= 0.0
+            or not np.isfinite(self.likelihood_model_error_std)
+            or not np.isfinite(self.likelihood_outlier_std)
+        ):
+            raise ValueError("camera likelihood standard deviations must be finite and positive")
+        if not 0.0 < self.likelihood_inlier_probability < 1.0:
+            raise ValueError("camera likelihood inlier probability must lie in (0, 1)")
+        if self.latency_s < 0.0 or not np.isfinite(self.latency_s):
+            raise ValueError("camera latency_s must be finite and non-negative")
+        if not 0.0 <= self.dropout_probability <= 1.0:
+            raise ValueError("camera dropout_probability must lie in [0, 1]")
+        if not 1 <= self.quantization_bits <= 16:
+            raise ValueError("camera quantization_bits must lie in [1, 16]")
 
     @property
     def position(self) -> np.ndarray:
@@ -123,8 +186,30 @@ class CameraRigSpec:
     focus_model: str
     observation_encoding: str
     shutter_model: str
+    observation_model: str
+    product_contract: str
+    fovea_addressing: str
+    fovea_selection_boundary: str
+    noise_model: str
+    noise_status: str
+    likelihood_model: str
+    likelihood_status: str
+    specular_model: str
+    provisional_specular_strength: float
     canvas: CanvasPlaneSpec
     cameras: tuple[CameraSpec, ...]
+
+    def __post_init__(self) -> None:
+        if not self.cameras or len({camera.name for camera in self.cameras}) != len(
+            self.cameras
+        ):
+            raise ValueError("camera names must be non-empty and unique")
+        if (
+            self.provisional_specular_strength < 0.0
+            or self.provisional_specular_strength > 1.0
+            or not np.isfinite(self.provisional_specular_strength)
+        ):
+            raise ValueError("provisional specular strength must lie in [0, 1]")
 
     def camera(self, name: str) -> CameraSpec:
         for camera in self.cameras:
@@ -152,7 +237,24 @@ def load_camera_rig(
     availability = text["sensor_camera_availability"].split()
     channels = text["sensor_camera_channels"].split()
     registration = text["sensor_camera_registration"].split()
-    aligned_fields = (roles, availability, channels, registration)
+    hardware = text["sensor_camera_hardware_baseline"].split()
+    hardware_status = text["sensor_camera_hardware_status"].split()
+    lens_status = text["sensor_camera_lens_status"].split()
+    capture_modes = text["sensor_camera_capture_mode"].split()
+    transport = text["sensor_camera_transport"].split()
+    shutter_models = text["sensor_camera_shutter_model"].split()
+    aligned_fields = (
+        roles,
+        availability,
+        channels,
+        registration,
+        hardware,
+        hardware_status,
+        lens_status,
+        capture_modes,
+        transport,
+        shutter_models,
+    )
     if any(len(values) != len(camera_names) for values in aligned_fields):
         raise ValueError("sensor camera metadata must align with camera order")
     numeric = {
@@ -160,11 +262,57 @@ def load_camera_rig(
         for element in custom.findall("numeric")
     }
     input_resolution_values = numeric["sensor_camera_model_resolution_px"]
+    acquisition_resolution_values = numeric[
+        "sensor_camera_acquisition_resolution_px"
+    ]
+    foveal_resolution_values = numeric["sensor_camera_foveal_resolution_px"]
+    focal_lengths = numeric["sensor_camera_focal_length_mm"]
+    active_sensor_widths = numeric["sensor_camera_active_width_mm"]
+    equivalent_focal_lengths = numeric[
+        "sensor_camera_full_frame_equivalent_focal_length_mm"
+    ]
     sample_rates = numeric["sensor_camera_sample_rate_hz"]
+    read_noise = numeric["sensor_camera_read_noise_std"]
+    signal_noise = numeric["sensor_camera_signal_noise_std"]
+    likelihood_model_error = numeric[
+        "sensor_camera_likelihood_model_error_std"
+    ]
+    likelihood_inlier_probability = numeric[
+        "sensor_camera_likelihood_inlier_probability"
+    ]
+    likelihood_outlier_std = numeric[
+        "sensor_camera_likelihood_outlier_std"
+    ]
+    latencies = numeric["sensor_camera_latency_s"]
+    dropout = numeric["sensor_camera_dropout_probability"]
+    quantization_bits = numeric["sensor_camera_quantization_bits"]
     if len(input_resolution_values) != 2 * len(camera_names):
         raise ValueError("sensor camera model resolutions must align with camera order")
-    if len(sample_rates) != len(camera_names):
-        raise ValueError("sensor camera sample rates must align with camera order")
+    if len(acquisition_resolution_values) != 2 * len(camera_names):
+        raise ValueError(
+            "sensor camera acquisition resolutions must align with camera order"
+        )
+    if len(foveal_resolution_values) != 2 * len(camera_names):
+        raise ValueError(
+            "sensor camera foveal resolutions must align with camera order"
+        )
+    per_camera_numeric = {
+        "sample rates": sample_rates,
+        "focal lengths": focal_lengths,
+        "active sensor widths": active_sensor_widths,
+        "equivalent focal lengths": equivalent_focal_lengths,
+        "read noise": read_noise,
+        "signal noise": signal_noise,
+        "likelihood model error": likelihood_model_error,
+        "likelihood inlier probabilities": likelihood_inlier_probability,
+        "likelihood outlier standard deviations": likelihood_outlier_std,
+        "latencies": latencies,
+        "dropout probabilities": dropout,
+        "quantization bits": quantization_bits,
+    }
+    for label, values in per_camera_numeric.items():
+        if len(values) != len(camera_names):
+            raise ValueError(f"sensor camera {label} must align with camera order")
 
     canvas_body = worldbody.find("./body[@name='canvas']")
     if canvas_body is None:
@@ -188,13 +336,31 @@ def load_camera_rig(
     )
 
     cameras: list[CameraSpec] = []
-    for index, (name, role, mode, channel, registration_mode) in enumerate(
+    for index, (
+        name,
+        role,
+        mode,
+        channel,
+        registration_mode,
+        hardware_model,
+        status,
+        lens_state,
+        capture_mode,
+        transport_kind,
+        shutter,
+    ) in enumerate(
         zip(
             camera_names,
             roles,
             availability,
             channels,
             registration,
+            hardware,
+            hardware_status,
+            lens_status,
+            capture_modes,
+            transport,
+            shutter_models,
             strict=True,
         )
     ):
@@ -212,17 +378,61 @@ def load_camera_rig(
                 availability=mode,
                 channels=channel,
                 registration=registration_mode,
+                hardware_baseline=hardware_model,
+                hardware_status=status,
+                lens_status=lens_state,
+                capture_mode=capture_mode,
+                transport=transport_kind,
+                shutter_model=shutter,
                 position_m=tuple(float(value) for value in _vec3(element.get("pos"))),
                 rotation_camera_to_world=tuple(
                     tuple(float(value) for value in row) for row in rotation
                 ),
                 fovy_deg=float(element.get("fovy", "45")),
                 resolution_px=(resolution[0], resolution[1]),
+                acquisition_resolution_px=(
+                    int(acquisition_resolution_values[2 * index]),
+                    int(acquisition_resolution_values[2 * index + 1]),
+                ),
                 model_input_resolution_px=(
                     int(input_resolution_values[2 * index]),
                     int(input_resolution_values[2 * index + 1]),
                 ),
+                foveal_resolution_px=(
+                    (
+                        int(foveal_resolution_values[2 * index]),
+                        int(foveal_resolution_values[2 * index + 1]),
+                    )
+                    if foveal_resolution_values[2 * index] > 0
+                    and foveal_resolution_values[2 * index + 1] > 0
+                    else None
+                ),
+                focal_length_mm=(
+                    float(focal_lengths[index])
+                    if focal_lengths[index] > 0.0
+                    else None
+                ),
+                active_sensor_width_mm=(
+                    float(active_sensor_widths[index])
+                    if active_sensor_widths[index] > 0.0
+                    else None
+                ),
+                full_frame_equivalent_focal_length_mm=(
+                    float(equivalent_focal_lengths[index])
+                    if equivalent_focal_lengths[index] > 0.0
+                    else None
+                ),
                 sample_rate_hz=float(sample_rates[index]),
+                read_noise_std=float(read_noise[index]),
+                signal_noise_std=float(signal_noise[index]),
+                likelihood_model_error_std=float(likelihood_model_error[index]),
+                likelihood_inlier_probability=float(
+                    likelihood_inlier_probability[index]
+                ),
+                likelihood_outlier_std=float(likelihood_outlier_std[index]),
+                latency_s=float(latencies[index]),
+                dropout_probability=float(dropout[index]),
+                quantization_bits=int(quantization_bits[index]),
             )
         )
 
@@ -234,6 +444,18 @@ def load_camera_rig(
         focus_model=text["camera_focus_model"],
         observation_encoding=text["camera_observation_encoding"],
         shutter_model=text["camera_shutter_model"],
+        observation_model=text["camera_observation_model"],
+        product_contract=text["camera_product_contract"],
+        fovea_addressing=text["camera_fovea_addressing"],
+        fovea_selection_boundary=text["camera_fovea_selection_boundary"],
+        noise_model=text["camera_noise_model"],
+        noise_status=text["camera_noise_status"],
+        likelihood_model=text["camera_likelihood_model"],
+        likelihood_status=text["camera_likelihood_status"],
+        specular_model=text["camera_specular_model"],
+        provisional_specular_strength=float(
+            numeric["camera_provisional_specular_strength"][0]
+        ),
         canvas=canvas,
         cameras=tuple(cameras),
     )

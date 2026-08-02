@@ -51,7 +51,7 @@
     <text name="thermal_model" data="disabled_missing_vendor_constants"/>
     <text name="transmission_model" data="rigid_integrated_reducer_without_backlash"/>
     <text name="paint_process" data="external_VerticalCanvas"/>
-    <text name="camera_rig_version" data="provisional-multiview-v2"/>
+    <text name="camera_rig_version" data="provisional-multiview-v4"/>
     <text name="sensor_camera_order"
           data="canvas_right_oblique canvas_left_oblique canvas_inspection_deployed brush_standoff_overhead"/>
     <text name="sensor_camera_roles"
@@ -62,16 +62,76 @@
           data="grayscale grayscale grayscale grayscale"/>
     <text name="sensor_camera_registration"
           data="canvas_plane_homography canvas_plane_homography canvas_plane_homography canvas_edge_profile"/>
+    <text name="sensor_camera_hardware_baseline"
+          data="OM_SYSTEM_OM-1 Sony_ILCE-7RM2 additional_head_on_TBD low_cost_global_shutter_TBD"/>
+    <text name="sensor_camera_hardware_status"
+          data="owned owned planned planned"/>
+    <text name="sensor_camera_lens_status"
+          data="confirmed_focal_length confirmed_focal_length TBD TBD"/>
+    <text name="sensor_camera_capture_mode"
+          data="MFT_full_width_16x9 Super35_full_width_16x9 TBD native_4x3_TBD"/>
+    <text name="sensor_camera_transport"
+          data="clean_HDMI_capture clean_HDMI_capture TBD CSI_or_USB"/>
+    <text name="sensor_camera_shutter_model"
+          data="rolling rolling TBD global"/>
     <text name="camera_geometry_model" data="ideal_pinhole_without_distortion"/>
-    <text name="camera_calibration_status" data="provisional_simulation_geometry"/>
+    <text name="camera_calibration_status"
+          data="nominal_lens_geometry_pending_physical_calibration"/>
     <text name="camera_normalization" data="role_dependent_v1"/>
-    <text name="camera_focus_model" data="fixed_manual_pending_lens_selection"/>
+    <text name="camera_focus_model"
+          data="fixed_manual_confirmed_primes_pending_focus_measurement"/>
     <text name="camera_observation_encoding"
           data="linear_grayscale_float32_normalized_0_1"/>
-    <text name="camera_shutter_model" data="global_shutter"/>
+    <text name="camera_shutter_model" data="heterogeneous_per_camera_v1"/>
+    <text name="camera_observation_model"
+          data="mujoco_native_global_foveal_composite_v1"/>
+    <text name="camera_product_contract"
+          data="native_global_requested_fovea_v1"/>
+    <text name="camera_fovea_addressing"
+          data="canvas_uv_center_and_span"/>
+    <text name="camera_fovea_selection_boundary"
+          data="external_observation_space_request_without_oracle_default"/>
+    <text name="camera_noise_model"
+          data="gaussian_read_plus_signal_dependent_approximation_v0"/>
+    <text name="camera_noise_status" data="provisional_not_calibrated"/>
+    <text name="camera_likelihood_model"
+          data="registered_grayscale_occlusion_mixture_linearized_v0"/>
+    <text name="camera_likelihood_status"
+          data="provisional_simulation_prior_pending_physical_calibration"/>
+    <text name="camera_specular_model"
+          data="mujoco_lighting_residual_mix_approximation_v0"/>
     <numeric name="sensor_camera_model_resolution_px"
              data="512 512 512 512 512 512 640 480"/>
+    <numeric name="sensor_camera_acquisition_resolution_px"
+             data="3840 2160 3840 2160 3840 2160 1456 1088"/>
+    <numeric name="sensor_camera_foveal_resolution_px"
+             data="256 256 256 256 256 256 0 0"/>
+    <!-- Nominal optical geometry for 16:9 acquisition. Active sensor widths
+         and the resulting MuJoCo vertical FOVs are approximations pending
+         checkerboard calibration of the actual HDMI streams. -->
+    <numeric name="sensor_camera_focal_length_mm" data="25 35 0 0"/>
+    <numeric name="sensor_camera_active_width_mm" data="17.3 23.5 0 0"/>
+    <numeric name="sensor_camera_full_frame_equivalent_focal_length_mm"
+             data="50 52.5 0 0"/>
     <numeric name="sensor_camera_sample_rate_hz" data="30 30 5 60"/>
+    <numeric name="sensor_camera_read_noise_std"
+             data="0.003 0.003 0.002 0.004"/>
+    <numeric name="sensor_camera_signal_noise_std"
+             data="0.006 0.006 0.004 0.008"/>
+    <!-- Likelihood uncertainty is deliberately wider than the acquisition-
+         noise term. It includes unmodeled photometry/registration. The
+         inlier prior is a latent occlusion probability, not a visibility mask. -->
+    <numeric name="sensor_camera_likelihood_model_error_std"
+             data="0.035 0.035 0.030 0.040"/>
+    <numeric name="sensor_camera_likelihood_inlier_probability"
+             data="0.960 0.960 0.995 0.950"/>
+    <numeric name="sensor_camera_likelihood_outlier_std"
+             data="0.350 0.350 0.350 0.350"/>
+    <numeric name="sensor_camera_latency_s"
+             data="0.033333333333 0.033333333333 0.200000000000 0.016666666667"/>
+    <numeric name="sensor_camera_dropout_probability" data="0 0 0 0"/>
+    <numeric name="sensor_camera_quantization_bits" data="8 8 8 8"/>
+    <numeric name="camera_provisional_specular_strength" data="0.08"/>
     <numeric name="joint_range_rad"
              data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 -1.483529864195 2.617993877991"/>
     <numeric name="native_controller_joint_range_rad"
@@ -205,14 +265,14 @@
     <!-- Provisional sensor frames. The two oblique cameras are continuously
          available and aimed at canvas center. Their opposing views preserve
          brush-tip visibility under contact occlusion. -->
-    <camera name="canvas_right_oblique" pos="0.775 -0.820 0.750"
+    <camera name="canvas_right_oblique" pos="0.824 -0.911182 0.778"
             xyaxes="0.880865989267 0.473365724311 0
                     -0.123600957574 0.230003724765 0.965308805451"
-            fovy="24" resolution="1024 1024"/>
-    <camera name="canvas_left_oblique" pos="-0.625 -0.820 0.800"
+            fovy="22.027017404218" resolution="1024 1024"/>
+    <camera name="canvas_left_oblique" pos="-0.674 -0.911182 0.8315"
             xyaxes="0.880865989267 -0.473365724311 0
                     0.137808815966 0.256442519539 0.956684882506"
-            fovy="24" resolution="1024 1024"/>
+            fovy="21.387533133508" resolution="1024 1024"/>
     <!-- This is the deployed optical reference from the proposed fold-away
          stalk. It is valid only at camera_clear_park; no fixed collision-safe
          housing is claimed inside the arm's swept workspace. -->
@@ -246,8 +306,8 @@
          center is at the body's origin, and all housing geometry stays behind
          the optical center on local +Z. These static visual geoms do not
          collide or contribute mass. Supports and final vendor CAD are pending
-         camera/lens selection. -->
-    <body name="canvas_right_camera_housing" pos="0.775 -0.820 0.750"
+         final mount CAD and measured optical centers. -->
+    <body name="canvas_right_camera_housing" pos="0.824 -0.911182 0.778"
           xyaxes="0.880865989267 0.473365724311 0
                   -0.123600957574 0.230003724765 0.965308805451">
       <geom name="canvas_right_camera_body" class="camera_visual" type="box"
@@ -260,7 +320,7 @@
             type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
             material="camera_glass_mat"/>
     </body>
-    <body name="canvas_left_camera_housing" pos="-0.625 -0.820 0.800"
+    <body name="canvas_left_camera_housing" pos="-0.674 -0.911182 0.8315"
           xyaxes="0.880865989267 -0.473365724311 0
                   0.137808815966 0.256442519539 0.956684882506">
       <geom name="canvas_left_camera_body" class="camera_visual" type="box"

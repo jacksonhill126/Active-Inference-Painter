@@ -89,8 +89,10 @@ sets the selected brush to full and uniformly its nominal color, clearing
 picked-up material. Preserve carries process and belief state across the mark.
 The current load transition is an approximation and increases uncertainty
 about canvas pickup. `infer_load_from_mark` defines the local camera-derived
-deposition likelihood and VFE update, but the camera material posterior is not
-yet implemented, so live sensory assimilation remains blocked.
+deposition likelihood and VFE update. The registered grayscale camera
+likelihood now updates the spatial material posterior, but it does not yet
+extract the per-mark deposition statistic needed to drive this separate brush-
+load update.
 
 This makes incidental contact a real predicted paint consequence while keeping
 paint preparation inside policy inference. Brush tilt relative to the canvas
@@ -419,14 +421,65 @@ retains 100% visibility in the sampled workspace. Publication-ready frames,
 maps, CSVs, and interpretation are in
 `docs/CAMERA_OBSERVABILITY_BRIEF.md`.
 
-This is not yet the M2 observation process: the Python material appearance
-has not been inserted into camera frames, and distortion, occlusion masks,
-focus, glare, timing, noise, and likelihood precision remain unimplemented.
-The perfect `/api/canvas.png` is still diagnostic-only. The
-`provisional-multiview-v2` XML carries non-colliding generic camera body/lens
-envelopes, aligned exactly with the optical frames and rendered by both MuJoCo
-and the Three.js viewer. They do not yet specify mounts, cables, or the
-park-only inspection camera's stow/deploy mechanism.
+`CameraObservationProcess` now inserts superficial grayscale Python canvas
+appearance into MuJoCo-rendered views while retaining rendered arm/brush
+occlusion. It applies provisional XML-declared timing, noise, quantization,
+and a weak lighting-residual specular approximation. Exact segmentation stays
+inside the generative process and is absent from agent-facing frames. The
+perfect `/api/canvas.png` remains diagnostic-only.
+
+The `provisional-multiview-v4` XML assigns the owned OM System OM-1/25 mm and
+Sony A7R II/35 mm to the opposing continuous oblique roles, with Super 35
+selected provisionally for the Sony. Nominal 16:9 vertical fields of view and
+active sensor widths are declared in the same XML pending physical
+calibration. It separates 3840 x 2160 physical acquisition, 512 x 512 global
+model input, 256 x 256 foveal output, and MuJoCo reference-render resolution.
+The additional head-on inspection and overhead global-shutter cameras remain
+planned.
+
+The `camera-observation-interface-v1` simulator process now retains each
+native grayscale exposure, derives the global view independently, and samples
+explicitly requested foveae directly from native pixels. Requests use canvas
+UV center and span and may cite only a sensor posterior, policy prediction, or
+operator diagnostic as their selection basis. There is no default fovea and
+no selector may read exact simulator pose, contact, visibility, segmentation,
+or material state.
+
+The web viewer exposes `fovea-trace-v0` as a diagnostic of delivered foveal
+products. The current delivered fovea is drawn as a bright canvas-registered
+box and crosshair; prior deliveries fade as a ghost trace. Its default
+retention is 10 seconds because the agent does not yet declare a foveation
+memory horizon. If a future agent declares `foveation_memory_horizon_s`, the
+viewer uses that value and identifies it as the retention source. Clicking the
+canvas preview creates an `operator_diagnostic` request, not an inferred gaze
+policy, and the trace records the request only after the camera process has
+actually delivered its foveal frame.
+
+`camera-spatial-likelihood-v0` is now connected to the provisional spatial
+active-inference model. It mosaics each global product with any native-derived
+foveae from the same exposure, so correlated products enter only one
+likelihood factor. Its nonlinear observation model predicts superficial
+grayscale from latent thickness and surface tone. Wetness and bulk pigment
+mass have zero direct image Jacobian and remain transition-prior beliefs;
+white-on-white supplies no thickness evidence. A broad state-independent
+outlier component gives an inferred occlusion responsibility without exposing
+MuJoCo segmentation. Camera VFE logs state and occlusion complexity separately
+from expected negative log likelihood. The per-camera uncertainty and inlier
+priors are explicit in the XML and marked provisional.
+
+Physical HDMI acquisition, physical lens/capture calibration, and a learned
+camera encoder are not implemented. Sensor-equivalent control still fails
+closed because the existing body posterior is not connected to motor-forecast
+initialization and the action-conditioned transition-prior/camera-update loop
+is not yet scheduled continuously; camera likelihood construction no longer
+causes that block.
+
+`active_painter.camera_calibration` now supplies the first hardware
+calibration tool: a metric 11 x 8-inner-corner target generator and native-
+frame Brown-Conrady intrinsic solver. It reports reprojection residuals,
+coverage, tilt diversity, and acceptance gates. This is tooling rather than a
+calibrated result; no measured OM-1 or A7R II frames have been supplied yet,
+and accepted intrinsics have not replaced the nominal XML geometry.
 
 The default `sensor_equivalent` observation mode currently fails closed:
 the viewer and scripted execution remain available, but policy inference,
@@ -448,8 +501,10 @@ This is not yet wired into painting policy inference. Motor current, bus
 voltage, tool deflection, temperature, and fault flags are explicitly reported
 as unassimilated by this posterior. Faults remain hard-safety inputs, while
 current/deflection need declared conditional likelihoods before they may
-provide contact or load evidence. The material/camera posterior is still
-absent, so the live sensor-equivalent painting path remains fail-closed.
+provide contact or load evidence. The camera-conditioned material posterior is
+present; body-to-motor-forecast initialization and continuous action-
+conditioned observation scheduling remain fail-closed boundaries for live
+policy inference.
 
 To reproduce the legacy upper-bound comparator, opt in explicitly:
 

@@ -280,7 +280,7 @@ Acceptance: Formal, sensor-access, VFE/EFE, calibration, terminal, composition, 
 
 ### AI-201 Define the sensor-equivalent M2 observation package
 
-Status: `Blocked`  
+Status: `Active`
 Track: Sensors/Active Inference  
 Depends on: M1  
 Owner: Jackson/Codex  
@@ -290,8 +290,8 @@ Notes: Boundary enforcement began 2026-07-28: the live default is now
 `sensor-boundary-v0`, which skips oracle bootstrap and blocks policy inference,
 learning, and planner-state construction from `ArmPainterSim`. The legacy
 `oracle_material_state` path requires explicit diagnostic opt-in. AI-201
-remains blocked/not accepted because sensor noise and the complete
-model-facing observation package are not yet defined. A
+remains not accepted because the complete bodily observation package and
+physical calibration are not yet defined. A
 `provisional-multiview-v2` MJCF rig and role-dependent registration interface
 were added 2026-07-29, establishing versioned geometry, grayscale channels,
 model-input resolutions, rates, roles, availability, an ideal-pinhole
@@ -300,11 +300,28 @@ edge profile, and optical-frame-aligned generic camera housing envelopes
 without claiming sensor equivalence or final mechanical mounts. The current
 provisional contract is 512 x 512 at 30 Hz for each continuous oblique view,
 512 x 512 at 5 Hz/on-demand for parked inspection, and 640 x 480 at 60 Hz for
-the standoff profile.
+the standoff profile. On 2026-07-30 the XML contract gained explicit
+per-camera provisional read/signal noise, latency, dropout, and quantization
+parameters plus observation/specular model versions. These assumptions are
+declared but not calibrated.
+On 2026-07-31 the contract advanced to `provisional-multiview-v3`: the owned
+OM System OM-1 and Sony A7R II are the provisional opposing oblique pair,
+captured as separate 3840 x 2160 rolling-shutter HDMI streams at 30 Hz. The
+contract distinguishes native acquisition, 512 x 512 global inputs, and
+native-derived 256 x 256 foveae. The extra fixed head-on and overhead
+global-shutter cameras remain planned rather than being assigned fictitiously
+to either owned body. Later that day, `provisional-multiview-v4` fixed the
+owned lens baseline at OM-1/25 mm and A7R II/35 mm in Super 35 mode. Nominal
+16:9 intrinsics and 7%-retracted mount poses now leave physical framing margin
+while preserving 100% combined contact-tip visibility. Intrinsics remain
+provisional until checkerboard calibration of the actual HDMI streams. The
+metric A3 target generator and native-frame Brown-Conrady solver now exist in
+`active_painter.camera_calibration`, with residual, coverage, tilt-diversity,
+and minimum-view acceptance gates. Physical image capture is still pending.
 
 ### AI-202 Implement the fixed-view observation generative process
 
-Status: `Blocked`  
+Status: `Active`
 Track: Generative Process/Sensors  
 Depends on: AI-201, T-101, T-102  
 Owner: Jackson/Codex  
@@ -317,13 +334,33 @@ web metadata. A reproducible 9 x 9 x 3 MuJoCo contact-pose sweep now reports
 100% combined tip visibility from the opposing oblique cameras across 243
 sampled poses; the overhead standoff profile also retains 100%. The brief,
 figures, per-pose CSVs, approximations, and hardware-class rationale are in
-`docs/CAMERA_OBSERVABILITY_BRIEF.md`. AI-202 remains blocked/not accepted: no
-camera-rendered Python material observation, calibrated occlusion/
-photometric/noise process, or model-facing likelihood exists yet.
+`docs/CAMERA_OBSERVABILITY_BRIEF.md`. On 2026-07-30 a versioned
+`CameraObservationProcess` began emitting multi-rate grayscale
+`CameraObservationBundle` records: MuJoCo provides geometry and occlusion,
+the superficial Python canvas image is composited only through visible canvas
+pixels, canvas views are homography-rectified, and XML-declared provisional
+noise/latency/quantization plus a weak rendered-lighting specular
+approximation are applied. Exact segmentation remains process-internal and is
+not present in agent-facing records. On 2026-07-31,
+`camera-observation-interface-v1` added XML-declared native-resolution
+rendering, independent 512 x 512 global derivation, and explicit 256 x 256
+foveal requests sampled directly from native pixels. Fovea requests are
+addressed in canvas UV, have no default, and may cite only sensor-posterior,
+policy-prediction, or operator-diagnostic selection bases; exact simulator
+pose, contact, visibility, segmentation, and material state are prohibited.
+The web viewer now renders the current delivered foveal extent and a fading
+canvas-registered delivery trace. Its 10-second default is labeled as a
+visualization fallback; it will follow a future declared foveation-memory
+horizon. Preview clicks are explicitly `operator_diagnostic` requests and do
+not satisfy the still-blocked active-gaze-policy work in M3.
+AI-202 remains not accepted: physical capture and calibration are absent and
+the photometric parameters are uncalibrated. A provisional analytic likelihood
+now consumes these products, but no learned encoder or physical-camera
+validation exists yet.
 
 ### AI-203 Specify and implement the observation likelihood
 
-Status: `Blocked`  
+Status: `Active`
 Track: Generative Model  
 Depends on: AI-201, AI-202  
 Owner: Jackson/Codex  
@@ -333,14 +370,23 @@ Notes: A bounded body-likelihood slice was added 2026-07-29 as
 `body-inference-v0`: encoder position/velocity and optional contact-switch/force
 factors are explicit and require a versioned, nondefault precision profile.
 Current, voltage, deflection, temperature, and faults remain explicitly
-unassimilated. A scalar camera-derived mark-deposition likelihood and VFE
-fixture now exist for brush loading, but no image observation supplies it yet.
-AI-203 remains blocked because these parameters are not calibrated and the
-camera/material/current likelihoods are not implemented.
+unassimilated. On 2026-07-31, `camera-spatial-likelihood-v0` connected
+registered global/foveal grayscale products to the spatial posterior through
+an explicit nonlinear superficial-appearance likelihood. A mean-field
+inlier/outlier latent handles occlusion without segmentation; correlated
+global/foveal products from one exposure are mosaicked before one update; VFE
+logs state complexity, occlusion complexity, and expected negative log
+likelihood separately. Thickness and surface tone receive image evidence,
+while wetness and bulk pigment remain transition-prior factors. The XML owns
+the provisional per-camera precision and inlier assumptions. A scalar camera-
+derived mark-deposition likelihood and VFE fixture still exist separately for
+brush loading, but no image-derived mark statistic supplies it yet. AI-203 is
+not accepted because physical calibration and current/deflection likelihoods
+are absent.
 
 ### AI-204 Build the compact state-inference path
 
-Status: `Blocked`  
+Status: `Active`
 Track: Variational Inference  
 Depends on: AI-203  
 Owner: Jackson/Codex  
@@ -353,9 +399,14 @@ receives the simulator process object. `BrushLoadingModel` now maintains
 persistent compact load/average-pigment beliefs for dedicated white and black
 brushes, with explicit depletion/reload transitions and preserve/reload policy
 inference. The process has matching finite reservoirs and pure-color reloads.
-AI-204 remains blocked because camera evidence is not yet wired into this
-brush posterior, the body component is not yet wired into live painting
-inference, and no material/camera posterior exists. On 2026-07-29 the
+The camera-conditioned material posterior now exists and is reachable through
+`SpatialActiveInferencePainter.assimilate_camera_observation` and the driver
+sensor boundary. Camera evidence is not yet reduced to the local statistic
+used by the brush posterior, and the body component is not yet wired into live
+painting inference or motor-forecast initialization. The live loop also does
+not yet pair each executed-action transition prior with the delivered camera
+likelihood update. AI-204 remains not
+accepted on those grounds. On 2026-07-29 the
 six-aggregate summary planner was formally marked
 `obsolete_compatibility_fixture`; it is not an acceptable compact posterior
 for AI-204.

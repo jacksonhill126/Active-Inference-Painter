@@ -1,7 +1,7 @@
 {
   "schema_version": "camera-pose-sweep-v1",
   "model_path": "C:\\Users\\hilljx\\Downloads\\active_inference_painter_python_v0_1\\models\\active_inference_painter.xml",
-  "camera_rig_version": "provisional-multiview-v2",
+  "camera_rig_version": "provisional-multiview-v4",
   "grid_size": 9,
   "roll_sweep_deg": [
     -32.0,
@@ -18,15 +18,33 @@
       "availability": "continuous",
       "registration": "canvas_plane_homography",
       "channels": "grayscale",
+      "hardware_baseline": "OM_SYSTEM_OM-1",
+      "hardware_status": "owned",
+      "lens_status": "confirmed_focal_length",
+      "capture_mode": "MFT_full_width_16x9",
+      "transport": "clean_HDMI_capture",
+      "shutter_model": "rolling",
+      "focal_length_mm": 25.0,
+      "active_sensor_width_mm": 17.3,
+      "full_frame_equivalent_focal_length_mm": 50.0,
+      "vertical_field_of_view_deg": 22.027017404218,
+      "acquisition_resolution_px": [
+        3840,
+        2160
+      ],
       "model_input_resolution_px": [
         512,
         512
       ],
+      "foveal_resolution_px": [
+        256,
+        256
+      ],
       "sample_rate_hz": 30.0,
       "tip_in_frame_fraction": 1.0,
       "tip_visible_fraction": 0.9958847736625515,
-      "canvas_visible_fraction_min": 0.8395061728395061,
-      "canvas_visible_fraction_mean": 0.9383732154651223,
+      "canvas_visible_fraction_min": 0.8518518518518519,
+      "canvas_visible_fraction_mean": 0.9375603312503175,
       "by_roll": {
         "-32": {
           "tip_visible_fraction": 1.0,
@@ -34,11 +52,11 @@
         },
         "+0": {
           "tip_visible_fraction": 1.0,
-          "canvas_visible_fraction_min": 0.8395061728395061
+          "canvas_visible_fraction_min": 0.8518518518518519
         },
         "+32": {
           "tip_visible_fraction": 0.9876543209876543,
-          "canvas_visible_fraction_min": 0.8641975308641975
+          "canvas_visible_fraction_min": 0.8765432098765432
         }
       }
     },
@@ -47,15 +65,33 @@
       "availability": "continuous",
       "registration": "canvas_plane_homography",
       "channels": "grayscale",
+      "hardware_baseline": "Sony_ILCE-7RM2",
+      "hardware_status": "owned",
+      "lens_status": "confirmed_focal_length",
+      "capture_mode": "Super35_full_width_16x9",
+      "transport": "clean_HDMI_capture",
+      "shutter_model": "rolling",
+      "focal_length_mm": 35.0,
+      "active_sensor_width_mm": 23.5,
+      "full_frame_equivalent_focal_length_mm": 52.5,
+      "vertical_field_of_view_deg": 21.387533133508,
+      "acquisition_resolution_px": [
+        3840,
+        2160
+      ],
       "model_input_resolution_px": [
         512,
         512
+      ],
+      "foveal_resolution_px": [
+        256,
+        256
       ],
       "sample_rate_hz": 30.0,
       "tip_in_frame_fraction": 1.0,
       "tip_visible_fraction": 0.9835390946502057,
       "canvas_visible_fraction_min": 0.8024691358024691,
-      "canvas_visible_fraction_mean": 0.9365442259818118,
+      "canvas_visible_fraction_mean": 0.9349692628156276,
       "by_roll": {
         "-32": {
           "tip_visible_fraction": 0.9506172839506173,
@@ -63,11 +99,11 @@
         },
         "+0": {
           "tip_visible_fraction": 1.0,
-          "canvas_visible_fraction_min": 0.8518518518518519
+          "canvas_visible_fraction_min": 0.8271604938271605
         },
         "+32": {
           "tip_visible_fraction": 1.0,
-          "canvas_visible_fraction_min": 0.8148148148148148
+          "canvas_visible_fraction_min": 0.8024691358024691
         }
       }
     },
@@ -76,9 +112,27 @@
       "availability": "park_only",
       "registration": "canvas_plane_homography",
       "channels": "grayscale",
+      "hardware_baseline": "additional_head_on_TBD",
+      "hardware_status": "planned",
+      "lens_status": "TBD",
+      "capture_mode": "TBD",
+      "transport": "TBD",
+      "shutter_model": "TBD",
+      "focal_length_mm": null,
+      "active_sensor_width_mm": null,
+      "full_frame_equivalent_focal_length_mm": null,
+      "vertical_field_of_view_deg": 72.0,
+      "acquisition_resolution_px": [
+        3840,
+        2160
+      ],
       "model_input_resolution_px": [
         512,
         512
+      ],
+      "foveal_resolution_px": [
+        256,
+        256
       ],
       "sample_rate_hz": 5.0,
       "tip_in_frame_fraction": 1.0,
@@ -105,10 +159,25 @@
       "availability": "continuous",
       "registration": "canvas_edge_profile",
       "channels": "grayscale",
+      "hardware_baseline": "low_cost_global_shutter_TBD",
+      "hardware_status": "planned",
+      "lens_status": "TBD",
+      "capture_mode": "native_4x3_TBD",
+      "transport": "CSI_or_USB",
+      "shutter_model": "global",
+      "focal_length_mm": null,
+      "active_sensor_width_mm": null,
+      "full_frame_equivalent_focal_length_mm": null,
+      "vertical_field_of_view_deg": 45.0,
+      "acquisition_resolution_px": [
+        1456,
+        1088
+      ],
       "model_input_resolution_px": [
         640,
         480
       ],
+      "foveal_resolution_px": null,
       "sample_rate_hz": 60.0,
       "tip_in_frame_fraction": 1.0,
       "tip_visible_fraction": 1.0,

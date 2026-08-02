@@ -113,6 +113,18 @@ class PainterRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/canvas.png":
             self._send_bytes(self.server.runtime.canvas_png(), "image/png")
             return
+        if parsed.path.startswith("/api/camera/") and parsed.path.endswith(".png"):
+            camera_name = unquote(parsed.path[len("/api/camera/") : -len(".png")])
+            try:
+                body = self.server.runtime.camera_png(camera_name)
+            except (KeyError, RuntimeError, ValueError) as exc:
+                self._send_json(
+                    {"ok": False, "error": str(exc)},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            self._send_bytes(body, "image/png")
+            return
         if parsed.path == "/api/telemetry.csv":
             self._send_bytes(self.server.runtime.telemetry_csv(), "text/csv; charset=utf-8")
             return
@@ -196,8 +208,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         default=SENSOR_OBSERVATION_ACCESS_MODE,
         help=(
-            "sensor_equivalent fails closed until the camera/body likelihood is "
-            "implemented; oracle_material_state is an explicit diagnostic-only "
+            "sensor_equivalent fails closed until the sensor-conditioned body "
+            "posterior initializes motor forecasts and the action-conditioned "
+            "observation loop is scheduled; oracle_material_state is an explicit diagnostic-only "
             "legacy baseline"
         ),
     )
@@ -256,8 +269,10 @@ def main() -> None:
     )
     if runtime.agent_driver.observation_boundary_blocked:
         print(
-            "Active inference disabled: sensor-equivalent observation inference "
-            "is not implemented, and hidden simulator state is denied.",
+            "Active inference disabled: the camera-conditioned painting posterior "
+            "is connected, but sensor-conditioned body initialization and the "
+            "action-conditioned observation loop are not; "
+            "hidden simulator state remains denied.",
             flush=True,
         )
     elif args.observation_mode == ORACLE_OBSERVATION_ACCESS_MODE:

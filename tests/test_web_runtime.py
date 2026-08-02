@@ -12,6 +12,12 @@ from xml.etree import ElementTree
 from PIL import Image
 import pytest
 
+from active_painter.camera_observation import (
+    FOVEA_CANVAS_PRODUCT,
+    CameraFrame,
+    CameraObservationBundle,
+)
+
 from active_painter.arm_agent_driver import (
     ORACLE_OBSERVATION_ACCESS_MODE,
     SENSOR_OBSERVATION_ACCESS_MODE,
@@ -88,6 +94,154 @@ def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
     assert "positionErrorDeg" in state["motor"]["yaw"]
     assert "elasticDeflectionDeg" in state["motor"]["yaw"]
     assert "encoderStdDeg" in state["motor"]["yaw"]
+    assert state["cameraObservation"]["available"] is False
+    assert state["cameraObservation"]["interfaceVersion"] == (
+        "camera-observation-interface-v1"
+    )
+    assert state["cameraObservation"]["productContract"] == (
+        "native_global_requested_fovea_v1"
+    )
+    assert state["cameraObservation"]["foveaDefault"] is None
+    assert state["cameraObservation"]["consumedByInference"] is True
+    assert state["cameraObservation"]["likelihoodModel"] == (
+        "registered_grayscale_occlusion_mixture_linearized_v0"
+    )
+    foveation = state["cameraObservation"]["foveation"]
+    assert foveation["interfaceVersion"] == "fovea-trace-v0"
+    assert foveation["traceRetentionSeconds"] == pytest.approx(10.0)
+    assert foveation["memoryHorizonSeconds"] is None
+    assert foveation["trace"] == []
+
+
+def test_fovea_trace_expires_and_can_follow_declared_agent_memory() -> None:
+    runtime = oracle_runtime(
+        canvas_size=32,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+        fovea_trace_retention_s=10.0,
+    )
+    rig = runtime.robot_model["cameraRig"]
+    pixels = np.full((16, 16), 0.5, dtype=np.float32)
+    frame = CameraFrame(
+        camera_name="canvas_right_oblique",
+        role="contact_tracking",
+        sequence=4,
+        product_kind=FOVEA_CANVAS_PRODUCT,
+        product_id="fovea:operator-4",
+        capture_time_s=0.96,
+        available_time_s=1.0,
+        calibration_revision=rig["version"],
+        observation_model=rig["observationModel"],
+        registration="canvas_plane_homography",
+        sampling_kind="native_to_requested_canvas_uv",
+        source_resolution_px=(640, 360),
+        declared_acquisition_resolution_px=(3840, 2160),
+        grayscale=pixels,
+        calibration_validity=np.ones_like(pixels, dtype=np.bool_),
+        fovea_request_id="operator-4",
+        center_canvas_uv=(0.25, 0.75),
+        span_canvas_uv=(0.2, 0.3),
+        selection_basis="operator_diagnostic",
+        selection_revision="test-pointer-v0",
+    )
+    runtime.sim_time = 1.1
+    runtime._record_fovea_observations(
+        CameraObservationBundle(monotonic_time_s=1.1, frames=(frame,))
+    )
+
+    foveation = runtime.state()["cameraObservation"]["foveation"]
+
+    assert foveation["active"]["requestId"] == "operator-4"
+    assert foveation["active"]["centerCanvasUv"] == [0.25, 0.75]
+    assert foveation["active"]["ageSeconds"] == pytest.approx(0.1)
+    assert foveation["retentionSource"] == (
+        "visualization_default_no_foveation_memory_model_declared"
+    )
+
+    runtime.agent_driver.agent.foveation_memory_horizon_s = 2.0
+    foveation = runtime.state()["cameraObservation"]["foveation"]
+    assert foveation["traceRetentionSeconds"] == pytest.approx(2.0)
+    assert foveation["memoryHorizonSeconds"] == pytest.approx(2.0)
+    assert foveation["retentionSource"] == "agent_foveation_memory_horizon"
+
+    runtime.sim_time = 3.1
+    assert runtime.state()["cameraObservation"]["foveation"]["trace"] == []
+
+
+def test_mujoco_runtime_exposes_lazy_model_facing_camera_png() -> None:
+    pytest.importorskip("mujoco")
+    from active_painter.camera_observation import CameraObservationProcess
+
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        plant_backend="mujoco",
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    runtime._camera_process = CameraObservationProcess(
+        native_resolution_overrides={
+            "canvas_right_oblique": (640, 360),
+            "canvas_left_oblique": (640, 360),
+            "canvas_inspection_deployed": (640, 360),
+            "brush_standoff_overhead": (320, 240),
+        }
+    )
+    try:
+        camera_state = runtime.state()["cameraObservation"]
+        assert camera_state["available"] is True
+        assert camera_state["nativeFrameRetained"] is True
+        assert camera_state["foveaAddressing"] == "canvas_uv_center_and_span"
+        image = Image.open(io.BytesIO(runtime.camera_png("canvas_right_oblique")))
+        assert image.mode == "L"
+        assert image.size == (512, 512)
+        first_bundle = runtime.camera_observations()
+        assert first_bundle.frames == ()
+        backend = runtime.sim.plant.backend
+        backend.data.time = 0.04
+        delivered = runtime.camera_observations()
+        assert any(
+            frame.product_kind == "global_canvas"
+            for frame in delivered.frames
+        )
+        camera_diagnostics = runtime.agent_driver.diagnostics()
+        assert camera_diagnostics["observationBoundary"][
+            "cameraExposureCount"
+        ] == 2
+        assert camera_diagnostics["cameraVfe"]["factors"]
+        request_result = runtime.command(
+            {
+                "type": "request_fovea",
+                "cameraName": "canvas_right_oblique",
+                "centerCanvasUv": [0.3, 0.7],
+                "spanCanvasUv": [0.2, 0.2],
+            }
+        )
+        assert request_result["ok"] is True
+        requested_foveation = runtime.state()["cameraObservation"]["foveation"]
+        assert requested_foveation["trace"] == []
+        assert requested_foveation["pendingRequestCount"] == 1
+        backend.data.time = 0.08
+        runtime.camera_observations()
+        backend.data.time = 0.12
+        foveal_delivery = runtime.camera_observations()
+        assert any(
+            frame.product_kind == FOVEA_CANVAS_PRODUCT
+            for frame in foveal_delivery.frames
+        )
+        foveation = runtime.state()["cameraObservation"]["foveation"]
+        assert foveation["active"]["centerCanvasUv"] == pytest.approx([0.3, 0.7])
+        assert foveation["active"]["selectionBasis"] == "operator_diagnostic"
+        with pytest.raises(RuntimeError, match="camera_clear_park"):
+            runtime.camera_png("canvas_inspection_deployed")
+        park_qpos = backend.keyframe_qpos("camera_clear_park")
+        backend.set_state(park_qpos[:4], control_rad=park_qpos[:4])
+        inspection = Image.open(
+            io.BytesIO(runtime.camera_png("canvas_inspection_deployed"))
+        )
+        assert inspection.mode == "L"
+        assert inspection.size == (512, 512)
+    finally:
+        runtime.stop()
 
 
 def test_web_runtime_can_enable_spatial_material_planner() -> None:
@@ -394,6 +548,10 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert 'applyJoint("brush_bend_x"' in main_js
     assert 'applyJoint("brush_bend_z"' in main_js
     assert "canvasTexture" in main_js
+    assert "updateFoveaVisualization" in main_js
+    assert "traceRetentionSeconds" in main_js
+    assert "request_fovea" in main_js
+    assert 'id="foveaCamera"' in index_html
     assert "mujoco-robstride-electromechanical-v4" not in main_js
 
 
@@ -414,18 +572,48 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
     assert model["kinematics"]["upperArmLength"] == pytest.approx(0.3302)
     assert model["kinematics"]["lowerArmLength"] == pytest.approx(0.3302)
     assert model["canvas"]["center"] == pytest.approx([0.075, 0.4826, 0.350])
-    assert model["cameraRig"]["version"] == "provisional-multiview-v2"
+    assert model["cameraRig"]["version"] == "provisional-multiview-v4"
     assert model["cameraRig"]["normalization"] == "role_dependent_v1"
     assert model["cameraRig"]["calibrationStatus"] == (
-        "provisional_simulation_geometry"
+        "nominal_lens_geometry_pending_physical_calibration"
     )
     assert model["cameraRig"]["observationEncoding"] == (
         "linear_grayscale_float32_normalized_0_1"
     )
-    assert model["cameraRig"]["shutterModel"] == "global_shutter"
+    assert model["cameraRig"]["shutterModel"] == (
+        "heterogeneous_per_camera_v1"
+    )
+    assert model["cameraRig"]["observationModel"] == (
+        "mujoco_native_global_foveal_composite_v1"
+    )
+    assert model["cameraRig"]["productContract"] == (
+        "native_global_requested_fovea_v1"
+    )
+    assert model["cameraRig"]["foveaAddressing"] == (
+        "canvas_uv_center_and_span"
+    )
+    assert model["cameraRig"]["foveaSelectionBoundary"] == (
+        "external_observation_space_request_without_oracle_default"
+    )
+    assert model["cameraRig"]["noiseStatus"] == "provisional_not_calibrated"
+    assert model["cameraRig"]["likelihoodModel"] == (
+        "registered_grayscale_occlusion_mixture_linearized_v0"
+    )
+    assert model["cameraRig"]["likelihoodStatus"] == (
+        "provisional_simulation_prior_pending_physical_calibration"
+    )
+    assert model["cameraRig"]["provisionalSpecularStrength"] == pytest.approx(
+        0.08
+    )
     cameras = {
         camera["name"]: camera for camera in model["cameraRig"]["cameras"]
     }
+    assert cameras["canvas_right_oblique"]["likelihoodModelErrorStd"] == pytest.approx(
+        0.035
+    )
+    assert cameras["canvas_right_oblique"]["likelihoodInlierProbability"] == pytest.approx(
+        0.96
+    )
     assert set(cameras) == {
         "canvas_right_oblique",
         "canvas_left_oblique",
@@ -450,9 +638,53 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         512,
         512,
     ]
+    assert cameras["canvas_right_oblique"]["hardwareBaseline"] == (
+        "OM_SYSTEM_OM-1"
+    )
+    assert cameras["canvas_right_oblique"]["hardwareStatus"] == "owned"
+    assert cameras["canvas_right_oblique"]["lensStatus"] == (
+        "confirmed_focal_length"
+    )
+    assert cameras["canvas_right_oblique"]["captureMode"] == (
+        "MFT_full_width_16x9"
+    )
+    assert cameras["canvas_right_oblique"]["focalLengthMm"] == pytest.approx(
+        25.0
+    )
+    assert cameras["canvas_right_oblique"]["activeSensorWidthMm"] == (
+        pytest.approx(17.3)
+    )
+    assert cameras["canvas_right_oblique"][
+        "fullFrameEquivalentFocalLengthMm"
+    ] == pytest.approx(50.0)
+    assert cameras["canvas_right_oblique"]["shutterModel"] == "rolling"
+    assert cameras["canvas_right_oblique"]["acquisitionResolutionPx"] == [
+        3840,
+        2160,
+    ]
+    assert cameras["canvas_right_oblique"]["fovealResolutionPx"] == [256, 256]
+    assert cameras["canvas_left_oblique"]["hardwareBaseline"] == (
+        "Sony_ILCE-7RM2"
+    )
+    assert cameras["canvas_left_oblique"]["captureMode"] == (
+        "Super35_full_width_16x9"
+    )
+    assert cameras["canvas_left_oblique"]["focalLengthMm"] == pytest.approx(
+        35.0
+    )
+    assert cameras["canvas_left_oblique"][
+        "fullFrameEquivalentFocalLengthMm"
+    ] == pytest.approx(52.5)
+    assert cameras["canvas_left_oblique"]["transport"] == (
+        "clean_HDMI_capture"
+    )
     assert cameras["canvas_right_oblique"]["sampleRateHz"] == pytest.approx(
         30.0
     )
+    assert cameras["canvas_right_oblique"]["latencyS"] == pytest.approx(
+        1.0 / 30.0
+    )
+    assert cameras["canvas_right_oblique"]["quantizationBits"] == 8
     assert cameras["brush_standoff_overhead"]["role"] == "brush_standoff"
     assert cameras["brush_standoff_overhead"]["registration"] == (
         "canvas_edge_profile"
@@ -461,6 +693,7 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         640,
         480,
     ]
+    assert cameras["brush_standoff_overhead"]["fovealResolutionPx"] is None
     assert cameras["brush_standoff_overhead"]["sampleRateHz"] == pytest.approx(
         60.0
     )

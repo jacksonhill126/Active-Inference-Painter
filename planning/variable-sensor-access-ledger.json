@@ -26,7 +26,7 @@
     "observation_mode": "sensor_equivalent",
     "sensor_equivalent": false,
     "model_access_blocked": true,
-    "reason": "The fixed-camera/body likelihood and sensor-conditioned posterior are not implemented. Policy inference, learning, and oracle bootstrap fail closed instead of reading process truth.",
+    "reason": "The camera-conditioned painting posterior is implemented, but the sensor-conditioned body posterior does not yet initialize motor forecasts and the live loop does not yet pair executed-action transition priors with camera updates. Policy inference, learning, and oracle bootstrap remain fail closed instead of reading process truth.",
     "oracle_opt_in": "oracle_material_state"
   },
   "classifications": {
@@ -477,6 +477,34 @@
       "physical_analogue": "Executed command plus image-likelihood evidence for mark location and visible tone.",
       "research_status": "oracle_only",
       "blockers": ["AI-103", "AI-203", "AI-204", "AI-207", "AI-210", "AI-216"]
+    },
+    {
+      "id": "camera.model_observation",
+      "source_type": "CameraFrame",
+      "values": [
+        "grayscale",
+        "calibration_validity",
+        "camera_name",
+        "sequence",
+        "product_kind",
+        "product_id",
+        "capture_time_s",
+        "available_time_s",
+        "calibration_revision",
+        "observation_model",
+        "registration",
+        "sampling_kind",
+        "source_resolution_px",
+        "declared_acquisition_resolution_px",
+        "fovea request metadata"
+      ],
+      "classification": "physical_sensor_observation",
+      "consumers": ["CameraSpatialLikelihood", "camera diagnostics"],
+      "current_access": ["permitted agent observation; only registered global/foveal products enter the painting-state likelihood"],
+      "likelihood_status": "camera-spatial-likelihood-v0 is an explicit nonlinear grayscale likelihood with a mean-field occlusion/outlier latent and separately logged VFE; parameters are provisional XML-declared simulation priors.",
+      "physical_analogue": "Calibrated grayscale frames and requested digital regions of interest from the fixed cameras.",
+      "research_status": "provisional_sensor_model",
+      "blockers": ["AI-201", "AI-202", "AI-203", "T-712"]
     },
     {
       "id": "diagnostics.canvas_render",

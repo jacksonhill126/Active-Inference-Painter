@@ -22,18 +22,21 @@ active-inference model. It covers:
 - painting and motor policy inference;
 - online learning.
 
-This specification describes the retained **oracle-observation comparator**.
-When explicitly enabled, the spatial planner receives arrays deterministically
-derived from hidden simulator material state and the summary planner receives
-exact aggregate material statistics. Assigned observation variances make
-inference probabilistic, but the inputs are not measurements a physical robot
-could obtain.
+This specification describes both the retained **oracle-observation
+comparator** and the bounded sensor-path factors implemented so far. When the
+oracle comparator is explicitly enabled, the spatial planner receives arrays
+deterministically derived from hidden simulator material state and the summary
+planner receives exact aggregate material statistics. Assigned observation
+variances make that comparator probabilistic, but its inputs are not
+measurements a physical robot could obtain.
 
 The live runtime now defaults to the fail-closed `sensor-boundary-v0`: it
-does not run policy inference, learning, or oracle bootstrap until M2 supplies
-fixed-camera, encoder, current, and contact likelihoods and a
-sensor-conditioned posterior. `oracle_material_state` remains an explicit
-diagnostic-only opt-in. The complete access audit is maintained in
+does not run policy inference, learning, or oracle bootstrap. A fixed-camera
+likelihood and spatial posterior now exist, as does a separate body estimator;
+the latter has not yet replaced exact simulator initialization in motor
+forecasts, and current/deflection factors remain incomplete.
+`oracle_material_state` remains an explicit diagnostic-only opt-in. The
+complete access audit is maintained in
 `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`.
 
 A first non-oracle M2 body-inference factorization is implemented but is not
@@ -80,14 +83,16 @@ The implementation has five relevant clocks.
 | Painting/global plan | `k` | global candidate generation, stopping inference, or a completed painting | `arm_agent_driver.py` |
 
 The Markov blanket used by the eventual physical agent should contain sensor
-observations and motor commands. The present implementation does not yet
-enforce that boundary:
+observations and motor commands. The present implementation enforces it at the
+new camera posterior but not throughout the live controller:
 
 - process states include exact joint, motor, contact, brush, and material
   variables;
 - controller and hard-safety code may use process state below policy
   selection;
-- painting inference currently receives exact derived material state;
+- oracle painting inference receives exact derived material state; sensor mode
+  may assimilate registered camera pixels but remains blocked from policy
+  execution by body-forecast initialization;
 - visualization and evaluation receive additional process truth.
 
 The active-inference painting boundary begins at candidate painting policies
@@ -272,6 +277,24 @@ modeling, not the desired learned abstract feature hierarchy. The intended
 higher layers must infer flexible latent causes from permitted observations and
 be retained by held-out predictive necessity rather than by a hand-authored
 feature list.
+
+The sensor path now adds the analytic likelihood
+
+```math
+p(o_p \mid s_p,z_p=\mathrm{inlier})
+=\mathcal{N}(o_p;g(s_p),\sigma_c^2),
+```
+
+where `g` maps thickness and surface tone to predicted superficial grayscale.
+`z_p` is a Bernoulli inlier/outlier latent with a broad state-independent
+outlier density. Its posterior responsibility is inferred from image
+residuals; no simulator segmentation or visibility mask is observed. A first-
+order per-cell update projects this likelihood into the diagonal spatial
+posterior. Wetness and bulk black pigment have zero direct image Jacobian.
+Global and foveal products derived from one native exposure are mosaicked
+before one likelihood factor, avoiding an independence claim for correlated
+pixels. This is `camera-spatial-likelihood-v0`, a provisional analytic low-
+level observation model rather than the desired learned perceptual hierarchy.
 
 ### 3.5 Slower beliefs
 
@@ -724,16 +747,18 @@ research claims.
 | --- | --- | --- | --- | --- |
 | GP-BODY | Generative process | `p(x_body_tau+1|x_body_tau,u_tau)` | `arm_sim.JointPlant`, `ArmPainterSim` | Representative, uncalibrated |
 | GP-MATERIAL | Generative process | wet material and brush transfer | `arm_sim.VerticalCanvas.paint_at`, `Brush` | Hand-designed process |
+| GP-CAMERA | Generative process | native/global/requested-foveal grayscale products | `camera_observation.CameraObservationProcess` | Simulated, uncalibrated |
 | GM-SUM-TRANS | Transition likelihood | `p_theta(s_t+1|s_t,a_t,m_t)` | `models.DynamicsEnsemble` | Obsolete compatibility fixture |
 | GM-PIX-TRANS | Transition likelihood | local `p_theta(s^P_t+1|s^P_t,a^P_t,m_t)` | `models.LocalSpatialDynamicsEnsemble`, `local_spatial.py` | Learned sparse approximation |
 | GM-SUM-OBS | Observation likelihood | `p(o_t|s_t)` | `models.ObservationModel` | Obsolete oracle compatibility fixture |
 | GM-PIX-OBS | Observation likelihood | `p(o^pixel_t|s^pixel_t)` | `spatial_inference.py` | Oracle material, provisional |
+| GM-CAMERA-OBS | Observation likelihood | `p(o^gray_t,z^inlier_t|s^pixel_t)` | `camera_inference.CameraSpatialLikelihood` | Analytic occlusion mixture, uncalibrated |
 | Q-SUM | Posterior | diagonal `q(s_t)` | `inference.VariationalStateEstimator` | Obsolete compatibility fixture |
 | Q-PIX | Posterior | factorized `q(s^pixel_t)` | `spatial_inference.SpatialVariationalStateEstimator` | Analytic diagonal fusion |
 | Q-CANVAS | Posterior/likelihood | `q(z_canvas)`, decoder likelihood | `canvas_hierarchy.HierarchicalCanvasModel` | Online diagonal latent |
 | Q-REL | Posterior/likelihood | `q(z_relation)`, decoder likelihood | `canvas_hierarchy.py` | Deterministic slots plus latent |
 | Q-PASSAGE | Slow posterior | `q(z_passage)` | `passage_inference.PassageBelief` | Mixed pseudo-likelihood |
-| Q-BRUSH | Material posterior | `q(load_t)q(black_fraction_t)` per dedicated brush | `brush_loading.BrushLoadingModel` | Compact bounded Gaussian moments; camera update not wired |
+| Q-BRUSH | Material posterior | `q(load_t)q(black_fraction_t)` per dedicated brush | `brush_loading.BrushLoadingModel` | Compact bounded Gaussian moments; image-derived mark statistic not wired |
 | TRANS-BRUSH | Transition likelihood | preserve depletion/uncertainty or pure full reload | `brush_loading.py`, `arm_sim.Brush` | Explicit provisional approximation |
 | PREF-COVERAGE | Prior preference | `p*(C_T|stop)` | `preferences.py`, `efe_common.py` | Explicit terminal Beta |
 | PREF-COMP | Prior preference | energy from compression gap | `canvas_hierarchy.py`, `spatial_efe.py` | Unresolved closed loop |
@@ -753,7 +778,10 @@ research claims.
 The following are explicit blockers or limitations, not hidden implementation
 details:
 
-1. Exact simulator material state is used as observation.
+1. Oracle diagnostic mode still uses exact simulator material state as its
+   observation; sensor mode uses the analytic camera likelihood but remains
+   blocked from live control by body-forecast initialization and continuous
+   action-conditioned observation scheduling.
 2. Summary and pixel posteriors are diagonal Gaussian.
 3. Derived channels may be double-counted before deterministic projection.
 4. Transition moments are propagated at posterior means.
@@ -773,6 +801,10 @@ details:
 15. The web process and planner can use different canvas resolutions.
 16. Continuous-density constants and modality reductions require independent
     unit/sign verification.
+17. The camera update linearizes the nonlinear grayscale likelihood and drops
+    posterior cross-covariance between thickness and surface tone.
+18. The camera occlusion factor is a mean-field inlier/outlier mixture with
+    provisional XML-declared precisions, not a learned occlusion model.
 17. Brush preparation is analytically marginalized, but only its modal policy
     is sent through the expensive motor/material rollout.
 

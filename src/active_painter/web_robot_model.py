@@ -228,6 +228,18 @@ def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
             "focusModel": camera_rig.focus_model,
             "observationEncoding": camera_rig.observation_encoding,
             "shutterModel": camera_rig.shutter_model,
+            "observationModel": camera_rig.observation_model,
+            "productContract": camera_rig.product_contract,
+            "foveaAddressing": camera_rig.fovea_addressing,
+            "foveaSelectionBoundary": camera_rig.fovea_selection_boundary,
+            "noiseModel": camera_rig.noise_model,
+            "noiseStatus": camera_rig.noise_status,
+            "likelihoodModel": camera_rig.likelihood_model,
+            "likelihoodStatus": camera_rig.likelihood_status,
+            "specularModel": camera_rig.specular_model,
+            "provisionalSpecularStrength": (
+                camera_rig.provisional_specular_strength
+            ),
             "canvasUvConvention": "origin_top_left_u_right_v_down",
             "cameras": [
                 {
@@ -236,16 +248,48 @@ def _load_robot_visual_model(model_path: str) -> dict[str, Any]:
                     "availability": camera.availability,
                     "channels": camera.channels,
                     "registration": camera.registration,
+                    "hardwareBaseline": camera.hardware_baseline,
+                    "hardwareStatus": camera.hardware_status,
+                    "lensStatus": camera.lens_status,
+                    "captureMode": camera.capture_mode,
+                    "transport": camera.transport,
+                    "shutterModel": camera.shutter_model,
                     "positionM": list(camera.position_m),
                     "rotationCameraToWorld": [
                         list(row) for row in camera.rotation_camera_to_world
                     ],
                     "fovyDeg": camera.fovy_deg,
                     "resolutionPx": list(camera.resolution_px),
+                    "simulationReferenceResolutionPx": list(
+                        camera.resolution_px
+                    ),
+                    "acquisitionResolutionPx": list(
+                        camera.acquisition_resolution_px
+                    ),
                     "modelInputResolutionPx": list(
                         camera.model_input_resolution_px
                     ),
+                    "fovealResolutionPx": (
+                        list(camera.foveal_resolution_px)
+                        if camera.foveal_resolution_px is not None
+                        else None
+                    ),
+                    "focalLengthMm": camera.focal_length_mm,
+                    "activeSensorWidthMm": camera.active_sensor_width_mm,
+                    "fullFrameEquivalentFocalLengthMm": (
+                        camera.full_frame_equivalent_focal_length_mm
+                    ),
                     "sampleRateHz": camera.sample_rate_hz,
+                    "readNoiseStd": camera.read_noise_std,
+                    "signalNoiseStd": camera.signal_noise_std,
+                    "likelihoodModelErrorStd": camera.likelihood_model_error_std,
+                    "likelihoodInlierProbability": (
+                        camera.likelihood_inlier_probability
+                    ),
+                    "likelihoodOutlierStd": camera.likelihood_outlier_std,
+                    "latencyS": camera.latency_s,
+                    "dropoutProbability": camera.dropout_probability,
+                    "quantizationBits": camera.quantization_bits,
                     "incidenceDeg": canvas_incidence_angle_deg(
                         camera, camera_rig.canvas
                     ),

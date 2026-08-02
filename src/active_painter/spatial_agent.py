@@ -6,6 +6,8 @@ import numpy as np
 import torch
 
 from .canvas_hierarchy import HierarchicalCanvasModel, passage_step_descriptor, policy_descriptor
+from .camera_inference import CameraSpatialLikelihood
+from .camera_observation import CameraObservationBundle
 from .config import PainterConfig
 from .env import StrokeAction
 from .local_spatial import LocalPatchReplayBuffer
@@ -47,6 +49,7 @@ class SpatialActiveInferencePainter:
             config, self.dynamics, self.preference, self.device, composition=self.composition
         )
         self.estimator = SpatialVariationalStateEstimator(config, self.device)
+        self.camera_likelihood = CameraSpatialLikelihood(config)
         self.policy_sampler = PolicySampler(config, seed=seed)
         self.replay = (
             LocalPatchReplayBuffer(config.replay_capacity, seed=seed)
@@ -120,6 +123,19 @@ class SpatialActiveInferencePainter:
     @property
     def last_vfe(self):
         return self.estimator.last_vfe
+
+    @property
+    def last_camera_vfe(self):
+        return self.camera_likelihood.last_vfe
+
+    def assimilate_camera_observation(
+        self,
+        observation: CameraObservationBundle,
+    ) -> SpatialCanvasState:
+        """Update q(s) through the registered grayscale likelihood only."""
+
+        self.belief = self.camera_likelihood.infer(self.belief, observation)
+        return self.belief
 
     def update_belief(
         self,
