@@ -652,7 +652,7 @@ def test_active_inference_driver_diagnostics_with_execution_forecast_are_json_se
     assert "retained for inference" in forecast["state_fields_omitted"]
 
 
-def test_motor_forecast_uses_one_frozen_body_posterior_per_planning_pass(
+def test_motor_forecast_uses_frozen_body_and_material_posteriors_per_planning_pass(
     monkeypatch,
 ) -> None:
     cfg = PainterConfig(canvas_size=24, motor_forecast_candidates=1)
@@ -691,6 +691,15 @@ def test_motor_forecast_uses_one_frozen_body_posterior_per_planning_pass(
     frozen = belief(5)
     driver.ingest_body_belief(frozen, vfe)
     driver._planning_body_belief = copy.deepcopy(driver.body_belief)
+    material = np.zeros((6, 4, 4), dtype=np.float32)
+    frozen_material = SpatialCanvasState(
+        material=material,
+        logvar=np.full_like(material, -8.0),
+        posterior_revision=3,
+        inference_model_id="camera-spatial-likelihood-v0:driver-test-v0",
+        calibration_status="synthetic_test_only",
+    )
+    driver._planning_material_belief = copy.deepcopy(frozen_material)
     driver.ingest_body_belief(belief(6), vfe)
     action = StrokeAction(0.4, 0.45, 0.6, 0.55, 0.05, 0.6, 1.0)
     policy = Policy(
@@ -719,7 +728,14 @@ def test_motor_forecast_uses_one_frozen_body_posterior_per_planning_pass(
 
     assert result == [sentinel]
     assert captured["initial_body_belief"] == frozen
-    assert captured["independent_noise_seed"] == 104_729 + 1_009 * 5
+    captured_material = captured["initial_material_belief"]
+    assert isinstance(captured_material, SpatialCanvasState)
+    np.testing.assert_allclose(captured_material.material, frozen_material.material)
+    assert captured_material.posterior_revision == frozen_material.posterior_revision
+    assert captured_material.inference_model_id == frozen_material.inference_model_id
+    assert captured["independent_noise_seed"] == (
+        104_729 + 1_009 * 5 + 130_363 + 1_013 * 3
+    )
     assert driver.body_belief is not None
     assert driver.body_belief.posterior_revision == 6
 

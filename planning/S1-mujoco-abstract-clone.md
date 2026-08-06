@@ -13,8 +13,9 @@ This is still not a calibrated hardware twin. Datasheet-derived, estimated,
 visual-only, and unmeasured fields remain explicit. Counterfactual forecasts
 now preserve the selected plant: MuJoCo execution predicts through independent
 `MjData` under the same immutable model, and its runtime q/qvel initialization
-comes from a provisional sensor-conditioned body posterior. Copied
-material/brush/model context, contact-to-compliance initialization, and MuJoCo
+comes from a provisional sensor-conditioned body posterior. Independent
+material fields initialize from the frozen spatial posterior. Copied substrate
+grain/brush/model context, contact-to-compliance initialization, and MuJoCo
 parameter uncertainty remain declared forecast approximations.
 
 ## Physical-Draft And Retarget Contracts

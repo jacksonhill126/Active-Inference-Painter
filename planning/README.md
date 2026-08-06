@@ -63,8 +63,9 @@ track. The draft fixes RobStride 03 at `yaw`/`pitch` and RobStride 02 at
 forecasts now preserve the selected plant, including independent MuJoCo rollout
 state when MuJoCo is selected. The MuJoCo runtime now initializes forecast
 q/qvel from a sensor-conditioned body posterior with independent future-noise
-seeds. Copied material/brush/model context, missing contact-to-compliance
-initialization, and unsampled body parameters remain explicit
+seeds. Independent material fields now initialize from a frozen spatial
+posterior. Copied substrate grain/brush/model context, missing
+contact-to-compliance initialization, and unsampled body parameters remain explicit
 `baseline-oracle-v0` limitations. S0 stabilizes schemas and provenance, not
 controller gains or mechanical design.
 Simulator migration improves the generative process and transfer testing; it

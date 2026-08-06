@@ -26,7 +26,7 @@
     "observation_mode": "sensor_equivalent",
     "sensor_equivalent": false,
     "model_access_blocked": true,
-    "reason": "The camera-conditioned painting posterior is implemented and the MuJoCo body posterior now initializes motor-forecast joint position/velocity. Belief-derived material/brush/contact forecast construction and the executed-action transition-prior/camera-update schedule remain incomplete. Policy inference, learning, and oracle bootstrap remain fail closed instead of reading process truth.",
+    "reason": "The camera-conditioned painting posterior is implemented, and frozen body/material posteriors now initialize motor-forecast joint state and the four independent paint fields. Belief-derived substrate-grain/brush/contact/model forecast construction and the executed-action transition-prior/camera-update schedule remain incomplete. Policy inference, learning, and oracle bootstrap remain fail closed instead of reading process truth.",
     "oracle_opt_in": "oracle_material_state"
   },
   "classifications": {
@@ -83,8 +83,8 @@
       ],
       "classification": "hidden_state",
       "consumers": ["state construction", "controller", "motor forecast", "online learning", "diagnostics"],
-      "current_access": ["privileged agent input", "privileged controller input", "privileged material/brush/model forecast context", "MuJoCo forecast q/qvel is overwritten from BodyBeliefSnapshot"],
-      "likelihood_status": "The MuJoCo body likelihood now separates forecast joint position/velocity from process truth, but material, brush, model, and controller paths remain mixed.",
+      "current_access": ["privileged agent input", "privileged controller input", "privileged substrate-grain/brush/model forecast context", "MuJoCo forecast q/qvel is overwritten from BodyBeliefSnapshot", "forecast material fields are overwritten from SpatialCanvasState when supplied"],
+      "likelihood_status": "The MuJoCo body likelihood separates forecast joint position/velocity from process truth, and SpatialCanvasState separates four material fields when supplied; substrate grain, brush, model, and controller paths remain mixed.",
       "physical_analogue": "Must be inferred from camera, encoder, current, force, and command history where needed.",
       "research_status": "oracle_only",
       "blockers": ["AI-201", "AI-202", "AI-203", "AI-204", "AI-216", "T-109"]
@@ -107,7 +107,7 @@
       "values": ["thickness", "wetness", "black_mass", "surface_tone", "grain"],
       "classification": "hidden_state",
       "consumers": ["summary inference", "spatial inference", "transition learning", "hierarchy learning", "passage inference", "motor forecast", "diagnostics"],
-      "current_access": ["privileged agent input", "privileged learning target", "privileged forecast state"],
+      "current_access": ["privileged agent input", "privileged learning target", "posterior-conditioned forecast state when SpatialCanvasState is supplied", "privileged native/oracle fallback forecast state"],
       "likelihood_status": "Configured Gaussian noise is applied after exact reads; this is an oracle-state likelihood, not a physical sensor likelihood.",
       "physical_analogue": "Only visible surface appearance is camera-accessible; thickness, wetness, bulk pigment mass, and substrate grain remain latent.",
       "research_status": "oracle_only",
@@ -422,8 +422,8 @@
       ],
       "classification": "derived_observation",
       "consumers": ["motor EFE", "spatial first-transition EFE", "motor policy posterior", "diagnostics"],
-      "current_access": ["body-joint-state-conditioned but material/brush/model-oracle counterfactual prediction"],
-      "likelihood_status": "Predicted sensory outcomes are valid internal variables. MuJoCo q/qvel initialization is posterior-conditioned; material, brush, contact-compliance, and parameter context remain partly conditioned on privileged process state/model assumptions.",
+      "current_access": ["body-joint-state and material-field posterior-conditioned, but substrate-grain/brush/contact/model-oracle counterfactual prediction"],
+      "likelihood_status": "Predicted sensory outcomes are valid internal variables. MuJoCo q/qvel and the four independent material fields are posterior-conditioned when their snapshots are supplied; substrate grain, brush, contact-compliance, and parameter context remain partly conditioned on privileged process state/model assumptions.",
       "physical_analogue": "Posterior-predictive sensory and material outcomes from an inferred initial state.",
       "research_status": "oracle_conditioned",
       "blockers": ["AI-104", "AI-105", "AI-107", "AI-201", "AI-203", "AI-204", "AI-216"]
@@ -437,7 +437,10 @@
         "forecast_approximation",
         "body_posterior_revision",
         "body_inference_model_id",
-        "body_calibration_status"
+        "body_calibration_status",
+        "material_posterior_revision",
+        "material_inference_model_id",
+        "material_calibration_status"
       ],
       "classification": "derived_observation",
       "consumers": ["motor-forecast diagnostics", "observation-boundary audit", "web runtime"],
@@ -455,14 +458,14 @@
         "native exact JointPlant dynamic state when no BodyBeliefSnapshot is supplied",
         "native exact JointPlant RNG state when no BodyBeliefSnapshot is supplied",
         "exact Brush bristle and RNG state; load and average mixture overwritten from q(brush)",
-        "exact VerticalCanvas material state",
+        "exact VerticalCanvas substrate grain; thickness/wetness/black_mass/surface_tone are overwritten from SpatialCanvasState when supplied",
         "exact plant/model parameters",
         "contact state regenerated from sampled q/qvel but BodyBeliefSnapshot contact factors are not mapped into compliance"
       ],
       "classification": "hidden_state",
       "consumers": ["counterfactual motor rollout", "painting policy posterior"],
-      "current_access": ["MuJoCo runtime q/qvel posterior boundary implemented", "material/brush/model forecast initialization remains privileged", "native oracle fallback retains copied dynamic state and RNG"],
-      "likelihood_status": "A posterior sampling boundary now exists for joint position/velocity and independent future plant noise when BodyBeliefSnapshot is supplied. It does not yet cover material, brush realization/RNG, contact-compliance latent state, or plant parameters.",
+      "current_access": ["MuJoCo runtime q/qvel posterior boundary implemented", "material-field posterior boundary implemented when SpatialCanvasState is supplied", "substrate-grain/brush/model forecast initialization remains privileged", "native oracle fallback retains copied dynamic state and RNG"],
+      "likelihood_status": "Posterior sampling boundaries now exist for joint position/velocity, independent future plant noise, and the four independent material fields when their snapshots are supplied. They do not yet cover substrate grain, brush realization/RNG, contact-compliance latent state, or plant parameters.",
       "physical_analogue": "Sample independent rollout noise from beliefs over inferred state and model parameters.",
       "research_status": "oracle_only",
       "blockers": ["AI-202", "AI-203", "AI-204", "AI-216", "T-109"]

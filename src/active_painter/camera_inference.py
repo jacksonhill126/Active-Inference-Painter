@@ -187,6 +187,12 @@ class CameraSpatialLikelihood:
             mean.astype(np.float32),
             np.clip(variance, 1e-12, 1e6).astype(np.float32),
             self.cfg,
+            posterior_revision=prior.posterior_revision + 1,
+            inference_model_id=(
+                f"{CAMERA_SPATIAL_LIKELIHOOD_VERSION}:"
+                f"{self.rig.likelihood_model}"
+            ),
+            calibration_status=self.rig.likelihood_status,
         )
 
     def _validate_exposure(

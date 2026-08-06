@@ -293,8 +293,9 @@ Acceptance:
 
 Progress, 2026-08-05: the MuJoCo runtime now builds the live body posterior
 only from `PhysicalSensorPacket` and initializes forecast q/qvel particles from
-that posterior under an independent seed. The working forecast still receives
-copied material/brush/model state, and native execution still lacks the
+that posterior under an independent seed. The four independent material fields
+now initialize from `SpatialCanvasState`; the working forecast still receives
+copied substrate grain/brush/model state, and native execution still lacks the
 `PlantBackend` sensor adapter, so T-109 remains blocked rather than accepted.
 
 ## Reference Gate

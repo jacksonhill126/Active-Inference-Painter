@@ -69,11 +69,14 @@ VerticalCanvas material arrays --------------------+
                                                      |
 true ArmPainterSim pose/contact ---------------------+--> agent and controller
                                                      |
-copied canvas/brush/model context --------------------+--> motor-policy rollout
+copied grain/brush/model context ---------------------+--> motor-policy rollout
 native dynamic state/RNG (no body belief) -----------+
 
 MuJoCo PhysicalSensorPacket -> BodyStateEstimator -> q/qvel rollout particles
                                               independent future plant seed
+
+camera products -> SpatialCanvasState -> material-field rollout particles
+                       mean particle + diagonal posterior-cell samples
 
 perfect canvas render -----------------------------------> browser only
 ```
@@ -89,11 +92,12 @@ planner state from `ArmPainterSim` raises `PrivilegedStateAccessError`.
 
 This is boundary enforcement, not completed sensor inference. The default
 therefore reports `sensor_equivalent=false` and `model_access_blocked=true`
-until belief-derived material/brush/contact forecast construction replaces the
-remaining copied process context and the action-conditioned transition/camera
-update is scheduled in the live loop. The camera-conditioned painting
-posterior and MuJoCo body-conditioned q/qvel forecast initialization are now
-implemented, but do not weaken those remaining blocks. The old behavior is
+until belief-derived substrate-grain/brush/contact/model forecast construction
+replaces the remaining copied process context and the action-conditioned
+transition/camera update is scheduled in the live loop. The camera-conditioned
+painting posterior, material-field forecast initialization, and MuJoCo
+body-conditioned q/qvel forecast initialization are now implemented, but do
+not weaken those remaining blocks. The old behavior is
 available only through the explicit
 `oracle_material_state` diagnostic mode.
 
@@ -317,8 +321,9 @@ per planning pass. Forecast particle zero uses its q/qvel mean and later
 particles sample its diagonal variance with an independent future-noise seed.
 The named `mujoco-ideal-sensor-body-likelihood-v0` profile is explicitly
 provisional simulation-only and not hardware-calibrated. This connection does
-not enable the live painting policy loop because its material/brush/contact
-forecast boundary remains oracle-conditioned. Motor current, bus voltage,
+not enable the live painting policy loop because its brush/contact/model and
+continuous-update boundaries remain oracle-conditioned. Motor current, bus
+voltage,
 temperature, tool deflection, and faults remain explicitly unassimilated:
 faults belong to hard safety, while current and deflection require conditional
 load/contact likelihoods rather than an informal confidence score.
@@ -374,13 +379,20 @@ inferred from sensory consequences.
 Global and local planning still call `copy.deepcopy(sim)` to construct the
 rollout container. Before a MuJoCo motor forecast, q/qvel is replaced from the
 frozen body posterior and future plant noise uses the request-derived seed.
-The remaining snapshot includes:
+When a spatial posterior is supplied, thickness, wetness, black pigment mass,
+and surface tone are also replaced before the before-state summary is read.
+Particle zero uses the posterior mean. Later particles sample diagonal variance
+at posterior-cell resolution, then upsample those cells piecewise constantly
+and physically project them. This avoids inventing native-pixel independence;
+coverage and ground contrast are recomputed rather than sampled. The remaining
+snapshot includes:
 
-- exact material fields;
+- exact substrate grain (the four independent material fields use the
+  posterior when supplied, but the oracle/native fallback can still copy them);
 - exact brush RNG and bristle realization (load/average mixture are replaced
   from the model belief for the stroke forecast);
 - exact process parameters;
-- brush RNG state.
+- native plant dynamic/RNG state when no body belief is supplied.
 
 The contact state is regenerated after sampled q/qvel initialization, but the
 posterior contact probability/force is not yet mapped into MuJoCo brush
@@ -389,8 +401,9 @@ Plant parameter jitter adds limited uncertainty; MuJoCo parameters are not yet
 sampled. The brush RNG is copied without an independent-noise boundary. Native
 oracle forecasts that receive no `BodyBeliefSnapshot` also retain exact plant
 dynamic state and copied plant RNG. Thus the body-state leak is corrected for
-the MuJoCo runtime, while material/brush/model and native-fallback leakage
-remain.
+the MuJoCo runtime and the independent material-field leak is corrected when a
+spatial posterior is supplied, while substrate-grain/brush/model and
+native-fallback leakage remain.
 
 This does **not** mean simulation-based prediction is illegitimate. The
 principled replacement is:
@@ -446,7 +459,7 @@ remain external to active-inference preferences.
 | Exact material arrays and aggregates | Sensor-only perception, physical deployment, sensor-driven hierarchy | `AI-103`, `AI-201` through `AI-204`, `AI-216` |
 | True pose and Cartesian tip | Sensor-driven embodiment and controller portability | `T-109`, `AI-201`, `AI-203`, `AI-204`, `AI-216` |
 | Exact contact state in control and learning | Calibrated contact inference and physical reliability learning | `T-109`, `AI-201`, `AI-203`, `AI-204`, `AI-216` |
-| Copied material/brush/model snapshot, brush RNG, and native oracle dynamic/RNG fallback | Fully non-oracle embodied prediction; MuJoCo q/qvel initialization is already posterior-conditioned | `T-109`, `AI-202`, `AI-203`, `AI-204`, `AI-216` |
+| Copied substrate grain, brush/model snapshot, brush RNG, and native oracle dynamic/RNG fallback | Fully non-oracle embodied prediction; MuJoCo q/qvel and independent material fields are already posterior-conditioned when their snapshots are supplied | `T-109`, `AI-202`, `AI-203`, `AI-204`, `AI-216` |
 | Exact plant parameters | Identified dynamics or calibrated energetic prediction | `AI-107`, `T-109`, `T-106`, later calibration work |
 | Exact material delta in passage update | Sensor-driven passage belief | `AI-103`, `AI-203`, `AI-204`, `AI-207`, `AI-210`, `AI-216` |
 | Mixed truth and sensor telemetry | Reproducible hardware-comparable diagnostics | `T-105`, `T-106` |

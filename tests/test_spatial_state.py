@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from active_painter.arm_agent_driver import canvas_summary_state
@@ -13,9 +14,11 @@ from active_painter.spatial_efe import SpatialExpectedFreeEnergy
 from active_painter.spatial_state import (
     ACTION_CHANNELS,
     MATERIAL_CHANNELS,
+    SpatialCanvasState,
     coverage_from_thickness,
     material_grid_from_canvas,
     material_pyramid_from_canvas,
+    project_material_fields,
     rasterize_stroke_action,
     spatial_canvas_state,
 )
@@ -52,6 +55,39 @@ class DeterministicFootprintDynamics:
         aleatoric = torch.full_like(next_material, 2e-5)
         epistemic = torch.zeros_like(next_material)
         return next_material, aleatoric, epistemic
+
+
+def test_material_projection_preserves_primary_physical_support() -> None:
+    cfg = PainterConfig(canvas_size=8, spatial_grid_size=4)
+    material = np.zeros((6, 2, 2), dtype=np.float32)
+    material[0] = 0.01
+    material[1] = -0.2
+    material[2] = 0.03
+    material[3] = 1.4
+    material[4] = 999.0
+    material[5] = 999.0
+
+    projected = project_material_fields(material, cfg)
+
+    assert np.all(projected[0] >= 0.0)
+    assert np.all(projected[1] == 0.0)
+    assert np.all(projected[2] == projected[0])
+    assert np.all(projected[3] == 1.0)
+    np.testing.assert_allclose(
+        projected[5],
+        coverage_from_thickness(projected[0], cfg.paint_presence_threshold),
+    )
+    assert np.all(projected[4] <= 1.0)
+
+
+def test_spatial_posterior_provenance_rejects_invalid_revision() -> None:
+    material = np.zeros((6, 2, 2), dtype=np.float32)
+    with pytest.raises(ValueError, match="posterior_revision"):
+        SpatialCanvasState(
+            material=material,
+            logvar=np.zeros_like(material),
+            posterior_revision=-1,
+        )
 
 
 def test_spatial_state_distinguishes_equal_summary_canvases_at_different_locations() -> None:

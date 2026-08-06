@@ -576,11 +576,12 @@ priors are explicit in the XML and marked provisional.
 
 Physical HDMI acquisition, physical lens/capture calibration, and a learned
 camera encoder are not implemented. Sensor-equivalent control still fails
-closed because belief-derived material/brush/contact forecast construction and
-the action-conditioned transition-prior/camera-update loop are not yet
-scheduled continuously. The MuJoCo body posterior now initializes forecast
-joint position/velocity, so body-to-motor joint-state initialization no longer
-causes that block.
+closed because belief-derived brush/contact/model forecast construction and the
+action-conditioned transition-prior/camera-update loop are not yet scheduled
+continuously. The MuJoCo body posterior initializes forecast joint
+position/velocity, and the frozen spatial posterior now initializes thickness,
+wetness, black mass, and surface tone, so those two initial-state slices no
+longer require exact process values.
 
 `active_painter.camera_calibration` now supplies the first hardware
 calibration tool: a metric 11 x 8-inner-corner target generator and native-
@@ -623,11 +624,16 @@ posterior. Motor current, bus voltage, tool deflection, temperature, and fault
 flags are explicitly reported as unassimilated. Faults remain hard-safety
 inputs, while current/deflection need declared conditional likelihoods before
 they may provide contact or load evidence. Contact probability/force is not
-yet mapped into the MuJoCo brush-compression/flexure latent. The forecast still
-copies material, brush, and model context from `ArmPainterSim`, and the live
-loop does not yet pair every executed-action transition prior with its delivered
-camera likelihood update. Those are the remaining fail-closed boundaries for
-painting policy inference.
+yet mapped into the MuJoCo brush-compression/flexure latent. Forecasts receiving
+a `SpatialCanvasState` replace copied thickness, wetness, black mass, and
+surface tone with belief samples. Particle zero is the posterior mean; later
+particles sample diagonal variance at the posterior grid, then use
+piecewise-constant upsampling and physical projection. This preserves spatial
+cell correlation and keeps coverage/contrast deterministic. The container
+still copies substrate grain, brush bristle/RNG state, and model parameters,
+and the live loop does not yet pair every executed-action transition prior with
+its delivered camera likelihood update. Those are the remaining fail-closed
+boundaries for painting policy inference.
 
 To reproduce the legacy upper-bound comparator, opt in explicitly:
 
@@ -692,10 +698,12 @@ the same immutable MJCF model and report per-joint RobStride-normalized current,
 torque, velocity, and acceleration consequences. In the MuJoCo runtime their
 joint position/velocity now starts from the frozen body posterior rather than
 exact MuJoCo q/qvel; particle randomness is isolated from the live process.
-Exact material/brush/model context is still copied, contact belief is not
+Thickness, wetness, black mass, and surface tone now start from the frozen
+spatial posterior rather than exact canvas fields. Substrate grain, brush
+bristle/RNG state, and model context are still copied, contact belief is not
 mapped into brush compliance, and MuJoCo body-parameter uncertainty is not
 sampled. Those limitations retain the `baseline-oracle-v0` painting-policy
-label even though joint-state initialization is sensor-conditioned.
+label even though joint and material initialization are posterior-conditioned.
 When the active-inference driver selects `stop`, the web runtime automatically
 starts a fresh painting. Every fifth completed painting is saved by default to
 `runs/web/painting_####.png`; use `--save-every-paintings` and `--archive-dir`

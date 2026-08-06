@@ -73,8 +73,14 @@ simulation-only precision/process floors. Its calibration status is
 freezes one posterior revision; rollout particle zero uses its mean and later
 particles sample the diagonal joint-state variance. Future native process noise
 is seeded independently of the live process. Contact probability/force is not
-yet mapped into the MuJoCo brush-compliance latent, and forecast material/brush
-state still comes from the copied process snapshot.
+yet mapped into the MuJoCo brush-compliance latent. A frozen
+`SpatialCanvasState` now supplies the initial thickness, wetness, black-mass,
+and surface-tone distribution: particle zero uses its mean and later particles
+sample its diagonal variance at posterior-cell resolution. Nonnegative support,
+`black_mass <= thickness`, and tone bounds are physically projected; coverage
+and ground contrast are recomputed rather than sampled. Substrate grain, brush
+bristle/RNG state, and model parameters still come from the copied process
+container.
 
 This specification is "executable" in the limited engineering sense that every
 factor and free-energy term maps to a named implementation location. It does
@@ -1050,9 +1056,10 @@ details:
 
 1. Oracle diagnostic mode still uses exact simulator material state as its
    observation; sensor mode uses the analytic camera likelihood but remains
-   blocked from live control by copied material/brush/contact forecast context
-   and continuous action-conditioned observation scheduling. MuJoCo forecast
-   q/qvel initialization is now sensor-conditioned.
+   blocked from live control by copied substrate-grain/brush/contact/model
+   forecast context and continuous action-conditioned observation scheduling.
+   MuJoCo forecast q/qvel and independent material-field initialization are now
+   posterior-conditioned when their respective snapshots are supplied.
 2. Summary and pixel posteriors are diagonal Gaussian.
 3. Derived channels may be double-counted before deterministic projection. The
    compression gap and both baseline members are computed over all six material

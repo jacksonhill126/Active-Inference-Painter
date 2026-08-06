@@ -20,6 +20,9 @@ from .spatial_state import (
 )
 
 
+SPATIAL_VARIATIONAL_INFERENCE_VERSION = "spatial-variational-state-v0"
+
+
 class SpatialTransitionModel(Protocol):
     def predictive_moments(
         self,
@@ -49,7 +52,17 @@ class SpatialVariationalStateEstimator:
     def initialize(self, observation: SpatialCanvasState) -> SpatialCanvasState:
         observed = pixel_material_from_state(observation)
         observation_variance = spatial_observation_variance(observed, self.cfg)
-        posterior = spatial_state_from_pixel_posterior(observed, observation_variance, self.cfg)
+        posterior = spatial_state_from_pixel_posterior(
+            observed,
+            observation_variance,
+            self.cfg,
+            posterior_revision=observation.posterior_revision + 1,
+            inference_model_id=(
+                f"{SPATIAL_VARIATIONAL_INFERENCE_VERSION}:"
+                f"{observation.inference_model_id}"
+            ),
+            calibration_status=observation.calibration_status,
+        )
         independent_channels = independent_material_channel_count(observed.shape[0])
         negative_log_likelihood = _expected_negative_log_likelihood(
             observed[:independent_channels],
@@ -158,7 +171,14 @@ class SpatialVariationalStateEstimator:
                 "after Gaussian fusion with provisional propagated variance."
             ),
         )
-        return spatial_state_from_pixel_posterior(posterior_mean, posterior_variance, self.cfg)
+        return spatial_state_from_pixel_posterior(
+            posterior_mean,
+            posterior_variance,
+            self.cfg,
+            posterior_revision=previous.posterior_revision + 1,
+            inference_model_id=SPATIAL_VARIATIONAL_INFERENCE_VERSION,
+            calibration_status=observation.calibration_status,
+        )
 
 
 def _diagonal_gaussian_kl(

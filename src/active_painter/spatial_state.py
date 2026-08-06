@@ -62,6 +62,17 @@ class SpatialCanvasState:
     logvar: np.ndarray
     pyramid: tuple[MaterialPyramidLevel, ...] = ()
     pixel_logvar: np.ndarray | None = None
+    posterior_revision: int = 0
+    inference_model_id: str = "unversioned-spatial-material-inference"
+    calibration_status: str = "unspecified"
+
+    def __post_init__(self) -> None:
+        if self.posterior_revision < 0:
+            raise ValueError("posterior_revision must be non-negative.")
+        if not self.inference_model_id or not self.calibration_status:
+            raise ValueError(
+                "inference_model_id and calibration_status must be non-empty."
+            )
 
     @property
     def grid_size(self) -> int:
@@ -97,6 +108,9 @@ def spatial_canvas_state(
         logvar=np.full_like(material, logvar_value, dtype=np.float32),
         pyramid=material_pyramid_from_material(pixel_material, cfg),
         pixel_logvar=np.full_like(pixel_material, logvar_value, dtype=np.float32),
+        posterior_revision=0,
+        inference_model_id="baseline-oracle-v0:exact-material-transform",
+        calibration_status="oracle_diagnostic_only",
     )
 
 
@@ -135,6 +149,10 @@ def spatial_state_from_pixel_posterior(
     pixel_material: np.ndarray,
     pixel_variance: np.ndarray,
     config: PainterConfig,
+    *,
+    posterior_revision: int = 0,
+    inference_model_id: str = "unversioned-spatial-material-inference",
+    calibration_status: str = "unspecified",
 ) -> SpatialCanvasState:
     material = project_material_fields(pixel_material, config)
     variance = np.clip(pixel_variance.astype(np.float32), 1e-12, 1e6)
@@ -145,6 +163,9 @@ def spatial_state_from_pixel_posterior(
         logvar=np.log(np.clip(planner_variance, 1e-12, 1e6)).astype(np.float32),
         pyramid=material_pyramid_from_material(material, config),
         pixel_logvar=np.log(variance).astype(np.float32),
+        posterior_revision=int(posterior_revision),
+        inference_model_id=str(inference_model_id),
+        calibration_status=str(calibration_status),
     )
 
 
@@ -169,6 +190,11 @@ def downsample_variance_of_mean(variance: np.ndarray, grid_size: int) -> np.ndar
 
 def project_material_fields(material: np.ndarray, config: PainterConfig) -> np.ndarray:
     projected = np.clip(material.astype(np.float32, copy=True), 0.0, None)
+    if projected.shape[0] > 2:
+        # Pigment mass is carried by paint material and therefore cannot exceed
+        # total local paint thickness.  This is a physical state projection,
+        # not an independent observation or preference.
+        projected[2] = np.minimum(projected[2], projected[0])
     if projected.shape[0] <= 3:
         return projected
     thickness = projected[0]
@@ -302,6 +328,9 @@ def spatial_state_diagnostics(state: SpatialCanvasState, config: PainterConfig) 
     coverage = state.coverage(config.paint_presence_threshold)
     return {
         "kind": "spatial_material",
+        "posteriorRevision": state.posterior_revision,
+        "inferenceModelId": state.inference_model_id,
+        "calibrationStatus": state.calibration_status,
         "gridSize": state.grid_size,
         "materialChannels": list(MATERIAL_CHANNELS[: state.material.shape[0]]),
         "meanThickness": float(state.material[0].mean()),

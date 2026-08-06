@@ -410,8 +410,12 @@ the body posterior from each `PhysicalSensorPacket`; planning now freezes that
 revision and initializes motor-forecast q/qvel particles from its mean and
 diagonal variance under an independent future-noise seed. The named MuJoCo
 likelihood is provisional simulation-only and body VFE is logged separately.
-This does not yet initialize material/brush state from beliefs, map contact
-belief into brush compliance, or pair each executed-action transition prior
+Also on 2026-08-05, planning began freezing one `SpatialCanvasState` revision
+and initializing forecast thickness, wetness, black mass, and surface tone
+from its mean and diagonal particles. Material samples cannot read the hidden
+live fields, and derived coverage/contrast are recomputed. This does not yet
+initialize substrate grain, brush bristle/RNG state, contact compliance, or
+model parameters from beliefs, nor pair each executed-action transition prior
 with the delivered camera likelihood update. AI-204 remains not accepted on
 those grounds. On 2026-07-29 the
 six-aggregate summary planner was formally marked
@@ -773,8 +777,10 @@ Notes: The live default now fails closed before copied simulator state can
 reach the model. On 2026-08-05 the MuJoCo runtime began initializing forecast
 q/qvel from `BodyBeliefSnapshot` with independent future plant noise. T-109
 remains blocked because native execution lacks a `PlantBackend` sensor adapter
-and the forecast container still copies material/brush/model state rather than
-building all initial latents from beliefs.
+and the forecast container still copies substrate grain, brush bristle/RNG,
+and model state rather than building all initial latents from beliefs. The four
+independent material fields are now overwritten from `SpatialCanvasState` when
+one is supplied.
 
 ## S1: MuJoCo Physical Draft And Logical Retarget
 

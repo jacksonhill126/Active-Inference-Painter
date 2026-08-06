@@ -34,10 +34,12 @@ Open `http://127.0.0.1:8017`.
 The live default is deliberately fail-closed: the viewer runs, but active
 policy inference remains disabled. The fixed-camera material likelihood and a
 MuJoCo encoder/contact body posterior are implemented, and the latter now
-initializes motor-forecast joint state. Belief-derived material forecast
-construction and continuous action-conditioned camera updating are still
-incomplete, so the model is not allowed to fall back to exact canvas, brush,
-or contact-process state.
+initializes motor-forecast joint state. Motor forecasts now also initialize
+the four independent paint-material fields from a frozen spatial posterior,
+including posterior-variance particles. Continuous action-conditioned camera
+updating and belief-derived brush/contact-compliance and model-parameter
+initialization are still incomplete, so the model is not allowed to fall back
+to exact canvas, brush, or contact-process state.
 
 The former hidden-state baseline is retained only as an explicitly labelled
 diagnostic comparator:
@@ -123,8 +125,10 @@ data under the same immutable model. In the MuJoCo runtime, encoder/contact
 samples feed a versioned body estimator and forecast particles initialize
 joint position/velocity from that posterior with independent future-noise
 seeds. Its likelihood precision is provisional simulation-only, contact belief
-is not yet mapped into brush compliance, and the copied material/brush/model
-forecast context remains oracle-conditioned. Forecast-driven policy inference
+is not yet mapped into brush compliance, and substrate grain, brush
+bristle/RNG state, and model parameters remain copied. Material fields are
+posterior-conditioned when a `SpatialCanvasState` is supplied, but the whole
+forecast remains oracle-conditioned. Forecast-driven policy inference
 therefore remains confined to the explicit `baseline-oracle-v0` diagnostic;
 MuJoCo parameter uncertainty is not yet sampled. See the canonical
 [model record](models/README.md), the [native reference](docs/NATIVE_PLANT_REFERENCE.md),

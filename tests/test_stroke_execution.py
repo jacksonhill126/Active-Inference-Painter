@@ -17,6 +17,7 @@ from active_painter.motor_planning import motor_efe_terms, motor_realization_log
 from active_painter.plant_interface import BodyBeliefSnapshot
 from active_painter.precision_beliefs import constant_modality_weights
 from active_painter.policies import MotorPrimitiveLatent, Policy
+from active_painter.spatial_state import SpatialCanvasState, material_grid_from_canvas
 from active_painter.stroke_execution import (
     ContactAwareStrokeController,
     DirectStrokeController,
@@ -161,6 +162,125 @@ def test_body_posterior_initializes_forecast_particles_with_independent_noise(
             initial_body_belief=belief,
             independent_noise_seed=-1,
         )
+
+
+def test_material_posterior_replaces_hidden_canvas_and_samples_declared_variance() -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        spatial_grid_size=2,
+        motor_forecast_samples=3,
+        body_param_jitter_fraction=0.0,
+    )
+    sim = ArmPainterSim(cfg)
+    sim.canvas.thickness.fill(0.8)
+    sim.canvas.wetness.fill(0.7)
+    sim.canvas.black_mass.fill(0.6)
+    sim.canvas.surface_tone.fill(0.9)
+    live_material = (
+        sim.canvas.thickness.copy(),
+        sim.canvas.wetness.copy(),
+        sim.canvas.black_mass.copy(),
+        sim.canvas.surface_tone.copy(),
+    )
+
+    material = np.zeros((6, 2, 2), dtype=np.float32)
+    material[0] = np.asarray([[0.010, 0.012], [0.014, 0.016]])
+    material[1] = 0.004
+    material[2] = 0.020  # projected to black_mass <= thickness
+    material[3] = np.asarray([[0.15, 0.25], [0.35, 0.45]])
+    belief = SpatialCanvasState(
+        material=material,
+        logvar=np.full_like(material, -12.0),
+        posterior_revision=7,
+        inference_model_id="camera-spatial-likelihood-v0:test-camera-v0",
+        calibration_status="synthetic_test_only",
+    )
+    captured: list[np.ndarray] = []
+    captured_native_thickness: list[np.ndarray] = []
+
+    def summary(working: ArmPainterSim) -> np.ndarray:
+        state = material_grid_from_canvas(working.canvas, 2, channel_count=4)
+        captured.append(state.copy())
+        captured_native_thickness.append(working.canvas.thickness.copy())
+        return state.reshape(-1)
+
+    action = StrokeAction(0.42, 0.45, 0.58, 0.55, 0.05, 0.6, 1.0)
+    timing = StrokeTiming(approach=0.02, press=0.02, paint=0.03, lift=0.02)
+    first = forecast_stroke_execution(
+        sim,
+        action,
+        summary,
+        timing=timing,
+        dt=0.01,
+        initial_material_belief=belief,
+        independent_noise_seed=313,
+    )
+    first_initializations = [captured[index].copy() for index in (0, 2, 4)]
+
+    np.testing.assert_allclose(first_initializations[0][0], material[0], atol=1e-7)
+    np.testing.assert_allclose(first_initializations[0][1], material[1], atol=1e-7)
+    np.testing.assert_allclose(first_initializations[0][2], material[0], atol=1e-7)
+    np.testing.assert_allclose(first_initializations[0][3], material[3], atol=1e-7)
+    assert not np.allclose(first_initializations[1], first_initializations[0])
+    assert not np.allclose(first_initializations[2], first_initializations[0])
+    assert np.all(first_initializations[1][2] <= first_initializations[1][0])
+    assert np.all(first_initializations[2][2] <= first_initializations[2][0])
+    for native in (
+        captured_native_thickness[0],
+        captured_native_thickness[2],
+        captured_native_thickness[4],
+    ):
+        for row_slice in (slice(0, 12), slice(12, 24)):
+            for col_slice in (slice(0, 12), slice(12, 24)):
+                assert np.unique(native[row_slice, col_slice]).size == 1
+    for actual, expected in zip(
+        (sim.canvas.thickness, sim.canvas.wetness, sim.canvas.black_mass, sim.canvas.surface_tone),
+        live_material,
+        strict=True,
+    ):
+        np.testing.assert_allclose(actual, expected)
+    assert first.material_posterior_revision == 7
+    assert first.material_inference_model_id == belief.inference_model_id
+    assert first.material_calibration_status == belief.calibration_status
+    assert "SpatialCanvasState revision 7" in first.forecast_initialization
+    assert "substrate grain" in first.forecast_approximation
+
+    captured.clear()
+    captured_native_thickness.clear()
+    mean_particle = forecast_stroke_execution(
+        sim,
+        action,
+        summary,
+        timing=timing,
+        dt=0.01,
+        rollout_samples=1,
+        initial_material_belief=belief,
+        independent_noise_seed=313,
+    )
+    assert np.any(first.next_state_variance > mean_particle.next_state_variance)
+
+    # Changing only the hidden live material cannot change the posterior-seeded
+    # initial particles. Future forecast noise uses the request seed.
+    sim.canvas.thickness.fill(0.2)
+    sim.canvas.wetness.fill(0.1)
+    sim.canvas.black_mass.fill(0.05)
+    sim.canvas.surface_tone.fill(0.75)
+    captured.clear()
+    captured_native_thickness.clear()
+    second = forecast_stroke_execution(
+        sim,
+        action,
+        summary,
+        timing=timing,
+        dt=0.01,
+        initial_material_belief=belief,
+        independent_noise_seed=313,
+    )
+    second_initializations = [captured[index] for index in (0, 2, 4)]
+    for expected, actual in zip(first_initializations, second_initializations, strict=True):
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(second.next_state_mean, first.next_state_mean)
+    np.testing.assert_allclose(second.next_state_variance, first.next_state_variance)
 
 
 def test_contact_pressure_ramps_before_the_stroke_sweep() -> None:

@@ -1,5 +1,14 @@
 # AGENTS.md — Active-Inference Painter
 
+## Communication and report audience
+
+Keep durable technical reports useful for later agents, and explain completed
+work separately to the project owner. Assume the owner has undergraduate
+aerospace-engineering foundations, some self-directed ML/data-science and
+active-inference experience, but not specialist depth in every contributing
+field. Results matter, and so does a clear account of how and why they were
+obtained.
+
 ## Governing constraint
 
 Painting cognition must be active inference from top to bottom. Do not add vague aesthetic heuristics, scalar rewards, or weighted score soups.
@@ -49,14 +58,19 @@ later particles sample its declared diagonal variance with future plant noise
 isolated from the live process RNG. The named likelihood is explicitly
 `provisional_simulation_only_not_hardware_calibrated`.
 
-This is only a body-state initialization correction. Forecasts still begin by
-copying the process material/brush/model snapshot, the inferred contact
-probability/force is not yet mapped into MuJoCo brush-compliance state, native
-runtime execution has no `PlantBackend` sensor adapter, and MuJoCo
-body-parameter uncertainty is not sampled. Forecast-driven painting policy
-inference therefore remains fail-closed outside the explicit
-`baseline-oracle-v0` diagnostic. Describe the joint initialization as
-sensor-conditioned, never the complete motor/material forecast as
+Forecasts that receive a `SpatialCanvasState` now also initialize thickness,
+wetness, black pigment mass, and surface tone from that frozen material
+posterior. Particle zero uses its mean; later particles sample its declared
+diagonal variance at posterior-cell resolution before piecewise-constant
+upsampling and physical projection. Coverage and ground contrast remain
+derived, not independently sampled. The containing process snapshot still
+supplies substrate grain, brush bristle/RNG state, and model parameters; the
+inferred contact probability/force is not yet mapped into MuJoCo
+brush-compliance state; native runtime execution has no `PlantBackend` sensor
+adapter; and MuJoCo body-parameter uncertainty is not sampled. Forecast-driven
+painting policy inference therefore remains fail-closed outside the explicit
+`baseline-oracle-v0` diagnostic. Describe joint and material initialization as
+posterior-conditioned, never the complete motor/material forecast as
 sensor-equivalent, hardware-calibrated, or sufficient for embodiment claims.
 Never state that no specific motors have been selected without explicitly
 limiting that statement to the native abstract plant.

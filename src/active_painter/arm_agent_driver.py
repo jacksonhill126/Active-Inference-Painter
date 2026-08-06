@@ -202,6 +202,7 @@ class ArmActiveInferenceDriver:
     _planning_profile_current: dict[str, object] | None = field(default=None, init=False)
     _planning_forecast_cache: dict[tuple[object, ...], ExecutionForecast] = field(default_factory=dict, init=False)
     _planning_body_belief: BodyBeliefSnapshot | None = field(default=None, init=False)
+    _planning_material_belief: SpatialCanvasState | None = field(default=None, init=False)
     _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
@@ -910,6 +911,7 @@ class ArmActiveInferenceDriver:
             self._planning_profile_current = None
             self._planning_forecast_cache = {}
             self._planning_body_belief = None
+            self._planning_material_belief = None
             self._planning_started_at = None
             self._pending_current = None
             self._pending_stopped = False
@@ -981,9 +983,9 @@ class ArmActiveInferenceDriver:
     ) -> SpatialCanvasState:
         """Assimilate permitted image products without dereferencing process truth.
 
-        This completes the painting-state camera likelihood boundary. The
-        full sensor-equivalent controller remains fail-closed until its body
-        posterior replaces exact simulator initialization in motor forecasts.
+        This supplies the spatial posterior used to initialize material-field
+        forecast particles. The complete sensor-equivalent controller remains
+        fail-closed at the brush/contact/model and live scheduling boundaries.
         """
 
         if not isinstance(self.agent, SpatialActiveInferencePainter):
@@ -1342,6 +1344,11 @@ class ArmActiveInferenceDriver:
             self._pending_error = None
             body_snapshot = copy.deepcopy(sim)
             self._planning_body_belief = copy.deepcopy(self.body_belief)
+            self._planning_material_belief = (
+                copy.deepcopy(self.belief)
+                if isinstance(self.belief, SpatialCanvasState)
+                else None
+            )
             generation = self._planner_generation
         thread = threading.Thread(
             target=self._background_local_passage_plan,
@@ -1561,6 +1568,11 @@ class ArmActiveInferenceDriver:
                 else:
                     self._reset_agent_belief(state)
                 self.belief = self.agent.belief
+                self._planning_material_belief = (
+                    copy.deepcopy(self.belief)
+                    if isinstance(self.belief, SpatialCanvasState)
+                    else None
+                )
             self._profile_add_seconds("beliefUpdateSeconds", time.perf_counter() - phase_started)
             phase_started = time.perf_counter()
             if body_snapshot is None:
@@ -1752,18 +1764,27 @@ class ArmActiveInferenceDriver:
                 self._planning_body_belief.inference_model_id,
                 self._planning_body_belief.posterior_revision,
             )
+        material_key: tuple[object, ...] = ()
+        if self._planning_material_belief is not None:
+            material_key = (
+                self._planning_material_belief.inference_model_id,
+                self._planning_material_belief.posterior_revision,
+            )
         return (
             tuple(float(x) for x in action.vector())
             + (primitive_key, preparation_key)
             + belief_key
             + body_key
+            + material_key
         )
 
-    def _body_forecast_noise_seed(self) -> int:
-        belief = self._planning_body_belief
-        if belief is None:
-            return 0
-        return int(104_729 + 1_009 * belief.posterior_revision)
+    def _forecast_noise_seed(self) -> int:
+        seed = 0
+        if self._planning_body_belief is not None:
+            seed = 104_729 + 1_009 * self._planning_body_belief.posterior_revision
+        if self._planning_material_belief is not None:
+            seed += 130_363 + 1_013 * self._planning_material_belief.posterior_revision
+        return int(seed)
 
     def _refresh_composition_diagnostics(self, policy: Policy | None = None) -> None:
         # Cached so UI polling never runs a model forward concurrently with
@@ -2215,7 +2236,8 @@ class ArmActiveInferenceDriver:
                 dt=1.0 / 45.0,
                 max_workers=workers,
                 initial_body_belief=self._planning_body_belief,
-                independent_noise_seed=self._body_forecast_noise_seed(),
+                initial_material_belief=self._planning_material_belief,
+                independent_noise_seed=self._forecast_noise_seed(),
             )
             self._profile_add_seconds("motorForecastSeconds", time.perf_counter() - started)
             self._profile_increment("motorForecastCount", len(computed))
@@ -2903,7 +2925,8 @@ class ArmActiveInferenceDriver:
             ),
             brush_belief=brush_belief,
             initial_body_belief=self._planning_body_belief,
-            independent_noise_seed=self._body_forecast_noise_seed(),
+            initial_material_belief=self._planning_material_belief,
+            independent_noise_seed=self._forecast_noise_seed(),
         )
 
     def diagnostics(self) -> dict[str, Any]:

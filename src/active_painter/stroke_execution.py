@@ -11,8 +11,14 @@ from .arm_control import ik_pose_for_canvas_point
 from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES, clip_scalar
 from .brush_loading import BrushLoadBelief
 from .env import StrokeAction
+from .local_spatial import pixel_logvar_from_state, pixel_material_from_state
 from .plant_interface import BodyBeliefSnapshot
 from .policies import MotorPrimitiveLatent
+from .spatial_state import (
+    SpatialCanvasState,
+    independent_material_channel_count,
+    project_material_fields,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +95,9 @@ class ExecutionForecast:
     body_posterior_revision: int | None = None
     body_inference_model_id: str | None = None
     body_calibration_status: str | None = None
+    material_posterior_revision: int | None = None
+    material_inference_model_id: str | None = None
+    material_calibration_status: str | None = None
 
     def diagnostics(self, *, include_state_fields: bool = True) -> dict[str, object]:
         omitted = {"next_state_mean", "next_state_variance", "canvas_delta_mean"}
@@ -626,6 +635,94 @@ def _initialize_from_body_belief(
     working.refresh_contact()
 
 
+def _nearest_resample_material_field(
+    field: np.ndarray,
+    target_shape: tuple[int, int],
+) -> np.ndarray:
+    """Piecewise-constant projection from posterior cells to process pixels."""
+
+    if field.ndim != 2:
+        raise ValueError("Material posterior fields must be two-dimensional.")
+    target_height, target_width = (int(target_shape[0]), int(target_shape[1]))
+    if target_height <= 0 or target_width <= 0:
+        raise ValueError("Material forecast target shape must be positive.")
+    source_height, source_width = field.shape
+    rows = np.minimum(
+        np.arange(target_height, dtype=np.int64) * source_height // target_height,
+        source_height - 1,
+    )
+    cols = np.minimum(
+        np.arange(target_width, dtype=np.int64) * source_width // target_width,
+        source_width - 1,
+    )
+    return field[np.ix_(rows, cols)].astype(np.float32, copy=True)
+
+
+def _initialize_from_material_belief(
+    working: ArmPainterSim,
+    belief: SpatialCanvasState,
+    *,
+    independent_noise_seed: int,
+    sample_index: int,
+) -> None:
+    """Sample q(material) into the forecast canvas without reading process paint.
+
+    Particle zero uses the posterior mean. Later particles sample the declared
+    diagonal variance at the posterior's own spatial resolution, so every
+    process pixel inside one posterior cell shares the same draw. The physical
+    projection clips invalid material states and recomputes derived quantities;
+    visible tone and paint thickness remain separate latent factors.
+    """
+
+    if independent_noise_seed < 0:
+        raise ValueError("independent_noise_seed must be non-negative.")
+    mean = pixel_material_from_state(belief).astype(np.float64, copy=True)
+    logvar = pixel_logvar_from_state(belief, working.config).astype(np.float64)
+    if mean.shape != logvar.shape or mean.ndim != 3:
+        raise ValueError("Material posterior mean and log variance must align.")
+    independent_channels = independent_material_channel_count(mean.shape[0])
+    if independent_channels < 4:
+        raise ValueError(
+            "Material-conditioned forecasts require thickness, wetness, "
+            "black_mass, and surface_tone posterior factors."
+        )
+    sampled = mean.copy()
+    if sample_index > 0:
+        rng = np.random.default_rng(
+            np.random.SeedSequence(
+                [
+                    int(independent_noise_seed),
+                    int(sample_index),
+                    0x4D41544C,
+                ]
+            )
+        )
+        standard_deviation = np.sqrt(
+            np.exp(np.clip(logvar[:independent_channels], -30.0, 20.0))
+        )
+        sampled[:independent_channels] = rng.normal(
+            mean[:independent_channels],
+            standard_deviation,
+        )
+    projected = project_material_fields(
+        sampled.astype(np.float32),
+        working.config,
+    )
+    target_shape = working.canvas.thickness.shape
+    working.canvas.thickness = _nearest_resample_material_field(
+        projected[0], target_shape
+    )
+    working.canvas.wetness = _nearest_resample_material_field(
+        projected[1], target_shape
+    )
+    working.canvas.black_mass = _nearest_resample_material_field(
+        projected[2], target_shape
+    )
+    working.canvas.surface_tone = _nearest_resample_material_field(
+        projected[3], target_shape
+    )
+
+
 def _forecast_stroke_execution_once(
     sim: ArmPainterSim,
     action: StrokeAction,
@@ -638,6 +735,7 @@ def _forecast_stroke_execution_once(
     brush_reload: bool = True,
     brush_belief: BrushLoadBelief | None = None,
     initial_body_belief: BodyBeliefSnapshot | None = None,
+    initial_material_belief: SpatialCanvasState | None = None,
     independent_noise_seed: int = 0,
 ) -> ExecutionForecast:
     timing = timing or adaptive_stroke_timing(sim, action)
@@ -668,6 +766,13 @@ def _forecast_stroke_execution_once(
             independent_noise_seed if initial_body_belief is not None else None
         ),
     )
+    if initial_material_belief is not None:
+        _initialize_from_material_belief(
+            working,
+            initial_material_belief,
+            independent_noise_seed=independent_noise_seed,
+            sample_index=noise_sample_index,
+        )
     before_state = summary_fn(working)
     working.select_brush(action.tone)
     working.deposition_amount = action.amount
@@ -938,6 +1043,17 @@ def _forecast_stroke_execution_once(
             f"{plant_approximation}; contact probability/force are not yet "
             "mapped into brush-compliance latent state"
         )
+    if initial_material_belief is not None:
+        plant_initialization = (
+            f"{plant_initialization}; SpatialCanvasState revision "
+            f"{initial_material_belief.posterior_revision}; particle zero is "
+            "posterior mean and later particles sample diagonal material variance"
+        )
+        plant_approximation = (
+            f"{plant_approximation}; material samples use piecewise-constant "
+            "posterior-cell upsampling and physical clipping; substrate grain, "
+            "brush bristle/RNG state, and model parameters remain copied"
+        )
 
     return ExecutionForecast(
         next_state_mean=after_state.astype(np.float32),
@@ -997,6 +1113,21 @@ def _forecast_stroke_execution_once(
             if initial_body_belief is not None
             else None
         ),
+        material_posterior_revision=(
+            initial_material_belief.posterior_revision
+            if initial_material_belief is not None
+            else None
+        ),
+        material_inference_model_id=(
+            initial_material_belief.inference_model_id
+            if initial_material_belief is not None
+            else None
+        ),
+        material_calibration_status=(
+            initial_material_belief.calibration_status
+            if initial_material_belief is not None
+            else None
+        ),
     )
 
 
@@ -1012,6 +1143,7 @@ def forecast_stroke_execution(
     brush_reload: bool = True,
     brush_belief: BrushLoadBelief | None = None,
     initial_body_belief: BodyBeliefSnapshot | None = None,
+    initial_material_belief: SpatialCanvasState | None = None,
     independent_noise_seed: int = 0,
 ) -> ExecutionForecast:
     """Monte Carlo predictive density over canvas and proprioceptive outcomes."""
@@ -1033,6 +1165,7 @@ def forecast_stroke_execution(
             brush_reload=brush_reload,
             brush_belief=brush_belief,
             initial_body_belief=initial_body_belief,
+            initial_material_belief=initial_material_belief,
             independent_noise_seed=independent_noise_seed,
         )
         for index in range(sample_count)
@@ -1118,13 +1251,15 @@ def forecast_stroke_executions_batch(
     rollout_samples: int | None = None,
     max_workers: int = 1,
     initial_body_belief: BodyBeliefSnapshot | None = None,
+    initial_material_belief: SpatialCanvasState | None = None,
     independent_noise_seed: int = 0,
 ) -> list[ExecutionForecast]:
     """Schedule independent motor likelihoods without changing their physics.
 
     Every request still runs ``forecast_stroke_execution`` with its original
-    simulator snapshot, integration step, and Monte Carlo sample count. The
-    executor only overlaps forecasts for alternative motor realizations.
+    rollout-container snapshot, declared initial body/material beliefs,
+    integration step, and Monte Carlo sample count. The executor only overlaps
+    forecasts for alternative motor realizations.
     ``executor.map`` preserves request order for posterior marginalization.
     """
 
@@ -1157,6 +1292,7 @@ def forecast_stroke_executions_batch(
             brush_reload=brush_reload,
             brush_belief=brush_belief,
             initial_body_belief=initial_body_belief,
+            initial_material_belief=initial_material_belief,
             independent_noise_seed=independent_noise_seed,
         )
 

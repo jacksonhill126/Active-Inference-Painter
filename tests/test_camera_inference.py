@@ -118,6 +118,11 @@ def test_camera_likelihood_updates_visible_factors_and_logs_vfe() -> None:
     assert likelihood.last_vfe.complexity == pytest.approx(
         sum(factor.complexity for factor in likelihood.last_vfe.factors)
     )
+    assert posterior.posterior_revision == prior.posterior_revision + 1
+    assert posterior.inference_model_id == (
+        f"{CAMERA_SPATIAL_LIKELIHOOD_VERSION}:{rig.likelihood_model}"
+    )
+    assert posterior.calibration_status == rig.likelihood_status
 
 
 def test_white_on_white_camera_evidence_does_not_observe_thickness() -> None:

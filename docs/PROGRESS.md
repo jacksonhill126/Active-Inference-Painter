@@ -55,7 +55,7 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 451 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body-posterior forecast, documentation-contract, and MuJoCo alignment coverage |
+| Current test collection | 454 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body/material-posterior forecast, documentation-contract, and MuJoCo alignment coverage |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
@@ -63,6 +63,7 @@ available, but this test result is not a GPU performance benchmark.
 | Pre-AI111 complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 | Body/MuJoCo forecast alignment | 90 affected motor, plant, MuJoCo, web-runtime, documentation, and boundary tests passed in 278.69 seconds | Posterior sampling, frozen planning revisions, selected-plant copying, independent rollout noise, live-state non-mutation, provenance/VFE, and the fail-closed sensor boundary are covered |
+| Material forecast alignment | 93 affected boundary, documentation, spatial-state, camera, stroke-execution, and driver tests passed; the broad 91-test run took 107.48 seconds and two final provenance/support checks took 1.95 seconds | Frozen material revisions, posterior mean/variance particles, process-material independence, physical projection, provenance, and planning integration are covered |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -82,11 +83,29 @@ captured in a run manifest.
    major runtime phases, and capture three manifested baseline replicas.
 5. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-6. Replace copied material/brush/contact forecast initialization with declared
+6. Replace copied brush/contact/model forecast initialization with declared
    beliefs, map the contact posterior into brush compliance, and continuously
-   pair executed-action transition priors with delivered camera updates.
+   pair executed-action transition priors with delivered camera updates. The
+   independent material-field slice is now posterior-conditioned.
 
 ## Progress Log
+
+### 2026-08-05: material-posterior motor-forecast initialization
+
+Technical record: `docs/MATERIAL_FORECAST_INITIALIZATION_2026-08-05.md`.
+
+- Added version/calibration/revision provenance to `SpatialCanvasState` and
+  froze one material posterior for each planning pass and forecast cache key.
+- Forecast particle zero now starts from the spatial posterior mean for
+  thickness, wetness, black pigment mass, and surface tone. Later particles
+  sample its declared diagonal variance independently of hidden live material.
+- Samples are drawn at posterior-cell resolution, upsampled piecewise
+  constantly, and physically projected. Coverage and ground contrast are
+  recomputed from primary material factors rather than sampled as extra
+  evidence; black pigment mass is constrained not to exceed thickness.
+- Kept the live policy loop fail-closed. Substrate grain, brush bristle/RNG
+  state, contact-to-compliance initialization, model parameters, and continuous
+  camera scheduling remain open.
 
 ### 2026-08-05: body-posterior motor-forecast initialization
 
@@ -100,9 +119,10 @@ captured in a run manifest.
 - Added version/calibration provenance to body snapshots and execution
   forecasts. The current MuJoCo likelihood is explicitly provisional
   simulation-only and not hardware-calibrated.
-- Kept the default policy loop fail-closed. Exact material/brush/model context,
-  contact-to-compliance initialization, continuous camera scheduling, and
-  MuJoCo parameter uncertainty remain open.
+- Kept the default policy loop fail-closed. At that checkpoint exact
+  material/brush/model context, contact-to-compliance initialization,
+  continuous camera scheduling, and MuJoCo parameter uncertainty remained
+  open; the material-field part is superseded by the entry above.
 
 ### 2026-08-04: selected-plant motor forecast alignment
 
