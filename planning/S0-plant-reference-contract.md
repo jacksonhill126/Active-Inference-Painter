@@ -296,10 +296,12 @@ only from `PhysicalSensorPacket` and initializes forecast q/qvel particles from
 that posterior under an independent seed. The four independent material fields
 now initialize from `SpatialCanvasState`; compact brush load/pigment initializes
 from `BrushLoadBelief`, with independent versioned microstructure noise. The
-working forecast still receives copied substrate grain/model state and
-collapses held-paint/persistent-bristle history, while native execution still
-lacks the `PlantBackend` sensor adapter. T-109 therefore remains blocked rather
-than accepted.
+default/oracle forecast still receives copied substrate grain/model state and
+collapses held-paint/persistent-bristle history. The later opt-in
+`provisional-sensor-simulation-v0` MuJoCo profile replaces that live copy with
+independent fixed priors and runs repeated camera-closed strokes, but native
+execution still lacks the `PlantBackend` sensor adapter. T-109 therefore
+remains blocked rather than accepted.
 
 ## Reference Gate
 

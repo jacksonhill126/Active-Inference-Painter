@@ -32,14 +32,24 @@ python -m active_painter.web_server
 Open `http://127.0.0.1:8017`.
 
 The live default is deliberately fail-closed: the viewer runs, but active
-policy inference remains disabled. The fixed-camera material likelihood and a
-MuJoCo encoder/contact body posterior are implemented, and the latter now
-initializes motor-forecast joint state. Motor forecasts now also initialize
-the four independent paint-material fields from a frozen spatial posterior,
-including posterior-variance particles. Continuous action-conditioned camera
-updating and belief-derived brush/contact-compliance and model-parameter
-initialization are still incomplete, so the model is not allowed to fall back
-to exact canvas, brush, or contact-process state.
+policy inference remains disabled. To run the bounded, simulation-only sensor
+loop that actually paints through MuJoCo cameras and encoder/contact packets:
+
+```bash
+python -m pip install -e ".[dev,mujoco]"
+python -m active_painter.web_server --plant-backend mujoco --enable-provisional-sensor-policy --stroke-tone-prior black
+```
+
+This opt-in `provisional-sensor-simulation-v0` profile waits for an initial
+registered camera likelihood and body posterior, selects painting policies,
+forecasts them in a separately constructed MuJoCo model, executes a stroke,
+waits for a causally later camera correction, and repeats. Policy inference
+does not copy the live canvas, brush, or plant state. The fixed forecast model,
+independent substrate/brush priors, compact brush history, and zero-history
+compliance prior are explicit simulation approximations. The low-level
+execution/safety controller may still use exact simulator pose and contact
+below the selected painting policy. This is an integration demonstration, not
+a hardware-calibrated or painting-quality result.
 
 The former hidden-state baseline is retained only as an explicitly labelled
 diagnostic comparator:
@@ -50,9 +60,8 @@ python -m active_painter.web_server --observation-mode oracle_material_state
 
 That mode is not sensor-equivalent and must not support physical-agent claims.
 
-To use MuJoCo for realized arm dynamics, RobStride-equivalent electrical
-current/back-EMF and actuator limits, brush compliance, and contact while
-retaining the Python paint-material process:
+To use MuJoCo for scripted/viewer dynamics without enabling the provisional
+painting-policy loop:
 
 ```bash
 python -m pip install -e ".[dev,mujoco]"

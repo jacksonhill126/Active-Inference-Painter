@@ -421,9 +421,24 @@ live brush RNG and exact bristle realization no longer initialize forecasts.
 Held paint and persistent bristle history remain collapsed, and the camera
 path does not yet supply the local mark statistic used by the brush
 likelihood. The forecast also does not yet initialize substrate grain, contact
-compliance, or model parameters from beliefs, nor pair each executed-action
-transition prior with the delivered camera likelihood update. AI-204 remains
-not accepted on those grounds. On 2026-07-29 the
+compliance, or model parameters from beliefs. On 2026-08-06,
+`action-conditioned-camera-update-v0` began pairing each recorded executed
+action with `spatial-action-transition-prior-v0`, a post-physics camera capture
+boundary, stale-frame rejection, automatic MuJoCo delivery polling, and one
+registered camera posterior update before another plan can start. Prediction
+does not create VFE; the camera update logs it and supplies one sensor-derived
+replay transition. The brush path advances its depletion prior but still lacks
+the camera-derived local mark statistic needed by its likelihood. Later on
+2026-08-06, `provisional-sensor-simulation-v0` supplied a bounded opt-in
+integration path: initial camera/body gating, a separately constructed MuJoCo
+and material forecast template with independent grain/brush seeds, frozen
+posterior initialization, 8 candidates, depth 1, Cartesian IK only, and one
+forecast particle. `_planner_state` and oracle bootstrap remain forbidden.
+The repeated-stroke integration test closes two action/camera cycles and uses
+exact process coverage only as an evaluation assertion. This makes AI-204
+runnable for data collection but does not accept it: the transition model has
+no approved sensor corpus/checkpoint, the brush likelihood remains prior-only,
+and the fixed context/compliance priors are uncalibrated. On 2026-07-29 the
 six-aggregate summary planner was formally marked
 `obsolete_compatibility_fixture`; it is not an acceptable compact posterior
 for AI-204.
@@ -782,9 +797,12 @@ Acceptance: Native execution and motor forecasts consume physical sensor packets
 Notes: The live default now fails closed before copied simulator state can
 reach the model. On 2026-08-05 the MuJoCo runtime began initializing forecast
 q/qvel from `BodyBeliefSnapshot` with independent future plant noise. T-109
-remains blocked because native execution lacks a `PlantBackend` sensor adapter
-and the forecast container still copies substrate grain and model state rather
-than building all initial latents from beliefs. The four independent material
+remains blocked because native execution lacks a `PlantBackend` sensor adapter.
+The default/oracle forecast container still copies substrate grain and model
+state rather than building all initial latents from beliefs. The opt-in
+`provisional-sensor-simulation-v0` MuJoCo path now avoids that live copy with
+independent fixed context priors, but it does not supply native adaptation or
+calibrated posteriors for those latents. The four independent material
 fields are overwritten from `SpatialCanvasState` when supplied; compact brush
 load/pigment is overwritten from `BrushLoadBelief`, and bristle-scale variation
 uses independent prior noise. Held paint and persistent bristle history remain

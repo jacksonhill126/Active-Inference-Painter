@@ -77,6 +77,7 @@ from .spatial_agent import SpatialActiveInferencePainter
 from .spatial_efe import SpatialEFEComponents
 from .spatial_hierarchy import infer_mark_event_belief
 from .local_spatial import pixel_material_from_state
+from .spatial_inference import SPATIAL_TRANSITION_PRIOR_VERSION
 from .spatial_state import MATERIAL_CHANNELS, SpatialCanvasState, spatial_canvas_state, spatial_state_diagnostics
 from .stroke_execution import (
     ContactAwareStrokeController,
@@ -96,6 +97,8 @@ SENSOR_OBSERVATION_BASELINE_ID = "sensor-boundary-v0"
 SENSOR_OBSERVATION_ACCESS_MODE = "sensor_equivalent"
 ORACLE_OBSERVATION_BASELINE_ID = "baseline-oracle-v0"
 ORACLE_OBSERVATION_ACCESS_MODE = "oracle_material_state"
+ACTION_CONDITIONED_CAMERA_UPDATE_VERSION = "action-conditioned-camera-update-v0"
+PROVISIONAL_SENSOR_SIMULATION_VERSION = "provisional-sensor-simulation-v0"
 
 # The unqualified names describe the safe live default.  The oracle constants
 # remain available only for explicitly labelled diagnostic fixtures.
@@ -156,6 +159,22 @@ class StrokeExecution:
         return self.timing.total
 
 
+@dataclass(frozen=True, slots=True)
+class PendingActionCameraUpdate:
+    """One executed action awaiting a causally later camera likelihood."""
+
+    update_id: int
+    action: StrokeAction
+    motor_primitive: MotorPrimitiveLatent | None
+    previous: SpatialCanvasState
+    transition_prior: SpatialCanvasState
+    brush_key: str
+    brush_previous_revision: int
+    brush_transition_revision: int
+    capture_not_before_s: float | None = None
+    rejected_pre_action_frames: int = 0
+
+
 @dataclass(slots=True)
 class ArmActiveInferenceDriver:
     config: PainterConfig = field(
@@ -172,6 +191,7 @@ class ArmActiveInferenceDriver:
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
     observation_access_mode: str = OBSERVATION_ACCESS_MODE
+    provisional_sensor_policy: bool = False
     enabled: bool = True
     on_stop: Callable[[], None] | None = None
     device: str | None = None
@@ -204,6 +224,8 @@ class ArmActiveInferenceDriver:
     _planning_body_belief: BodyBeliefSnapshot | None = field(default=None, init=False)
     _planning_material_belief: SpatialCanvasState | None = field(default=None, init=False)
     _planning_brush_beliefs: dict[str, BrushLoadBelief] = field(default_factory=dict, init=False)
+    _sensor_forecast_template: ArmPainterSim | None = field(default=None, init=False)
+    _sensor_forecast_template_id: str | None = field(default=None, init=False)
     _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
@@ -223,6 +245,18 @@ class ArmActiveInferenceDriver:
         MotorPrimitiveLatent | None,
         np.ndarray | SpatialCanvasState,
     ] | None = field(default=None, init=False)
+    _pending_action_camera_update: PendingActionCameraUpdate | None = field(
+        default=None,
+        init=False,
+    )
+    _action_camera_update_sequence: int = field(default=0, init=False)
+    action_transition_prior_count: int = field(default=0, init=False)
+    action_camera_update_count: int = field(default=0, init=False)
+    rejected_pre_action_camera_frames: int = field(default=0, init=False)
+    last_action_camera_update: dict[str, object] | None = field(
+        default=None,
+        init=False,
+    )
     _post_stroke_retract_remaining: float = field(default=0.0, init=False)
     _hold_pose: ArmPose | None = field(default=None, init=False)
     _hold_command_pose: ArmPose | None = field(default=None, init=False)
@@ -294,14 +328,29 @@ class ArmActiveInferenceDriver:
                 f"{SENSOR_OBSERVATION_ACCESS_MODE!r} or "
                 f"{ORACLE_OBSERVATION_ACCESS_MODE!r}."
             )
+        if (
+            self.provisional_sensor_policy
+            and self.observation_access_mode != SENSOR_OBSERVATION_ACCESS_MODE
+        ):
+            raise ValueError(
+                "provisional_sensor_policy requires sensor_equivalent observations"
+            )
+        if (
+            self.provisional_sensor_policy
+            and self.config.planner_state_kind
+            != SPATIAL_MATERIAL_PLANNER_STATE_KIND
+        ):
+            raise ValueError(
+                "provisional_sensor_policy requires planner_state_kind='spatial_material'"
+            )
         self._observation_boundary_blocked = (
             self.observation_access_mode == SENSOR_OBSERVATION_ACCESS_MODE
+            and not self.provisional_sensor_policy
         )
         if self._observation_boundary_blocked:
-            # The camera-conditioned painting posterior now exists. Fail
-            # closed until the sensor-conditioned body posterior initializes
-            # motor forecasts; neither bootstrap nor live planning may obtain
-            # an ArmPainterSim-derived material/body state in the meantime.
+            # Camera/body posteriors and the action-conditioned camera clock
+            # exist, but remaining forecast/controller oracle dependencies
+            # still prohibit live painting-policy inference.
             self.enabled = False
         # Learned precision beliefs and the gap-increment belief are owned by the
         # driver and INJECTED into the agent, so the planner and the checkpoint
@@ -336,7 +385,7 @@ class ArmActiveInferenceDriver:
         if (
             self.bootstrap_transitions > 0
             and not loaded
-            and not self._observation_boundary_blocked
+            and not self.uses_sensor_observations
         ):
             self.bootstrap_dynamics()
             self._save_checkpoint_if_due(force=True)
@@ -646,9 +695,10 @@ class ArmActiveInferenceDriver:
     def _checkpoint_architecture_metadata(self) -> dict[str, object]:
         cfg = self.config
         return {
-            "schema_version": 4,
+            "schema_version": 5,
             "agent_kind": "spatial_material" if self._uses_spatial_planner() else "summary",
             "observation_access_mode": self.observation_access_mode,
+            "provisional_sensor_policy": self.provisional_sensor_policy,
             "state_dim": cfg.state_dim,
             "action_dim": cfg.action_dim,
             "planner_state_kind": cfg.planner_state_kind,
@@ -800,7 +850,7 @@ class ArmActiveInferenceDriver:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload: dict[str, object] = {
-                "schema_version": 4,
+                "schema_version": 5,
                 "architecture": self._checkpoint_architecture_metadata(),
                 "config": asdict(self.config),
                 "trained_transitions": self.trained_transitions,
@@ -925,6 +975,12 @@ class ArmActiveInferenceDriver:
             self._pending_plan_scope = "global"
             self._pending_error = None
             self._transition_to_learn = None
+            self._pending_action_camera_update = None
+            self._action_camera_update_sequence = 0
+            self.action_transition_prior_count = 0
+            self.action_camera_update_count = 0
+            self.rejected_pre_action_camera_frames = 0
+            self.last_action_camera_update = None
             self._post_stroke_retract_remaining = 0.0
             self._hold_pose = None
             self._hold_command_pose = None
@@ -947,7 +1003,7 @@ class ArmActiveInferenceDriver:
             }
             self.last_brush_preparation = None
             self.camera_observation_count = 0
-        if self._observation_boundary_blocked:
+        if self.uses_sensor_observations:
             # Do not even touch the process object from the model-facing reset
             # path.  A separate execution/runtime reset owns plant mutations.
             return
@@ -979,28 +1035,279 @@ class ArmActiveInferenceDriver:
     def observation_boundary_blocked(self) -> bool:
         return self._observation_boundary_blocked
 
+    @property
+    def uses_sensor_observations(self) -> bool:
+        return self.observation_access_mode == SENSOR_OBSERVATION_ACCESS_MODE
+
+    def configure_sensor_forecast_template(
+        self,
+        template: ArmPainterSim,
+        *,
+        template_id: str,
+    ) -> None:
+        """Install an independent generative-model plant for sensor planning.
+
+        The caller must construct this object independently of the live process.
+        Forecast functions deep-copy it before every rollout, then initialize
+        body, material, and compact brush state from frozen posterior snapshots.
+        """
+
+        if not self.provisional_sensor_policy or not self.uses_sensor_observations:
+            raise RuntimeError(
+                "sensor forecast templates belong only to provisional sensor policy"
+            )
+        backend_id = str(
+            getattr(
+                template.plant,
+                "counterfactual_backend_id",
+                getattr(template.plant, "backend_id", ""),
+            )
+        )
+        if not backend_id.startswith("mujoco-"):
+            raise ValueError(
+                "provisional sensor policy currently requires a MuJoCo forecast plant"
+            )
+        if not template_id:
+            raise ValueError("sensor forecast template_id must be non-empty")
+        self._sensor_forecast_template = template
+        self._sensor_forecast_template_id = str(template_id)
+
+    def close_sensor_forecast_template(self) -> None:
+        template = self._sensor_forecast_template
+        self._sensor_forecast_template = None
+        if template is None:
+            return
+        close = getattr(template.plant, "close", None)
+        if callable(close):
+            close()
+
+    def _sensor_readiness_blockers(self) -> tuple[str, ...]:
+        if not self.provisional_sensor_policy:
+            return ("provisional sensor policy is not enabled",)
+        blockers: list[str] = []
+        if not isinstance(self.agent, SpatialActiveInferencePainter):
+            blockers.append("spatial material posterior")
+        if self._sensor_forecast_template is None:
+            blockers.append("independent MuJoCo forecast template")
+        if self.body_belief is None or self.body_vfe is None:
+            blockers.append("MuJoCo body posterior")
+        if self.camera_observation_count <= 0:
+            blockers.append("initial registered camera likelihood")
+        return tuple(blockers)
+
+    @property
+    def provisional_sensor_ready(self) -> bool:
+        return self.uses_sensor_observations and not self._sensor_readiness_blockers()
+
     def ingest_camera_observation(
         self,
         observation: CameraObservationBundle,
     ) -> SpatialCanvasState:
         """Assimilate permitted image products without dereferencing process truth.
 
-        This supplies the spatial posterior used to initialize material-field
-        forecast particles. The complete sensor-equivalent controller remains
-        fail-closed at the brush/contact/model and live scheduling boundaries.
+        When an executed action is pending, only frames captured at or after
+        its registered completion boundary are eligible. The already-created
+        action transition prior is updated exactly once by the first eligible
+        camera exposure. Older delivered frames are discarded rather than
+        being mislabelled as post-action evidence.
         """
 
         if not isinstance(self.agent, SpatialActiveInferencePainter):
             raise RuntimeError(
                 "camera likelihood requires planner_state_kind='spatial_material'"
             )
+        pending = self._pending_action_camera_update
+        if pending is not None:
+            boundary = pending.capture_not_before_s
+            eligible = tuple(
+                frame
+                for frame in observation.frames
+                if (
+                    boundary is not None
+                    and frame.capture_time_s + 1e-12 >= boundary
+                )
+            )
+            rejected = len(observation.frames) - len(eligible)
+            if rejected:
+                pending = replace(
+                    pending,
+                    rejected_pre_action_frames=(
+                        pending.rejected_pre_action_frames + rejected
+                    ),
+                )
+                self._pending_action_camera_update = pending
+                self.rejected_pre_action_camera_frames += rejected
+            if not eligible:
+                return self.belief
+            observation = CameraObservationBundle(
+                monotonic_time_s=observation.monotonic_time_s,
+                frames=eligible,
+                interface_version=observation.interface_version,
+            )
+
         posterior = self.agent.assimilate_camera_observation(observation)
+        camera_factors = (
+            self.agent.last_camera_vfe.factors
+            if self.agent.last_camera_vfe is not None
+            else ()
+        )
+        if pending is not None and camera_factors:
+            posterior = replace(
+                posterior,
+                inference_model_id=(
+                    f"{ACTION_CONDITIONED_CAMERA_UPDATE_VERSION}:"
+                    f"{pending.transition_prior.inference_model_id}:"
+                    f"{posterior.inference_model_id}"
+                ),
+            )
+            self.agent.belief = posterior
+            self._add_transition_to_agent(
+                pending.previous,
+                pending.action,
+                posterior,
+                pending.motor_primitive,
+            )
+            self.trained_transitions += 1
+            training_started = time.perf_counter()
+            try:
+                sensor_training_loss = self.agent.train_dynamics(gradient_steps=1)
+                self.last_training_seconds = (
+                    time.perf_counter() - training_started
+                )
+                if sensor_training_loss is not None:
+                    self.last_training_loss = sensor_training_loss
+                    self._save_checkpoint_if_due()
+            except Exception as exc:  # pragma: no cover - diagnostic path.
+                self.last_training_seconds = (
+                    time.perf_counter() - training_started
+                )
+                self._pending_error = repr(exc)
+            self.action_camera_update_count += 1
+            self.last_action_camera_update = {
+                "version": ACTION_CONDITIONED_CAMERA_UPDATE_VERSION,
+                "status": "camera_posterior_complete",
+                "updateId": pending.update_id,
+                "previousRevision": pending.previous.posterior_revision,
+                "transitionPriorRevision": (
+                    pending.transition_prior.posterior_revision
+                ),
+                "posteriorRevision": posterior.posterior_revision,
+                "captureNotBeforeS": pending.capture_not_before_s,
+                "assimilatedExposureCount": len(camera_factors),
+                "rejectedPreActionFrames": pending.rejected_pre_action_frames,
+                "brushKey": pending.brush_key,
+                "brushPreviousRevision": pending.brush_previous_revision,
+                "brushTransitionRevision": pending.brush_transition_revision,
+                "brushCameraLikelihoodApplied": False,
+                "approximation": (
+                    "material transition prior followed by registered camera "
+                    "likelihood; brush depletion prior advances, but no local "
+                    "mark-deposition statistic updates q(brush)"
+                ),
+            }
+            self._pending_action_camera_update = None
         self.belief = posterior
         self.camera_observation_count += sum(
             factor.observed_cell_count > 0
-            for factor in (self.agent.last_camera_vfe.factors if self.agent.last_camera_vfe else ())
+            for factor in camera_factors
         )
         return posterior
+
+    @property
+    def action_camera_update_pending(self) -> bool:
+        return self._pending_action_camera_update is not None
+
+    @property
+    def action_camera_capture_boundary_required(self) -> bool:
+        pending = self._pending_action_camera_update
+        return pending is not None and pending.capture_not_before_s is None
+
+    def record_executed_action_transition(
+        self,
+        action: StrokeAction,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+        *,
+        previous: SpatialCanvasState | None = None,
+    ) -> SpatialCanvasState:
+        """Create one material/brush prior for a completed physical action."""
+
+        if not isinstance(self.agent, SpatialActiveInferencePainter):
+            raise RuntimeError(
+                "action-conditioned camera updates require spatial_material"
+            )
+        if action.stop:
+            raise ValueError("stop has no executed material transition")
+        if self._pending_action_camera_update is not None:
+            raise RuntimeError(
+                "a completed action is already awaiting its camera likelihood"
+            )
+        source = self.belief if previous is None else previous
+        if not isinstance(source, SpatialCanvasState):
+            raise RuntimeError("the executed action requires a spatial prior")
+        prior = self.agent.predict_action_prior(
+            action,
+            motor_primitive,
+            previous=source,
+        )
+        self.belief = prior
+        key = self._brush_key(action.tone)
+        brush_previous = self.brush_load_beliefs[key]
+        brush_transition = self.brush_loading_model.stroke_transition(
+            brush_previous,
+            action,
+        )
+        self.brush_load_beliefs[key] = brush_transition
+        update_id = self._action_camera_update_sequence
+        self._action_camera_update_sequence += 1
+        self._pending_action_camera_update = PendingActionCameraUpdate(
+            update_id=update_id,
+            action=action,
+            motor_primitive=motor_primitive,
+            previous=copy.deepcopy(source),
+            transition_prior=copy.deepcopy(prior),
+            brush_key=key,
+            brush_previous_revision=brush_previous.revision,
+            brush_transition_revision=brush_transition.revision,
+        )
+        self.action_transition_prior_count += 1
+        self.last_action_camera_update = {
+            "version": ACTION_CONDITIONED_CAMERA_UPDATE_VERSION,
+            "status": "awaiting_capture_boundary",
+            "updateId": update_id,
+            "previousRevision": source.posterior_revision,
+            "transitionPriorRevision": prior.posterior_revision,
+            "transitionPriorModelId": prior.inference_model_id,
+            "brushKey": key,
+            "brushPreviousRevision": brush_previous.revision,
+            "brushTransitionRevision": brush_transition.revision,
+        }
+        return prior
+
+    def register_action_camera_capture_boundary(
+        self,
+        monotonic_time_s: float,
+    ) -> None:
+        """Declare the earliest camera capture causally after action completion."""
+
+        if not np.isfinite(monotonic_time_s) or monotonic_time_s < 0.0:
+            raise ValueError("camera capture boundary must be finite and non-negative")
+        pending = self._pending_action_camera_update
+        if pending is None:
+            raise RuntimeError("no executed action is awaiting a camera update")
+        if pending.capture_not_before_s is not None:
+            if abs(pending.capture_not_before_s - monotonic_time_s) > 1e-12:
+                raise RuntimeError("camera capture boundary is already registered")
+            return
+        self._pending_action_camera_update = replace(
+            pending,
+            capture_not_before_s=float(monotonic_time_s),
+        )
+        if self.last_action_camera_update is not None:
+            self.last_action_camera_update = {
+                **self.last_action_camera_update,
+                "status": "awaiting_post_action_exposure",
+                "captureNotBeforeS": float(monotonic_time_s),
+            }
 
     def ingest_body_belief(
         self,
@@ -1018,7 +1325,7 @@ class ArmActiveInferenceDriver:
             self.body_vfe = vfe
 
     def _require_oracle_diagnostic_mode(self, operation: str) -> None:
-        if self._observation_boundary_blocked:
+        if self.uses_sensor_observations:
             raise PrivilegedStateAccessError(
                 f"{operation} requires hidden simulator state and is denied in "
                 f"{SENSOR_OBSERVATION_ACCESS_MODE!r} mode. Use the explicit "
@@ -1092,10 +1399,17 @@ class ArmActiveInferenceDriver:
 
     def step(self, sim: ArmPainterSim, dt: float) -> None:
         if self._observation_boundary_blocked:
-            # Sensor-equivalent perception is not implemented yet.  Returning
-            # before dereferencing ``sim`` guarantees that policy inference,
-            # learning, and planning cannot silently fall back to process
-            # truth while that work is pending.
+            # Policy inference remains fail-closed. A separately supplied
+            # current action may still be realized by the conventional
+            # execution layer for boundary tests or future external policy
+            # sources; its completion cannot construct a state from ``sim``.
+            if self.enabled and self.current is not None:
+                self._execute_current(sim, dt)
+            elif self.enabled:
+                self._hold_retracted(sim, dt, scope="global")
+            return
+        if self.uses_sensor_observations and not self.provisional_sensor_ready:
+            self._hold_retracted(sim, dt, scope="global")
             return
         if not self.enabled or self.stopped:
             self._hold_retracted(sim, dt, scope="global")
@@ -1195,7 +1509,15 @@ class ArmActiveInferenceDriver:
         sim.target_pose = release_pose
         self._hold_command_pose = release_pose
         self._hold_command_velocity = dict.fromkeys(JOINT_NAMES, 0.0)
-        sim.plant.reset_state(sim.actual_pose)
+        reset_preserving_clock = getattr(
+            sim.plant,
+            "reset_state_preserving_clock",
+            None,
+        )
+        if callable(reset_preserving_clock):
+            reset_preserving_clock(sim.actual_pose)
+        else:
+            sim.plant.reset_state(sim.actual_pose)
         sim.intended_contact_pressure = 0.0
         sim.refresh_contact()
         self._contact_release_count += 1
@@ -1333,8 +1655,32 @@ class ArmActiveInferenceDriver:
             geometry_index += 1
         return policies, log_priors, latent_by_actions
 
+    def _planning_context(
+        self,
+        sim: ArmPainterSim,
+    ) -> tuple[np.ndarray | SpatialCanvasState, ArmPainterSim]:
+        """Freeze one policy-inference context without crossing access modes."""
+
+        if self.uses_sensor_observations:
+            if not self.provisional_sensor_ready:
+                blockers = ", ".join(self._sensor_readiness_blockers())
+                raise RuntimeError(
+                    "provisional sensor planning is not ready: " + blockers
+                )
+            assert isinstance(self.belief, SpatialCanvasState)
+            assert self._sensor_forecast_template is not None
+            return copy.deepcopy(self.belief), copy.deepcopy(
+                self._sensor_forecast_template
+            )
+        return self._planner_state(sim), copy.deepcopy(sim)
+
     def _start_local_passage_plan(self, sim: ArmPainterSim) -> None:
-        if not self._passage_queue or self._passage_belief is None or self.current is not None:
+        if (
+            not self._passage_queue
+            or self._passage_belief is None
+            or self.current is not None
+            or self._pending_action_camera_update is not None
+        ):
             return
         with self._planner_lock:
             if self.planning or self._pending_ranked is not None or self._pending_current is not None:
@@ -1344,7 +1690,7 @@ class ArmActiveInferenceDriver:
             self.planning = True
             self._planning_started_at = time.perf_counter()
             self._pending_error = None
-            body_snapshot = copy.deepcopy(sim)
+            _, body_snapshot = self._planning_context(sim)
             self._planning_body_belief = copy.deepcopy(self.body_belief)
             self._planning_material_belief = (
                 copy.deepcopy(self.belief)
@@ -1434,7 +1780,11 @@ class ArmActiveInferenceDriver:
                     action=policy.actions[0],
                     efe=component,
                     posterior=float(posterior),
-                    initial_state=self._planner_state(body_snapshot),
+                    initial_state=(
+                        copy.deepcopy(self.belief)
+                        if self.uses_sensor_observations
+                        else self._planner_state(body_snapshot)
+                    ),
                     forecast=self._profiled_forecast_action(
                         body_snapshot,
                         policy.actions[0],
@@ -1472,7 +1822,11 @@ class ArmActiveInferenceDriver:
         self._planning_forecast_cache = {}
 
     def _start_background_plan(self, sim: ArmPainterSim) -> None:
-        if self.current is not None or self._passage_queue:
+        if (
+            self.current is not None
+            or self._passage_queue
+            or self._pending_action_camera_update is not None
+        ):
             return
         with self._planner_lock:
             if (
@@ -1488,8 +1842,7 @@ class ArmActiveInferenceDriver:
                 return
             transition = self._transition_to_learn
             self._transition_to_learn = None
-            state = self._planner_state(sim)
-            body_snapshot = copy.deepcopy(sim)
+            state, body_snapshot = self._planning_context(sim)
             self._planning_body_belief = copy.deepcopy(self.body_belief)
             self._planning_brush_beliefs = copy.deepcopy(
                 self.brush_load_beliefs
@@ -1810,6 +2163,30 @@ class ArmActiveInferenceDriver:
             seed += 130_363 + 1_013 * self._planning_material_belief.posterior_revision
         return int(seed)
 
+    def _annotate_forecast_context(
+        self,
+        forecast: ExecutionForecast,
+    ) -> ExecutionForecast:
+        if not self.uses_sensor_observations:
+            return forecast
+        template_id = self._sensor_forecast_template_id or "unversioned"
+        approximation = forecast.forecast_approximation.replace(
+            "substrate grain and model parameters remain copied",
+            "substrate grain and model parameters come from the independent fixed prior template",
+        )
+        return replace(
+            forecast,
+            forecast_initialization=(
+                f"{PROVISIONAL_SENSOR_SIMULATION_VERSION}; independent template "
+                f"{template_id}; no live ArmPainterSim state copied; "
+                f"{forecast.forecast_initialization}"
+            ),
+            forecast_approximation=(
+                f"{approximation}; simulation-only fixed model/context priors "
+                "are not hardware calibrated"
+            ),
+        )
+
     def _refresh_composition_diagnostics(self, policy: Policy | None = None) -> None:
         # Cached so UI polling never runs a model forward concurrently with
         # background training.
@@ -2021,7 +2398,11 @@ class ArmActiveInferenceDriver:
             action=action,
             efe=self.last_components if self.last_components is not None else EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             posterior=1.0,
-            initial_state=self._planner_state(sim),
+            initial_state=(
+                copy.deepcopy(self.belief)
+                if self.uses_sensor_observations
+                else self._planner_state(sim)
+            ),
             brush_preparation=preparation.selected,
             controller=ContactAwareStrokeController(),
         )
@@ -2062,7 +2443,12 @@ class ArmActiveInferenceDriver:
         # Accumulate realized tracking residuals while painting (the contact
         # state reflects the last completed sim step). These become the
         # reliability observation for this stroke's motor realization kind.
-        if command.reference.phase == "paint" and sim.contact.on_canvas and sim.contact.pressure > 0.001:
+        if (
+            not self.uses_sensor_observations
+            and command.reference.phase == "paint"
+            and sim.contact.on_canvas
+            and sim.contact.pressure > 0.001
+        ):
             x0, z0, x1, z1 = stroke_world_endpoints(ex.action, sim.canvas)
             px = float(sim.contact.brush_world[0])
             pz = float(sim.contact.brush_world[2])
@@ -2079,15 +2465,38 @@ class ArmActiveInferenceDriver:
             ex.realized_pressure_error_sq_sum += pressure_error * pressure_error
             ex.realized_contact_samples += 1
         if ex.t >= ex.total:
-            self._observe_motion_reliability(ex)
+            if not self.uses_sensor_observations:
+                self._observe_motion_reliability(ex)
+            self.stroke_count += 1
+            self.last_execution_forecast = ex.forecast
+            self.current = None
+            if self.uses_sensor_observations:
+                source = (
+                    ex.initial_state
+                    if isinstance(ex.initial_state, SpatialCanvasState)
+                    else self.belief
+                )
+                if not isinstance(source, SpatialCanvasState):
+                    raise RuntimeError(
+                        "sensor execution completion requires a spatial belief"
+                    )
+                self.record_executed_action_transition(
+                    ex.action,
+                    ex.motor_primitive,
+                    previous=source,
+                )
+                self._post_stroke_retract_remaining = max(
+                    0.0,
+                    self.config.post_stroke_retract_seconds,
+                )
+                self._hold_retracted(sim, dt, scope="global")
+                return
+
             key = self._brush_key(ex.action.tone)
             self.brush_load_beliefs[key] = self.brush_loading_model.stroke_transition(
                 self.brush_load_beliefs[key],
                 ex.action,
             )
-            self.stroke_count += 1
-            self.last_execution_forecast = ex.forecast
-            self.current = None
             after = self._planner_state(sim)
             passage_continues = bool(self._passage_queue)
             if isinstance(after, SpatialCanvasState):
@@ -2263,6 +2672,10 @@ class ArmActiveInferenceDriver:
                 initial_material_belief=self._planning_material_belief,
                 independent_noise_seed=self._forecast_noise_seed(),
             )
+            computed = [
+                self._annotate_forecast_context(forecast)
+                for forecast in computed
+            ]
             self._profile_add_seconds("motorForecastSeconds", time.perf_counter() - started)
             self._profile_increment("motorForecastCount", len(computed))
             self._profile_increment("motorForecastBatchCount")
@@ -2937,7 +3350,7 @@ class ArmActiveInferenceDriver:
     ) -> ExecutionForecast | None:
         if sim is None or action.stop:
             return None
-        return forecast_stroke_execution(
+        forecast = forecast_stroke_execution(
             sim,
             action,
             canvas_summary_state,
@@ -2952,6 +3365,7 @@ class ArmActiveInferenceDriver:
             initial_material_belief=self._planning_material_belief,
             independent_noise_seed=self._forecast_noise_seed(),
         )
+        return self._annotate_forecast_context(forecast)
 
     def diagnostics(self) -> dict[str, Any]:
         action = asdict(self.current.action) if self.current is not None else None
@@ -3008,6 +3422,7 @@ class ArmActiveInferenceDriver:
             }
         oracle_mode = self.observation_access_mode == ORACLE_OBSERVATION_ACCESS_MODE
         body_connected = self.body_belief is not None and self.body_vfe is not None
+        pending_action_update = self._pending_action_camera_update
         return {
             "enabled": self.enabled,
             "stopped": self.stopped,
@@ -3021,11 +3436,67 @@ class ArmActiveInferenceDriver:
                 "mode": self.observation_access_mode,
                 "sensorEquivalent": False,
                 "modelAccessBlocked": self._observation_boundary_blocked,
+                "liveProcessStateDenied": self.uses_sensor_observations,
+                "provisionalSensorSimulation": {
+                    "version": PROVISIONAL_SENSOR_SIMULATION_VERSION,
+                    "enabled": self.provisional_sensor_policy,
+                    "ready": self.provisional_sensor_ready,
+                    "readinessBlockers": list(self._sensor_readiness_blockers()),
+                    "forecastTemplateId": self._sensor_forecast_template_id,
+                    "forecastTemplateConfigured": (
+                        self._sensor_forecast_template is not None
+                    ),
+                    "calibrationStatus": (
+                        "provisional_simulation_only_not_hardware_calibrated"
+                    ),
+                    "approximation": (
+                        "independent fixed MuJoCo/model prior, independent "
+                        "substrate grain and brush microstructure, frozen body/"
+                        "material/compact-brush posteriors; compliance starts "
+                        "from the declared zero-history prior"
+                    ),
+                },
                 "cameraLikelihood": CAMERA_SPATIAL_LIKELIHOOD_VERSION,
                 "cameraPosteriorConnected": isinstance(
                     self.agent, SpatialActiveInferencePainter
                 ),
                 "cameraExposureCount": self.camera_observation_count,
+                "actionCameraLoop": {
+                    "version": ACTION_CONDITIONED_CAMERA_UPDATE_VERSION,
+                    "transitionPriorModel": SPATIAL_TRANSITION_PRIOR_VERSION,
+                    "transitionPriorCount": self.action_transition_prior_count,
+                    "completedUpdateCount": self.action_camera_update_count,
+                    "pending": pending_action_update is not None,
+                    "pendingUpdate": (
+                        {
+                            "updateId": pending_action_update.update_id,
+                            "previousRevision": (
+                                pending_action_update.previous.posterior_revision
+                            ),
+                            "transitionPriorRevision": (
+                                pending_action_update.transition_prior.posterior_revision
+                            ),
+                            "captureNotBeforeS": (
+                                pending_action_update.capture_not_before_s
+                            ),
+                            "rejectedPreActionFrames": (
+                                pending_action_update.rejected_pre_action_frames
+                            ),
+                            "brushKey": pending_action_update.brush_key,
+                            "brushTransitionRevision": (
+                                pending_action_update.brush_transition_revision
+                            ),
+                        }
+                        if pending_action_update is not None
+                        else None
+                    ),
+                    "rejectedPreActionFrames": (
+                        self.rejected_pre_action_camera_frames
+                    ),
+                    "lastUpdate": self.last_action_camera_update,
+                    "nextPolicyRequiresCompletedCameraUpdate": True,
+                    "brushCameraLikelihoodConnected": False,
+                },
                 "bodyPosteriorConnected": body_connected,
                 "materialStateAccess": (
                     "exact VerticalCanvas fields and deterministic transforms; "
@@ -3050,16 +3521,17 @@ class ArmActiveInferenceDriver:
                 "blockedReason": (
                     (
                         (
-                            "camera-conditioned painting posterior and "
-                            "sensor-conditioned body posterior/forecast "
-                            "initialization are implemented; belief-derived "
-                            "material forecast construction and action-conditioned "
-                            "live observation scheduling are not connected"
+                            "camera-conditioned painting posterior, "
+                            "sensor-conditioned body initialization, and the "
+                            "executed-action transition-prior/camera-update clock "
+                            "are implemented; substrate-grain/model forecast "
+                            "initialization, brush-history inference, contact "
+                            "compliance, and native sensor adaptation remain"
                             if body_connected
-                            else "camera-conditioned painting posterior is implemented; "
-                            "sensor-conditioned body posterior and motor-forecast "
-                            "initialization, plus action-conditioned live observation "
-                            "scheduling, are not connected"
+                            else "camera-conditioned painting posterior and the "
+                            "executed-action transition-prior/camera-update clock "
+                            "are implemented; a sensor-conditioned body posterior "
+                            "and remaining rollout/controller boundaries are incomplete"
                         )
                         if isinstance(self.agent, SpatialActiveInferencePainter)
                         else "camera likelihood requires the spatial_material planner; "
@@ -3458,8 +3930,12 @@ class ArmActiveInferenceDriver:
         return forecast.diagnostics(include_state_fields=False) if forecast is not None else None
 
     def phase_label(self) -> str:
+        if self._pending_action_camera_update is not None:
+            return "awaiting_post_action_camera"
         if self._observation_boundary_blocked:
             return "sensor_boundary_blocked"
+        if self.uses_sensor_observations and not self.provisional_sensor_ready:
+            return "awaiting_initial_sensor_posterior"
         if self.current is not None:
             return execution_phase(self.current)
         if self.stopped:

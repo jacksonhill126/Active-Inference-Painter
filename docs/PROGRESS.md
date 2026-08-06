@@ -6,7 +6,7 @@ has failed, and what comes next. Detailed task state remains in
 
 ## Current Snapshot
 
-Snapshot date: 2026-08-05.
+Snapshot date: 2026-08-06.
 
 Phase: M1 formal baseline audit, with bounded M2 sensor-path and simulation
 support work proceeding in parallel. M1 has not passed its lock decision.
@@ -28,6 +28,12 @@ The current prototype can:
 - initialize forecast brush load and average pigment from a frozen compact
   posterior while drawing bristle-scale mark variation from an independent,
   versioned microstructure prior;
+- propagate a completed action through an explicit learned material transition
+  prior, reject camera frames captured before completion, and automatically
+  wait for a causally later camera posterior update;
+- run an opt-in, bounded MuJoCo policy loop from registered camera/body beliefs
+  and an independent forecast model, completing repeated paint/camera cycles
+  without exact live process state in painting-policy inference;
 - verify the AI-104/AI-105 VFE/EFE acceptance matrix against independent
   analytic, enumerated, and fine-grid references;
 - checkpoint learned state and export telemetry;
@@ -35,7 +41,8 @@ The current prototype can:
 
 It has not yet demonstrated:
 
-- a complete live painting loop driven only by sensor-equivalent observations;
+- a trained, calibrated, full-depth live painting loop driven only by
+  sensor-equivalent observations;
 - calibrated predictive uncertainty at live scale;
 - a predictively necessary global or relational latent;
 - a proposal-invariant policy posterior or a correction for finite-candidate
@@ -46,10 +53,13 @@ It has not yet demonstrated:
 - physical hardware control or sim-to-real transfer;
 - emergent composition.
 
-The default `sensor_equivalent` runtime therefore remains deliberately
-fail-closed: visualization and scripted execution are available, but painting
-policy inference and learning are disabled. The `oracle_material_state` mode is
-an explicit diagnostic upper-bound comparator, not a sensor-based agent.
+The default `sensor_equivalent` runtime remains deliberately fail-closed:
+visualization and scripted execution are available, but painting-policy
+inference is disabled. The explicit `--enable-provisional-sensor-policy`
+MuJoCo profile runs a bounded integration loop with independent fixed priors;
+it is not hardware calibrated or a painting-quality result. The
+`oracle_material_state` mode remains a diagnostic upper-bound comparator, not
+a sensor-based agent.
 
 ## Verification Snapshot
 
@@ -58,16 +68,18 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 456 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body/material/brush-posterior forecast, documentation-contract, and MuJoCo alignment coverage |
+| Current test collection | 463 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body/material/brush-posterior forecast, action/camera-clock, provisional sensor simulation, documentation-contract, and MuJoCo alignment coverage |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
-| Current deterministic CI gate | 164 passed; 20.82 seconds observed | Includes both proposal suites and all files listed in `.github/workflows/ci.yml`; two expected obsolete-summary warnings |
+| Current deterministic CI gate | 167 passed; 49.31 seconds observed | Exact file list from `.github/workflows/ci.yml`; includes the action-transition-prior test and both proposal suites, with two expected obsolete-summary warnings |
 | Pre-AI111 complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 | Body/MuJoCo forecast alignment | 90 affected motor, plant, MuJoCo, web-runtime, documentation, and boundary tests passed in 278.69 seconds | Posterior sampling, frozen planning revisions, selected-plant copying, independent rollout noise, live-state non-mutation, provenance/VFE, and the fail-closed sensor boundary are covered |
 | Material forecast alignment | 93 affected boundary, documentation, spatial-state, camera, stroke-execution, and driver tests passed; the broad 91-test run took 107.48 seconds and two final provenance/support checks took 1.95 seconds | Frozen material revisions, posterior mean/variance particles, process-material independence, physical projection, provenance, and planning integration are covered |
 | Brush forecast alignment | 203 affected brush, stroke, driver, sensor-boundary, body/material inference, plant, MuJoCo, motor, web-runtime, camera, and independent-reference tests reported passed | Frozen brush revisions, mean/variance particles, live-brush/RNG independence, reload/preserve transitions, provenance, selected-plant behavior, and fail-closed boundary contracts are covered. Two broad Windows invocations printed complete passing pytest summaries before the outer command wrapper timed out while exiting; the other 72 checks exited normally. |
+| Action/camera clock | 114 affected spatial, camera, camera-process, driver, web-runtime, brush, reference, documentation, and boundary checks passed | Covers transition uncertainty without synthetic VFE, post-action capture causality, stale-frame rejection, exactly-once replay, automatic MuJoCo delivery, process-material independence, and unchanged fail-closed contracts. The 41-test driver run printed its passing pytest summary before the Windows command wrapper timed out while exiting; the other 73 checks exited normally. |
+| Provisional sensor simulation | 48 affected boundary, documentation, camera/spatial, MuJoCo, driver, and repeated web-runtime checks passed | Covers default fail-closed behavior, independent forecast context, denied exact planner state, initial sensor gating, two repeated paint/camera cycles, nonzero test-only process coverage, replay cardinality, forecast provenance, and monotonic body/MuJoCo time |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -87,13 +99,55 @@ captured in a run manifest.
    major runtime phases, and capture three manifested baseline replicas.
 5. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-6. Continuously pair executed-action transition priors with delivered camera
-   updates, then define the missing compliance latent before mapping contact
-   beliefs into brush deformation. Substrate grain and model-parameter
-   forecast initialization also remain privileged; material fields and compact
-   brush state are now posterior-conditioned.
+6. Collect episode-split camera/body posterior transitions and train a
+   sensor-compatible checkpoint for the new provisional loop. Then derive the
+   local camera statistic for the brush-load likelihood without counting the
+   transition prediction as evidence, and expand candidates, particles, motor
+   realizations, and temporal depth one dimension at a time.
 
 ## Progress Log
+
+### 2026-08-06: provisional sensor-only MuJoCo painting loop
+
+Technical record: `docs/PROVISIONAL_SENSOR_SIMULATION_2026-08-06.md`.
+
+- Added the opt-in `provisional-sensor-simulation-v0` profile. It requires
+  MuJoCo, a registered initial camera likelihood, and a body posterior.
+- Removed the live `ArmPainterSim` snapshot from this policy path. Forecasts
+  use a fresh MuJoCo/material template with independent grain and brush seeds,
+  then initialize body/material/compact-brush state from frozen beliefs.
+- Kept `_planner_state` and oracle bootstrap forbidden. Accepted camera
+  transitions are the only live transition targets.
+- Added a bounded smoke configuration: 8 policies, depth 1, one Cartesian-IK
+  realization, one forecast particle, no passage proposals, and reduced native
+  camera renders. The resolution override is a declared simulation-throughput
+  approximation, not an operational sensor-equivalent camera claim.
+- Demonstrated two repeated selected strokes, two causal camera corrections,
+  two replay transitions, and nonzero process coverage. Exact coverage was
+  test-only evaluation, not an inference input.
+- Fixed an in-episode MuJoCo contact-release reset that rewound sensor time;
+  full episode resets still begin at zero.
+
+### 2026-08-06: action-conditioned transition/camera clock
+
+Technical record: `docs/ACTION_CONDITIONED_CAMERA_LOOP_2026-08-06.md`.
+
+- Added `spatial-action-transition-prior-v0`, which propagates the frozen
+  material posterior through the learned action/motor transition and increases
+  uncertainty without creating an observation or VFE record.
+- Added `action-conditioned-camera-update-v0`. A completed action advances the
+  material and compact brush transition priors, then blocks another planning
+  pass until a registered post-action camera exposure updates the posterior.
+- The MuJoCo runtime records the capture boundary after the completing physics
+  step and automatically polls through declared camera latency. Frames captured
+  before the boundary are rejected even if delivered later.
+- The eligible camera update retains its separate VFE decomposition and adds
+  one sensor-derived transition to replay. The brush likelihood remains
+  prior-only because its local camera-derived deposition statistic is not yet
+  connected.
+- Kept the default policy loop fail-closed for substrate/model forecast state,
+  contact/compliance inference, persistent brush history, and the native plant
+  sensor adapter.
 
 ### 2026-08-05: brush-posterior motor-forecast initialization
 
@@ -110,7 +164,9 @@ Technical record: `docs/BRUSH_FORECAST_INITIALIZATION_2026-08-05.md`.
   initializes from its exact bristle realization.
 - Kept the limitation explicit: held paint, persistent bristle history, and
   tip-lag history are collapsed; the microstructure prior and brush likelihood
-  are provisional simulation-only; the live sensor loop remains fail-closed.
+  are provisional simulation-only. At that checkpoint the live sensor loop
+  remained fail-closed; the bounded integration part is superseded by the
+  2026-08-06 provisional-sensor entry above.
 
 ### 2026-08-05: material-posterior motor-forecast initialization
 
@@ -128,7 +184,8 @@ Technical record: `docs/MATERIAL_FORECAST_INITIALIZATION_2026-08-05.md`.
 - Kept the live policy loop fail-closed. At that checkpoint substrate grain,
   brush realization/RNG, contact-to-compliance initialization, model
   parameters, and continuous camera scheduling remained open; the brush
-  initialization part is superseded by the entry above.
+  initialization and camera-scheduling parts are superseded by the entries
+  above.
 
 ### 2026-08-05: body-posterior motor-forecast initialization
 
@@ -145,8 +202,8 @@ Technical record: `docs/MATERIAL_FORECAST_INITIALIZATION_2026-08-05.md`.
 - Kept the default policy loop fail-closed. At that checkpoint exact
   material/brush/model context, contact-to-compliance initialization,
   continuous camera scheduling, and MuJoCo parameter uncertainty remained
-  open; the material-field and compact-brush parts are superseded by the two
-  entries above.
+  open; the material-field, compact-brush, and camera-scheduling parts are
+  superseded by the entries above.
 
 ### 2026-08-04: selected-plant motor forecast alignment
 

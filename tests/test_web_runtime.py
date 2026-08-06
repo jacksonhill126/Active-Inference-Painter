@@ -21,6 +21,7 @@ from active_painter.camera_observation import (
 
 from active_painter.arm_agent_driver import (
     ORACLE_OBSERVATION_ACCESS_MODE,
+    PrivilegedStateAccessError,
     SENSOR_OBSERVATION_ACCESS_MODE,
 )
 from active_painter.version import code_build_info, code_version, package_version
@@ -71,6 +72,122 @@ def test_web_runtime_defaults_to_fail_closed_sensor_boundary() -> None:
     result = runtime.command({"type": "toggle_agent"})
     assert result["ok"] is False
     assert "fail-closed" in result["error"]
+
+
+def test_provisional_sensor_runtime_uses_independent_mujoco_forecast_context() -> None:
+    pytest.importorskip("mujoco")
+    from active_painter.camera_observation import CameraObservationProcess
+
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        plant_backend="mujoco",
+        provisional_sensor_policy=True,
+    )
+    runtime._camera_process = CameraObservationProcess(
+        native_resolution_overrides={
+            "canvas_right_oblique": (640, 360),
+            "canvas_left_oblique": (640, 360),
+            "canvas_inspection_deployed": (640, 360),
+            "brush_standoff_overhead": (320, 240),
+        }
+    )
+    try:
+        driver = runtime.agent_driver
+        template = driver._sensor_forecast_template
+        assert template is not None
+        assert template is not runtime.sim
+        assert template.plant is not runtime.sim.plant
+        assert not np.shares_memory(template.canvas.grain, runtime.sim.canvas.grain)
+        assert template.config.canvas_grain_seed != runtime.sim.config.canvas_grain_seed
+        assert driver.observation_boundary_blocked is False
+        assert driver.trained_transitions == 0
+        assert driver.provisional_sensor_ready is False
+        assert runtime._initial_sensor_camera_pending is True
+        with pytest.raises(PrivilegedStateAccessError, match="denied"):
+            driver._planner_state(runtime.sim)
+
+        backend = runtime.sim.plant.backend
+        backend.data.time = 0.10
+        runtime._advance_pending_camera_delivery()
+        backend.data.time = 0.14
+        runtime._advance_pending_camera_delivery()
+
+        assert runtime._initial_sensor_camera_pending is False
+        assert driver.provisional_sensor_ready is True
+        boundary = driver.diagnostics()["observationBoundary"]
+        assert boundary["liveProcessStateDenied"] is True
+        assert boundary["provisionalSensorSimulation"]["ready"] is True
+        state, forecast_template = driver._planning_context(runtime.sim)
+        assert state is not runtime.sim
+        assert forecast_template is not runtime.sim
+        assert forecast_template.plant is not runtime.sim.plant
+    finally:
+        runtime.stop()
+
+
+def test_provisional_sensor_runtime_repeats_camera_closed_strokes() -> None:
+    pytest.importorskip("mujoco")
+    from active_painter.camera_observation import CameraObservationProcess
+
+    runtime = WebSimRuntime(
+        canvas_size=24,
+        plant_backend="mujoco",
+        provisional_sensor_policy=True,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+        stroke_tone_prior=1.0,
+    )
+    runtime._camera_process = CameraObservationProcess(
+        native_resolution_overrides={
+            "canvas_right_oblique": (320, 180),
+            "canvas_left_oblique": (320, 180),
+            "canvas_inspection_deployed": (320, 180),
+            "brush_standoff_overhead": (160, 120),
+        }
+    )
+    try:
+        backend = runtime.sim.plant.backend
+        backend.data.time = 0.10
+        runtime._advance_pending_camera_delivery()
+        backend.data.time = 0.14
+        runtime._advance_pending_camera_delivery()
+        driver = runtime.agent_driver
+        state, forecast_template = driver._planning_context(runtime.sim)
+
+        driver._background_plan(state, None, forecast_template)
+        assert driver.diagnostics()["plannerError"] is None
+        assert driver._pending_current is not None
+        assert driver._consume_background_plan() is False
+        assert driver.current is not None
+
+        deadline = time.perf_counter() + 20.0
+        while (
+            time.perf_counter() < deadline
+            and (
+                driver.stroke_count < 2
+                or driver.action_camera_update_count < 2
+            )
+        ):
+            runtime._advance_one_step(1.0 / 60.0)
+            if driver.planning:
+                time.sleep(0.002)
+
+        assert driver.stroke_count == 2
+        assert driver.action_camera_update_count == 2
+        assert len(driver.agent.replay) == 2
+        assert runtime.sim.canvas.material_coverage() > 0.0
+        assert driver.last_execution_forecast is not None
+        assert "no live ArmPainterSim state copied" in (
+            driver.last_execution_forecast.forecast_initialization
+        )
+        assert driver.belief.posterior_revision >= 5
+        assert runtime.body_estimator is not None
+        assert runtime.body_estimator.posterior is not None
+        assert runtime.body_estimator.posterior.monotonic_time_s == pytest.approx(
+            runtime.sim.plant.backend.data.time
+        )
+    finally:
+        runtime.stop()
 
 
 def test_web_runtime_state_contains_arm_canvas_and_contact() -> None:
@@ -245,6 +362,54 @@ def test_mujoco_runtime_exposes_lazy_model_facing_camera_png() -> None:
         runtime.stop()
 
 
+def test_mujoco_runtime_automatically_delivers_post_action_camera_update() -> None:
+    pytest.importorskip("mujoco")
+    from active_painter.camera_observation import CameraObservationProcess
+    from active_painter.env import StrokeAction
+
+    runtime = WebSimRuntime(
+        canvas_size=32,
+        plant_backend="mujoco",
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    runtime._camera_process = CameraObservationProcess(
+        native_resolution_overrides={
+            "canvas_right_oblique": (640, 360),
+            "canvas_left_oblique": (640, 360),
+            "canvas_inspection_deployed": (640, 360),
+            "brush_standoff_overhead": (320, 240),
+        }
+    )
+    try:
+        runtime.agent_driver.record_executed_action_transition(
+            StrokeAction(0.25, 0.5, 0.75, 0.5, 0.1, 0.6, tone=1.0)
+        )
+        backend = runtime.sim.plant.backend
+        backend.data.time = 0.10
+        runtime._advance_pending_camera_delivery()
+
+        assert runtime.agent_driver.action_camera_update_pending is True
+        assert (
+            runtime.agent_driver.action_camera_capture_boundary_required
+            is False
+        )
+
+        backend.data.time = 0.14
+        runtime._advance_pending_camera_delivery()
+
+        assert runtime.agent_driver.action_camera_update_pending is False
+        diagnostics = runtime.agent_driver.diagnostics()["observationBoundary"][
+            "actionCameraLoop"
+        ]
+        assert diagnostics["completedUpdateCount"] == 1
+        assert diagnostics["lastUpdate"]["captureNotBeforeS"] == pytest.approx(
+            0.10
+        )
+    finally:
+        runtime.stop()
+
+
 def test_web_runtime_can_enable_spatial_material_planner() -> None:
     runtime = oracle_runtime(
         canvas_size=32,
@@ -342,8 +507,12 @@ def test_web_server_uses_fast_spatial_bootstrap_defaults() -> None:
     assert summary.checkpoint_save_every_transitions == 10
     assert summary.plant_backend == "native"
     assert summary.observation_mode == SENSOR_OBSERVATION_ACCESS_MODE
+    assert summary.enable_provisional_sensor_policy is False
     assert spatial.planner_state_kind == "spatial_material"
     assert parser.parse_args(["--plant-backend", "mujoco"]).plant_backend == "mujoco"
+    assert parser.parse_args(
+        ["--enable-provisional-sensor-policy"]
+    ).enable_provisional_sensor_policy is True
 
 
 def test_web_server_exposes_checkpoint_options() -> None:

@@ -177,28 +177,38 @@ a documented approximation, not sensor equivalence. The camera/material path
 also does not yet compute the local mark-deposition statistic consumed by
 `infer_load_from_mark`.
 
-At the wider rollout boundary, substrate grain and model parameters still come
-from the copied container. Native execution still lacks a `PlantBackend`
-sensor adapter. MuJoCo body-parameter uncertainty is not sampled. Contact
-probability/force is not mapped into a compliance state.
+Update, 2026-08-06: the material half of the repeated action/camera loop is now
+implemented by `action-conditioned-camera-update-v0`, and the brush depletion
+transition advances on the same action clock. The local camera-derived brush
+likelihood statistic remains open.
 
-For those reasons, forecast-driven painting inference remains fail-closed
-outside `baseline-oracle-v0` diagnostics.
+At the wider legacy/oracle rollout boundary, substrate grain and model
+parameters still come from the copied container. Native execution still lacks
+a `PlantBackend` sensor adapter. MuJoCo body-parameter uncertainty is not
+sampled. Contact probability/force is not mapped into a compliance state.
+
+The default remains fail-closed. The later opt-in
+`provisional-sensor-simulation-v0` integration profile avoids the live copied
+container by using independent fixed grain/model/compliance priors. It can
+paint repeatedly in MuJoCo, but the compact brush update described here
+remains prior-only and uncalibrated.
 
 ## Recommended Next Boundary
 
-The most useful next step is to wire the repeated sensor loop:
+The repeated material sensor loop is now wired as:
 
 ```text
 executed action
     -> action-conditioned material/brush transition prior
     -> delivered camera observation
-    -> material likelihood and local mark-deposition likelihood
+    -> material likelihood
     -> revised posteriors
     -> next policy inference
 ```
 
-That closes an inference loop using factors already present in the model.
+The remaining brush step is to derive a local mark-deposition likelihood from
+the camera evidence without mistaking the material transition prior for an
+observation.
 Contact-to-brush-compliance initialization should follow only after a
 compliance latent and its likelihood have been declared; force alone does not
 identify brush deformation. Substrate-grain and parameter posteriors can then

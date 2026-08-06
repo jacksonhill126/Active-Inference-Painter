@@ -69,9 +69,10 @@ before the next begins:
   M2 now connects the MuJoCo body posterior to forecast q/qvel initialization,
   independent material fields initialize from the spatial posterior, and
   compact brush state initializes from `BrushLoadBelief` plus independent
-  microstructure noise. Copied substrate grain/model context, collapsed brush
-  history, and missing contact-compliance mapping retain the
-  `baseline-oracle-v0` painting-policy label.
+  microstructure noise. The default/oracle container retains copied substrate
+  grain/model context. The opt-in `provisional-sensor-simulation-v0` profile
+  now runs a bounded repeated-stroke loop with independent fixed context priors;
+  collapsed brush history and missing compliance inference remain explicit.
 - M4 contract work may begin when T-003, T-103, and T-105 are complete. Only
   cross-backend parity work waits for S2 outputs.
 - M5 and targeted M6 risk-reduction work may proceed alongside M1-M3 when their

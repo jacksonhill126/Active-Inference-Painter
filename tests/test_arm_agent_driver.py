@@ -1146,6 +1146,48 @@ def test_executed_stroke_changes_material_coverage_at_planning_scale() -> None:
     assert after - before > 0.005
 
 
+def test_sensor_execution_completion_schedules_prior_without_material_truth(
+    monkeypatch,
+) -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        planner_state_kind="spatial_material",
+        spatial_grid_size=8,
+        candidate_policies=2,
+        planning_horizon=1,
+    )
+    sim = ArmPainterSim(cfg)
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+    action = StrokeAction(0.3, 0.45, 0.7, 0.55, 0.08, 0.6, 1.0)
+    initial = driver.belief
+    assert isinstance(initial, SpatialCanvasState)
+    driver.current = StrokeExecution(
+        action=action,
+        efe=EFEComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        posterior=1.0,
+        initial_state=initial,
+    )
+    monkeypatch.setattr(
+        ArmActiveInferenceDriver,
+        "_planner_state",
+        lambda self, process: (_ for _ in ()).throw(
+            AssertionError("sensor completion read process material")
+        ),
+    )
+
+    driver._execute_current(sim, 100.0)
+
+    assert driver.current is None
+    assert driver.action_camera_update_pending is True
+    assert driver.action_transition_prior_count == 1
+    assert driver.belief.posterior_revision == initial.posterior_revision + 1
+    assert driver.phase_label() == "awaiting_post_action_camera"
+
+
 def test_active_inference_driver_continues_after_first_material_mark() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
     driver = oracle_driver(bootstrap_transitions=48, bootstrap_train_steps=16)

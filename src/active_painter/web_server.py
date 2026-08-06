@@ -229,10 +229,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         default=SENSOR_OBSERVATION_ACCESS_MODE,
         help=(
-            "sensor_equivalent fails closed until the sensor-conditioned body "
-            "posterior initializes motor forecasts and the action-conditioned "
-            "observation loop is scheduled; oracle_material_state is an explicit diagnostic-only "
-            "legacy baseline"
+            "sensor_equivalent fails closed by default; combine it with "
+            "--enable-provisional-sensor-policy and --plant-backend mujoco for "
+            "the simulation-only camera/body-posterior smoke loop. "
+            "oracle_material_state is an explicit diagnostic-only legacy baseline"
+        ),
+    )
+    parser.add_argument(
+        "--enable-provisional-sensor-policy",
+        action="store_true",
+        help=(
+            "run the MuJoCo painting-policy loop from registered camera/body "
+            "posteriors and an independent forecast model; simulation-only, "
+            "not hardware-calibrated"
         ),
     )
     return parser
@@ -264,6 +273,12 @@ def main() -> None:
     torch.set_num_threads(max(2, min(8, (os.cpu_count() or 8) - 4)))
     args = build_parser().parse_args()
     bootstrap_transitions, bootstrap_train_steps = resolved_bootstrap(args)
+    if args.enable_provisional_sensor_policy:
+        # The existing bootstrap consumes exact synthetic material states and
+        # is deliberately oracle-labelled. The runnable sensor smoke profile
+        # starts without it until a sensor-posterior corpus/checkpoint exists.
+        bootstrap_transitions = 0
+        bootstrap_train_steps = 0
     stroke_tone_prior = {"black": 1.0, "white": 0.0, "random": None}[args.stroke_tone_prior]
     print(
         "Initializing Active-Inference Arm Painter "
@@ -291,6 +306,7 @@ def main() -> None:
         device=args.device,
         plant_backend=args.plant_backend,
         observation_access_mode=args.observation_mode,
+        provisional_sensor_policy=args.enable_provisional_sensor_policy,
     )
     if runtime.agent_driver.observation_boundary_blocked:
         print(
@@ -304,6 +320,13 @@ def main() -> None:
         print(
             "WARNING: oracle_material_state exposes hidden process truth to the "
             "model and is diagnostic-only.",
+            flush=True,
+        )
+    elif args.enable_provisional_sensor_policy:
+        print(
+            "PROVISIONAL SENSOR SIMULATION: policy inference uses registered "
+            "camera/body beliefs and an independent MuJoCo forecast model; "
+            "no hardware-calibration claim is made.",
             flush=True,
         )
     print(f"Planner device: {runtime.agent_driver.agent.device}", flush=True)

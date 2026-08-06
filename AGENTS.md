@@ -69,15 +69,44 @@ representative microstructure, while later particles sample its diagonal
 load/pigment variance and `brush-microstructure-prior-v0` under independent
 forecast noise. Never continue the live brush RNG. This prior is provisional
 and uncalibrated, and held paint/bristle history are collapsed into the compact
-load/average-pigment belief. The containing process snapshot still supplies
-substrate grain and model parameters; the inferred contact probability/force
+load/average-pigment belief. The legacy/oracle forecast container still
+supplies process substrate grain and model parameters; the provisional sensor
+simulation instead uses an independent fixed prior template. In both paths the
+inferred contact probability/force
 is not yet mapped into MuJoCo brush-compliance state; native runtime execution
 has no `PlantBackend` sensor adapter; and MuJoCo body-parameter uncertainty is
-not sampled. Forecast-driven painting policy inference therefore remains
-fail-closed outside the explicit `baseline-oracle-v0` diagnostic. Describe
-joint, material, and brush initialization as posterior-conditioned, never the
-complete motor/material forecast as sensor-equivalent, hardware-calibrated, or
-sufficient for embodiment claims.
+not sampled.
+
+The sensor path has an explicit `action-conditioned-camera-update-v0` clock.
+A completed action first creates `spatial-action-transition-prior-v0` and the
+brush depletion prior without reading process material. The MuJoCo runtime then
+registers a post-physics capture boundary and polls until a registered camera
+exposure captured at or after that boundary is delivered. Older frames are
+rejected. The camera likelihood supplies the posterior and its separately
+logged VFE; prediction alone never creates VFE. A pending update gates the next
+planning pass. The brush camera likelihood is still open because no local
+mark-deposition statistic has been declared from camera evidence.
+
+The default remains fail-closed, but the explicit opt-in
+`provisional-sensor-simulation-v0` MuJoCo smoke profile can run repeated
+painting-policy cycles without copying the live `ArmPainterSim`. It requires a
+registered initial camera likelihood and body posterior. Counterfactuals start
+from a separately constructed MuJoCo model with independent substrate-grain
+and brush seeds, then overwrite joint, material, and compact brush slices from
+frozen beliefs. Its bounded profile uses eight candidate policies, one-step
+temporal depth, one Cartesian-IK motor realization, and one forecast particle.
+It also reduces the native camera acquisition renders for throughput; this is
+a declared simulation approximation, not an operational sensor-equivalent
+camera realization.
+The oracle bootstrap is disabled; camera-derived replay is the only live
+transition evidence. Exact live pose/contact may still be used by conventional
+execution and hard safety below the selected painting policy.
+
+Describe this mode as an uncalibrated simulation-only integration baseline,
+never as sensor-equivalent hardware cognition, hardware-calibrated control, a
+painting-quality result, or sufficient for embodiment claims.
+`baseline-oracle-v0` remains the only mode allowed to expose exact canvas state
+to policy inference.
 Never state that no specific motors have been selected without explicitly
 limiting that statement to the native abstract plant.
 

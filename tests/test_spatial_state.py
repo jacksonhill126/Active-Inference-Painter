@@ -8,7 +8,11 @@ from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.models import SpatialDynamicsEnsemble, SpatialTransitionMember
 from active_painter.policies import Policy
-from active_painter.spatial_inference import SpatialVariationalStateEstimator
+from active_painter.spatial_inference import (
+    SPATIAL_TRANSITION_PRIOR_CALIBRATION_STATUS,
+    SPATIAL_TRANSITION_PRIOR_VERSION,
+    SpatialVariationalStateEstimator,
+)
 from active_painter.preferences import TerminalCoveragePreference
 from active_painter.spatial_efe import SpatialExpectedFreeEnergy
 from active_painter.spatial_state import (
@@ -160,6 +164,35 @@ def test_spatial_posterior_combines_transition_prior_and_material_likelihood() -
         estimator.last_vfe.complexity + estimator.last_vfe.negative_log_likelihood,
     )
     assert estimator.last_vfe.complexity >= 0.0
+
+
+def test_action_transition_prior_propagates_uncertainty_without_creating_vfe() -> None:
+    cfg = PainterConfig(
+        canvas_size=16,
+        spatial_grid_size=8,
+        local_identity_logvar=-10.0,
+    )
+    sim = ArmPainterSim(cfg)
+    estimator = SpatialVariationalStateEstimator(cfg, torch.device("cpu"))
+    previous = estimator.initialize(spatial_canvas_state(sim, cfg))
+    initialization_vfe = estimator.last_vfe
+    action = StrokeAction(0.25, 0.5, 0.75, 0.5, 0.1, 0.5, tone=1.0)
+
+    prior = estimator.predict(
+        previous,
+        action,
+        DeterministicFootprintDynamics(),
+    )
+
+    assert prior.posterior_revision == previous.posterior_revision + 1
+    assert prior.inference_model_id == SPATIAL_TRANSITION_PRIOR_VERSION
+    assert (
+        prior.calibration_status
+        == SPATIAL_TRANSITION_PRIOR_CALIBRATION_STATUS
+    )
+    assert prior.material[0].max() > previous.material[0].max()
+    assert np.all(np.exp(prior.logvar[:4]) > np.exp(previous.logvar[:4]))
+    assert estimator.last_vfe is initialization_vfe
 
 
 def test_spatial_state_includes_surface_tone_contrast_and_derived_material_coverage_fields() -> None:

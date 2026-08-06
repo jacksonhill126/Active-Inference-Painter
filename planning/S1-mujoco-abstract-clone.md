@@ -14,10 +14,12 @@ visual-only, and unmeasured fields remain explicit. Counterfactual forecasts
 now preserve the selected plant: MuJoCo execution predicts through independent
 `MjData` under the same immutable model, and its runtime q/qvel initialization
 comes from a provisional sensor-conditioned body posterior. Independent
-material fields initialize from the frozen spatial posterior. Copied substrate
-grain/model context, collapsed held-paint/persistent-bristle history,
-contact-to-compliance initialization, and MuJoCo parameter uncertainty remain
-declared forecast approximations. Compact brush load/pigment and independent
+material fields initialize from the frozen spatial posterior. The
+default/oracle container retains copied substrate grain/model context. The
+opt-in `provisional-sensor-simulation-v0` profile uses independent fixed
+context priors and completes bounded repeated strokes, while collapsed
+held-paint/persistent-bristle history, contact-to-compliance inference, and
+MuJoCo parameter uncertainty remain declared forecast approximations. Compact brush load/pigment and independent
 bristle-scale prior noise now have their own declared forecast boundary.
 
 ## Physical-Draft And Retarget Contracts

@@ -125,16 +125,24 @@ brush-compression/flexure posterior. Doing so from force alone would be
 underidentified and could conflict with sampled joint geometry; a declared
 compliance-state factor is needed first.
 
-The live sensor path also does not yet run the complete repeated sequence
-“executed action -> material transition prior -> delivered camera likelihood
-update -> next policy inference.” It remains fail-closed rather than falling
-back to process truth.
+Update, 2026-08-06: `action-conditioned-camera-update-v0` now runs the
+material sequence "executed action -> transition prior -> causally later
+camera likelihood -> revised posterior." It records a post-physics capture
+boundary, rejects older frames, and automatically polls the MuJoCo camera.
+The default policy loop remains fail-closed for the other embodiment blockers
+named above.
+
+Later update, 2026-08-06: the opt-in
+`provisional-sensor-simulation-v0` profile now replaces the live copied
+container with an independently constructed fixed-prior MuJoCo/material model
+and completes repeated camera-closed strokes. This is an integration baseline,
+not acceptance of the missing parameter/compliance posteriors.
 
 ## Recommended Next Boundary
 
-The next implementation should continuously pair executed-action transition
-priors with delivered camera updates, including the local mark statistic used
-by the brush likelihood. Contact-to-compliance mapping should follow only after
+The next implementation should derive the local mark statistic used by the
+brush likelihood from camera evidence without feeding a transition prediction
+back as if it were an observation. Contact-to-compliance mapping should follow only after
 the body posterior explicitly represents the corresponding compliance latent.
 Substrate-grain and parameter beliefs can then replace the remaining copied
 forecast context without allowing either path to fall back to hidden process

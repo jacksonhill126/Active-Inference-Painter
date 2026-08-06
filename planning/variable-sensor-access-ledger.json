@@ -1,7 +1,7 @@
 {
   "schema_version": "sensor-access-ledger-v0",
   "accepted_date": "2026-07-24",
-  "updated_date": "2026-08-05",
+  "updated_date": "2026-08-06",
   "baseline": {
     "id": "baseline-oracle-v0",
     "observation_mode": "oracle_material_state",
@@ -26,8 +26,23 @@
     "observation_mode": "sensor_equivalent",
     "sensor_equivalent": false,
     "model_access_blocked": true,
-    "reason": "The camera-conditioned painting posterior is implemented, and frozen body/material/brush posteriors now initialize motor-forecast joint state, the four independent paint fields, and compact brush load/pigment state. Brush microstructure uses independent prior noise rather than the live RNG. Belief-derived substrate-grain/contact/model forecast construction, unrepresented brush history, and the executed-action transition-prior/camera-update schedule remain incomplete. Policy inference, learning, and oracle bootstrap remain fail closed instead of reading process truth.",
+    "reason": "The camera-conditioned painting posterior is implemented, and frozen body/material/brush posteriors initialize motor-forecast joint state, the four independent paint fields, and compact brush load/pigment state. The executed-action transition-prior/camera-update schedule enforces causal camera correction. The default remains fail closed rather than accepting uncalibrated context approximations. The separate opt-in provisional-sensor-simulation-v0 profile can run a bounded policy loop from registered posteriors and an independently constructed fixed-prior MuJoCo/material template without copying live ArmPainterSim state.",
     "oracle_opt_in": "oracle_material_state"
+  },
+  "provisional_sensor_simulation": {
+    "id": "provisional-sensor-simulation-v0",
+    "observation_mode": "sensor_equivalent",
+    "default": false,
+    "model_access_blocked": false,
+    "live_process_state_denied": true,
+    "calibration_status": "provisional_simulation_only_not_hardware_calibrated",
+    "scope": "bounded repeated-stroke MuJoCo integration with initial camera/body gate, independent fixed model/context priors, eight candidates, temporal depth one, Cartesian IK only, and one forecast particle",
+    "prohibited_claims": [
+      "hardware-calibrated sensor equivalence",
+      "painting quality",
+      "calibrated model uncertainty",
+      "complete brush or compliance inference"
+    ]
   },
   "classifications": {
     "physical_sensor_observation": "A simulated value with a direct planned hardware sensor analogue. It is not necessarily assimilated by the current agent.",
@@ -506,6 +521,47 @@
       "blockers": ["AI-103", "AI-203", "AI-204", "AI-207", "AI-210", "AI-216"]
     },
     {
+      "id": "inference.action_camera_clock",
+      "source_type": "PendingActionCameraUpdate",
+      "values": [
+        "update_id",
+        "executed action and motor realization",
+        "previous posterior revision",
+        "spatial-action-transition-prior-v0 revision",
+        "brush transition revision",
+        "capture_not_before_s",
+        "rejected pre-action frame count"
+      ],
+      "classification": "derived_observation",
+      "consumers": ["material posterior", "transition replay", "planning gate", "diagnostics"],
+      "current_access": ["permitted executed command metadata", "posterior/model revisions", "camera capture timestamps"],
+      "likelihood_status": "action-conditioned-camera-update-v0 propagates the learned material and brush transition priors without VFE, rejects frames captured before the post-physics boundary, and completes only after a registered camera likelihood factor with separately logged VFE.",
+      "physical_analogue": "Controller action-completion event plus monotonic camera capture and delivery timestamps.",
+      "research_status": "provisional_agent_model",
+      "blockers": ["AI-203", "AI-204", "AI-205", "T-109"]
+    },
+    {
+      "id": "inference.provisional_sensor_forecast_template",
+      "source_type": "IndependentForecastTemplate",
+      "values": [
+        "fresh mujoco-robstride-electromechanical-v4 model instance",
+        "independent substrate-grain seed",
+        "independent brush RNG seed",
+        "fixed declared paint/contact model parameters",
+        "zero-history compliance state",
+        "frozen body posterior initialization",
+        "frozen material posterior initialization",
+        "frozen compact brush posterior initialization"
+      ],
+      "classification": "hidden_state",
+      "consumers": ["counterfactual motor forecast", "painting-policy EFE rescore", "forecast provenance"],
+      "current_access": ["independent generative-model prior only; no live ArmPainterSim object, canvas array, plant data, grain realization, brush RNG, or contact state is copied"],
+      "likelihood_status": "provisional-sensor-simulation-v0 uses fixed uncalibrated context priors and posterior-conditioned state slices; it is a runnable integration approximation, not a calibrated posterior over substrate, compliance, or model parameters.",
+      "physical_analogue": "An agent's independently instantiated internal plant/material model initialized from sensor beliefs.",
+      "research_status": "provisional_agent_model",
+      "blockers": ["AI-204", "AI-205", "AI-207", "AI-210"]
+    },
+    {
       "id": "camera.model_observation",
       "source_type": "CameraFrame",
       "values": [
@@ -527,8 +583,8 @@
       ],
       "classification": "physical_sensor_observation",
       "consumers": ["CameraSpatialLikelihood", "camera diagnostics"],
-      "current_access": ["permitted agent observation; only registered global/foveal products enter the painting-state likelihood"],
-      "likelihood_status": "camera-spatial-likelihood-v0 is an explicit nonlinear grayscale likelihood with a mean-field occlusion/outlier latent and separately logged VFE; parameters are provisional XML-declared simulation priors.",
+      "current_access": ["permitted agent observation; only registered global/foveal products enter the painting-state likelihood", "pending action updates additionally require capture_time_s at or after the registered post-physics boundary"],
+      "likelihood_status": "camera-spatial-likelihood-v0 is an explicit nonlinear grayscale likelihood with a mean-field occlusion/outlier latent and separately logged VFE; action-conditioned-camera-update-v0 applies the first causally eligible exposure exactly once per recorded action; parameters are provisional XML-declared simulation priors.",
       "physical_analogue": "Calibrated grayscale frames and requested digital regions of interest from the fixed cameras.",
       "research_status": "provisional_sensor_model",
       "blockers": ["AI-201", "AI-202", "AI-203", "T-712"]

@@ -624,6 +624,15 @@ class MujocoJointPlant:
         self._sequence = 0
         self._sync_telemetry()
 
+    def reset_state_preserving_clock(self, pose: ArmPose) -> None:
+        """Reset pose for an in-episode safety release without rewinding time."""
+
+        monotonic_time_s = float(self.backend.data.time)
+        pending_time_s = float(self.backend._pending_time_s)
+        self.reset_state(pose)
+        self.backend.data.time = monotonic_time_s
+        self.backend._pending_time_s = pending_time_s
+
     def initialize_forecast_state(
         self,
         joint_position_rad: np.ndarray,

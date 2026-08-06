@@ -202,8 +202,17 @@ average pigment now initialize from a frozen `BrushLoadBelief`; later particles
 also use independent versioned microstructure noise rather than continuing the
 live brush RNG. The full material/relational factorization,
 substrate-grain/model rollout initialization, held-paint and persistent-bristle
-history, contact-to-brush compliance mapping, and continuous action-conditioned
-update schedule remain open; see the canonical status in `PROJECT_TRACKER.md`.
+history and contact-to-brush compliance mapping remain open. The
+`action-conditioned-camera-update-v0` schedule now propagates the learned
+material transition prior, records a post-physics capture boundary, rejects
+older frames, and automatically polls the MuJoCo camera until the posterior is
+updated. The opt-in `provisional-sensor-simulation-v0` profile now repeats this
+cycle without copying the live process into policy forecasts. It uses an
+independent fixed-prior MuJoCo/material template and a deliberately bounded
+one-step/one-particle/Cartesian-IK profile. This makes AI-204 runnable for
+sensor-posterior corpus collection but does not satisfy its calibration or
+factorization acceptance criteria; see the canonical status in
+`PROJECT_TRACKER.md`.
 
 ### AI-205 Align local dynamics training with live execution
 

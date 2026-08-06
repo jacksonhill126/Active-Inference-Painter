@@ -277,6 +277,18 @@ def test_mujoco_counterfactual_copy_preserves_model_and_has_independent_state() 
     assert sim.plant.backend.joint_position_rad() == pytest.approx(original_position)
 
 
+def test_in_episode_mujoco_pose_reset_preserves_sensor_clock() -> None:
+    plant = MujocoJointPlant()
+    sim = ArmPainterSim(plant=plant)
+    plant.backend.step(0.125)
+    before = float(plant.backend.data.time)
+
+    plant.reset_state_preserving_clock(sim.actual_pose)
+
+    assert before > 0.0
+    assert plant.backend.data.time == pytest.approx(before)
+
+
 def test_mujoco_motor_forecast_uses_mujoco_dynamics_without_mutating_live_plant() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=32, motor_forecast_samples=1))
     sim.plant = MujocoJointPlant()

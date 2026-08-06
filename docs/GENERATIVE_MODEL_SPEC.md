@@ -1034,6 +1034,8 @@ research claims.
 | Q-PASSAGE | Slow posterior | `q(z_passage)` | `passage_inference.PassageBelief` | Mixed pseudo-likelihood |
 | Q-BRUSH | Material posterior | `q(load_t)q(black_fraction_t)` per dedicated brush | `brush_loading.BrushLoadingModel` | Compact bounded Gaussian moments; image-derived mark statistic not wired |
 | TRANS-BRUSH | Transition likelihood | preserve depletion/uncertainty or pure full reload | `brush_loading.py`, `arm_sim.Brush` | Explicit provisional approximation |
+| TRANS-ACTION-CAMERA | Inference schedule | `q^-(s_t+1)=Integral p_theta(s_t+1|s_t,a_t,m_t)q(s_t) ds_t`; then `q(s_t+1)` from a causally later camera likelihood | `spatial_inference.predict`, `arm_agent_driver.PendingActionCameraUpdate`, `web_runtime.py` | Mean-evaluated diagonal transition; post-physics capture gate rejects older frames; camera VFE logged separately |
+| MODE-PROVISIONAL-SENSOR | Integration profile | registered `q(s_t)`, `q(x_body,t)`, and `q(b_t)` initialize an independently instantiated fixed-prior MuJoCo/material model before EFE rescoring | `arm_agent_driver._planning_context`, `web_runtime.py` | Opt-in simulation-only: 8 candidates, depth 1, Cartesian IK support, 1 particle; exact live planner state denied; fixed grain/model/compliance priors are uncalibrated |
 | PREF-COVERAGE | Prior preference | `p*(C_T|stop)` | `preferences.py`, `efe_common.py` | Explicit terminal Beta |
 | PREF-COMP | Prior preference | energy from compression gap | `canvas_hierarchy.py`, `composition.py`, `spatial_efe.py` | Closed loop relocated, not removed: the initial stream is now the agent's own embodiment (flag-gated); best-of-family baseline. Definition unchanged |
 | PROP-BOOT | Proposal only (generative process) | body-feasible bootstrap mark proposals | `motion_manifold.MotionManifoldSampler` | Below the painting-policy boundary; declared flag `bootstrap_generator`; supplies no preference and selects no policy |
@@ -1059,12 +1061,17 @@ The following are explicit blockers or limitations, not hidden implementation
 details:
 
 1. Oracle diagnostic mode still uses exact simulator material state as its
-   observation; sensor mode uses the analytic camera likelihood but remains
-   blocked from live control by copied substrate-grain/contact/model forecast
-   context, collapsed brush history, and continuous action-conditioned
-   observation scheduling. MuJoCo q/qvel, independent material fields, and
+   observation; the default sensor mode uses the analytic camera likelihood but
+   remains blocked from live control by copied substrate-grain/contact/model forecast
+   context and collapsed brush history. The action-conditioned transition
+   prior/camera schedule is implemented, including capture-time gating and
+   automatic MuJoCo delivery polling. MuJoCo q/qvel, independent material fields, and
    compact brush initialization are posterior-conditioned when their respective
    snapshots are supplied; brush microstructure uses independent prior noise.
+   The opt-in `provisional-sensor-simulation-v0` profile removes the live
+   process container from policy forecasts by using a fresh MuJoCo/material
+   template with independent grain/brush seeds. It is a bounded integration
+   approximation, while the default remains fail-closed.
 2. Summary and pixel posteriors are diagonal Gaussian.
 3. Derived channels may be double-counted before deterministic projection. The
    compression gap and both baseline members are computed over all six material

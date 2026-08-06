@@ -96,13 +96,24 @@ planner state from `ArmPainterSim` raises `PrivilegedStateAccessError`.
 This is boundary enforcement, not completed sensor inference. The default
 therefore reports `sensor_equivalent=false` and `model_access_blocked=true`
 until belief-derived substrate-grain/contact/model forecast construction and a
-sufficient brush-history state replace the remaining process approximations,
-and the action-conditioned transition/camera update is scheduled in the live
-loop. Camera-conditioned painting, material-field, compact brush, and MuJoCo
-body-conditioned forecast initialization are now implemented, but do not
-weaken those remaining blocks. The old behavior is
+sufficient brush-history state replace the remaining process approximations.
+The action-conditioned transition/camera update is now scheduled: a pending
+action gates planning, the runtime records a post-physics capture boundary, and
+older frames are rejected before the camera likelihood. Camera-conditioned
+painting, material-field, compact brush, and MuJoCo body-conditioned forecast
+initialization are implemented, but do not weaken the remaining blocks. The old behavior is
 available only through the explicit
 `oracle_material_state` diagnostic mode.
+
+The opt-in `provisional-sensor-simulation-v0` profile is a third operational
+status, not a relaxation of the ledger. It keeps `sensor_equivalent` access
+semantics and continues to deny `_planner_state(ArmPainterSim)`, but allows a
+bounded policy loop after an initial registered camera factor, body posterior,
+and independent forecast template exist. The template is a fresh MuJoCo/model
+instance with independent substrate and brush seeds; posterior snapshots
+replace its body/material/compact-brush initial state. Diagnostics report
+`liveProcessStateDenied=true`, the template identifier, readiness blockers, and
+the simulation-only calibration status. The default remains fail-closed.
 
 ## 4. Temporary Oracle Baseline
 
@@ -243,6 +254,24 @@ contains state complexity, occlusion complexity, and expected negative log
 likelihood. Its precisions are XML-declared simulation priors pending physical
 calibration.
 
+For an executed sensor-path action, the driver first propagates the frozen
+spatial belief through `spatial-action-transition-prior-v0` and advances the
+compact brush depletion prior. Prediction creates no VFE record. After the
+physical step, the MuJoCo runtime registers the earliest admissible capture
+time and polls the camera process through its declared latency. Frames captured
+before that boundary are discarded even if delivered later. The first eligible
+registered exposure updates the material posterior, logs camera VFE, adds one
+sensor-derived transition to replay, and releases the planning gate. This is
+`action-conditioned-camera-update-v0`. The brush likelihood still lacks a
+camera-derived local deposition statistic, so its update stops at the
+transition prior.
+
+In the provisional runnable profile, each accepted action/camera pair is the
+only live transition target. The oracle bootstrap is disabled. The driver
+attempts one bounded dynamics update after insertion, which remains inert
+until replay reaches the declared batch size. Exact material coverage is used
+only by integration-test assertions as a simulator-only evaluation label.
+
 The `provisional-multiview-v4` acquisition contract assigns the owned OM-1
 with its 25 mm lens and A7R II with its 35 mm lens to separate oblique views at
 3840 x 2160. The Sony is provisionally configured for Super 35. Nominal
@@ -259,8 +288,9 @@ and visibility state may not select or populate it.
 
 ### 6.1 True pose and Cartesian geometry
 
-`ArmPainterSim.actual_pose` is the true link-side joint pose. The driver and
-stroke controllers use it directly for:
+`ArmPainterSim.actual_pose` is the true link-side joint pose. Conventional
+execution and safety code below the selected painting policy uses it directly
+for:
 
 - forward kinematics and tip position;
 - approach timing;
@@ -288,12 +318,15 @@ The native `JointPlant` contains exact:
 - inertia, friction, stiffness, backlash, coupling, and gravity parameters;
 - process-noise parameters and RNG state.
 
-The rollout container still receives these through a deep copy of
-`ArmPainterSim`. When the MuJoCo runtime supplies a `BodyBeliefSnapshot`, the
+The default/oracle rollout container still receives these through a deep copy
+of `ArmPainterSim`. When the MuJoCo runtime supplies a `BodyBeliefSnapshot`, the
 forecast resets joint position/velocity from that posterior and isolates future
 plant randomness rather than retaining the copied q/qvel/RNG continuation.
 Native oracle forecasts without a body belief still retain the copied dynamic
-state. Nominal plant parameters may legitimately become part of the agent's
+state. The provisional sensor simulation uses a freshly loaded independent
+MuJoCo model instead of the live container; its fixed parameters are declared
+model priors, not inferred parameters. Nominal plant parameters may
+legitimately become part of the agent's
 generative model, but reading the process instance's exact parameter and
 dynamic state is not parameter inference. Future work must distinguish:
 
@@ -325,7 +358,7 @@ particles sample its diagonal variance with an independent future-noise seed.
 The named `mujoco-ideal-sensor-body-likelihood-v0` profile is explicitly
 provisional simulation-only and not hardware-calibrated. This connection does
 not enable the live painting policy loop because its brush/contact/model and
-continuous-update boundaries remain oracle-conditioned. Motor current, bus
+native-adapter boundaries remain oracle-conditioned. Motor current, bus
 voltage,
 temperature, tool deflection, and faults remain explicitly unassimilated:
 faults belong to hard safety, while current and deflection require conditional
@@ -468,7 +501,7 @@ remain external to active-inference preferences.
 | Exact material arrays and aggregates | Sensor-only perception, physical deployment, sensor-driven hierarchy | `AI-103`, `AI-201` through `AI-204`, `AI-216` |
 | True pose and Cartesian tip | Sensor-driven embodiment and controller portability | `T-109`, `AI-201`, `AI-203`, `AI-204`, `AI-216` |
 | Exact contact state in control and learning | Calibrated contact inference and physical reliability learning | `T-109`, `AI-201`, `AI-203`, `AI-204`, `AI-216` |
-| Copied substrate grain/model snapshot, collapsed brush history, and native oracle dynamic/RNG fallback | Fully non-oracle embodied prediction; MuJoCo q/qvel, independent material fields, and compact brush state are posterior-conditioned when their snapshots are supplied | `T-109`, `AI-202`, `AI-203`, `AI-204`, `AI-216` |
+| Default/oracle copied substrate grain/model snapshot, collapsed brush history, and native oracle dynamic/RNG fallback | Fully calibrated non-oracle embodied prediction; provisional MuJoCo integration uses independent fixed context priors, while q/qvel, material fields, and compact brush state are posterior-conditioned | `T-109`, `AI-202`, `AI-203`, `AI-204`, `AI-216` |
 | Exact plant parameters | Identified dynamics or calibrated energetic prediction | `AI-107`, `T-109`, `T-106`, later calibration work |
 | Exact material delta in passage update | Sensor-driven passage belief | `AI-103`, `AI-203`, `AI-204`, `AI-207`, `AI-210`, `AI-216` |
 | Mixed truth and sensor telemetry | Reproducible hardware-comparable diagnostics | `T-105`, `T-106` |

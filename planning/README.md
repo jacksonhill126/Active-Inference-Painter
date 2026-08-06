@@ -66,9 +66,11 @@ q/qvel from a sensor-conditioned body posterior with independent future-noise
 seeds. Independent material fields now initialize from a frozen spatial
 posterior. Compact brush load/pigment now initializes from a frozen brush
 posterior, with bristle-scale variation drawn from an independent versioned
-prior. Copied substrate grain/model context, collapsed held-paint and
-persistent-bristle history, missing contact-to-compliance initialization, and
-unsampled body parameters remain explicit `baseline-oracle-v0` limitations.
+prior. The default/oracle container retains copied substrate grain/model
+context. The opt-in `provisional-sensor-simulation-v0` profile now uses an
+independent fixed-prior template and completes bounded repeated strokes, but
+collapsed held-paint/persistent-bristle history, missing compliance inference,
+and unsampled body parameters remain explicit limitations.
 S0 stabilizes schemas and provenance, not controller gains or mechanical
 design.
 Simulator migration improves the generative process and transfer testing; it

@@ -206,6 +206,24 @@ class SpatialActiveInferencePainter:
         self.belief = self.camera_likelihood.infer(self.belief, observation)
         return self.belief
 
+    def predict_action_prior(
+        self,
+        action: StrokeAction,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+        *,
+        previous: SpatialCanvasState | None = None,
+    ) -> SpatialCanvasState:
+        """Advance the material belief without treating a prediction as data."""
+
+        source = self.belief if previous is None else previous
+        self.belief = self.estimator.predict(
+            source,
+            action,
+            self.dynamics,
+            motor_primitive,
+        )
+        return self.belief
+
     def update_belief(
         self,
         previous_action: StrokeAction,

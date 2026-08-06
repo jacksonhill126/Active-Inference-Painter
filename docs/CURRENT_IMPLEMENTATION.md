@@ -576,12 +576,33 @@ priors are explicit in the XML and marked provisional.
 
 Physical HDMI acquisition, physical lens/capture calibration, and a learned
 camera encoder are not implemented. Sensor-equivalent control still fails
-closed because belief-derived brush/contact/model forecast construction and the
-action-conditioned transition-prior/camera-update loop are not yet scheduled
-continuously. The MuJoCo body posterior initializes forecast joint
+closed because belief-derived substrate/model and contact-compliance forecast
+construction, persistent brush history, and native sensor adaptation remain
+incomplete. The action-conditioned update clock is now implemented: a
+completed action creates `spatial-action-transition-prior-v0`, advances the
+compact brush depletion prior, and waits for a registered camera exposure
+captured after the runtime's post-physics boundary. The MuJoCo runtime polls
+through declared camera latency until that exposure is delivered; older frames
+cannot update the post-action belief. The MuJoCo body posterior initializes forecast joint
 position/velocity, and the frozen spatial posterior now initializes thickness,
 wetness, black mass, and surface tone, so those two initial-state slices no
 longer require exact process values.
+
+An explicit opt-in integration profile,
+`provisional-sensor-simulation-v0`, now runs this loop in MuJoCo without
+copying the live `ArmPainterSim` into policy forecasts. It waits for an initial
+camera likelihood and body posterior, uses a separately constructed MuJoCo
+plant plus independent grain/brush seeds, overwrites forecast joint/material/
+compact-brush slices from frozen posteriors, and repeats after each camera
+correction. Its command is
+`--plant-backend mujoco --enable-provisional-sensor-policy` (black tone is
+recommended while white-on-white thickness is unobservable). The bounded
+profile uses reduced native acquisition renders, 8 candidates, temporal depth
+1, Cartesian IK only, and one forecast particle. The resolution override is a
+simulation-throughput approximation, not an operational sensor-equivalent
+camera claim. The oracle bootstrap is disabled. This is a
+simulation-only integration baseline, not the default, a hardware-calibrated
+sensor model, or evidence of painting quality.
 
 `active_painter.camera_calibration` now supplies the first hardware
 calibration tool: a metric 11 x 8-inner-corner target generator and native-
@@ -629,17 +650,23 @@ a `SpatialCanvasState` replace copied thickness, wetness, black mass, and
 surface tone with belief samples. Particle zero is the posterior mean; later
 particles sample diagonal variance at the posterior grid, then use
 piecewise-constant upsampling and physical projection. This preserves spatial
-cell correlation and keeps coverage/contrast deterministic. The container
-also replaces copied brush loading and RNG continuation: a frozen
+cell correlation and keeps coverage/contrast deterministic. The legacy/oracle
+container also replaces copied brush loading and RNG continuation: a frozen
 `BrushLoadBelief` supplies load/pigment moments, and
 `brush-microstructure-prior-v0` supplies independent bristle-scale mark
 variation. Particle zero uses belief means and a deterministic representative
 microstructure; later particles sample both sources of uncertainty. Held paint
-and bristle history are still collapsed into the compact belief. The container
-still copies substrate grain and model parameters, and the live loop does not
-yet pair every executed-action transition prior with its delivered camera
-likelihood update. Those are the remaining fail-closed boundaries for painting
-policy inference.
+and bristle history are still collapsed into the compact belief. The oracle
+container still copies live substrate grain and model parameters; the
+provisional sensor simulation instead uses independent fixed prior values from
+its own freshly constructed model. Material prediction and
+camera correction now occur in causal order, with prediction producing no VFE
+and the camera update logging complexity and negative log likelihood
+separately. The brush camera update remains prior-only because no local
+mark-deposition observation statistic is connected. Those and the contact and
+native-adapter limitations are the remaining fail-closed boundaries for the
+default painting-policy mode. The bounded provisional mode accepts the named
+independent priors so integration can be exercised without live-state leakage.
 
 To reproduce the legacy upper-bound comparator, opt in explicitly:
 

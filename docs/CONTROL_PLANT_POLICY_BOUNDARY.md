@@ -39,9 +39,11 @@ from its mean and diagonal variance under an independent future-noise seed.
 The four independent material fields initialize from a frozen spatial
 posterior when supplied. Brush load/pigment initialize from a frozen brush
 belief, and microstructure uses an independent versioned prior rather than a
-copied RNG continuation. Copied substrate grain and model context remain
-oracle-conditioned, so the overall path is still an
-explicit `baseline-oracle-v0` diagnostic rather than a fully conforming
+copied RNG continuation. The default/oracle container still copies live
+substrate grain and model context. The opt-in
+`provisional-sensor-simulation-v0` path instead uses a fresh fixed-prior
+MuJoCo/material template with independent grain/brush seeds, so it can run a
+bounded integration loop without live-process copying. It is not a calibrated
 `ExecutionForecaster`. The canonical plant fields and actuator assignment live
 in `models/README.md` and
 `models/active_inference_painter.xml`.
@@ -93,11 +95,12 @@ that posterior for MuJoCo joint-state initialization and a frozen
 the posterior mean; later particles sample the declared diagonal variance at
 posterior-cell resolution. A frozen `BrushLoadBelief` similarly supplies
 load/pigment moments, and an independent `brush-microstructure-prior-v0`
-supplies unresolved mark variation. The current rollout container still copies
-substrate grain, contact/model context, and native dynamic state when no body
-posterior is supplied. Brush held paint and bristle history are collapsed by
-the compact belief. These are declared nonconformances and approximations, not
-bodily or material evidence.
+supplies unresolved mark variation. The default/oracle rollout container still
+copies substrate grain, contact/model context, and native dynamic state when
+no body posterior is supplied. The provisional sensor simulation replaces
+that live container with independent fixed priors but still collapses brush
+held paint/bristle history and compliance. These are declared
+nonconformances and approximations, not bodily or material evidence.
 
 ### Evaluation
 
@@ -178,8 +181,11 @@ could not possess.
 | MuJoCo forecast joint-state initialization | implemented from frozen `BodyBeliefSnapshot`; posterior mean plus diagonal particles and independent future-noise seed |
 | Material-field forecast initialization | implemented from frozen `SpatialCanvasState`; posterior mean plus diagonal particles, piecewise-constant cell upsampling, and physical projection |
 | Brush forecast initialization | implemented from frozen `BrushLoadBelief`; load/pigment mean plus diagonal particles and independent `brush-microstructure-prior-v0` samples |
+| Action-conditioned material update clock | implemented as `action-conditioned-camera-update-v0`; action transition prior, post-physics capture boundary, stale-frame rejection, automatic MuJoCo polling, then one registered camera posterior update |
+| Provisional sensor simulation | opt-in `provisional-sensor-simulation-v0`; live process state denied to policy inference, independent MuJoCo/material template, initial camera/body gate, bounded repeated-stroke profile |
 | MuJoCo body likelihood | explicit `mujoco-ideal-sensor-body-likelihood-v0`; provisional simulation-only, not hardware-calibrated |
-| Remaining forecast initialization | nonconforming copied substrate grain, contact/model context, collapsed brush history, plus native dynamic fallback; oracle diagnostic only |
+| Default/oracle remaining forecast initialization | nonconforming copied live substrate grain, contact/model context, collapsed brush history, plus native dynamic fallback; oracle diagnostic only |
+| Provisional fixed context priors | independent grain/brush seeds, freshly loaded fixed MJCF/model parameters, zero-history compliance; no live process copy, but uncalibrated and not a posterior |
 | MuJoCo forecast parameter uncertainty | not implemented; deterministic plant particles currently share the immutable MJCF model |
 | Contact-posterior initialization of brush compliance | not implemented; forecast provenance names this approximation |
 | Live proprioceptive posterior feeding forecasts | implemented for the MuJoCo runtime; native `PlantBackend` adapter remains open |
@@ -188,13 +194,15 @@ could not possess.
 The joint-state, four independent material-field, and compact brush parts of
 forecast initialization now accept posterior snapshots. The named camera,
 brush, and body likelihood profiles are numerical simulation assumptions, not
-measured camera, RobStride, or assembled-arm calibration. Diagnostics and
-research reports using forecast-driven painting policy inference must retain the
-`baseline-oracle-v0` label until contact/model initialization and unrepresented
-brush history are resolved and the action-conditioned observation loop is
-live. Selecting the MuJoCo execution backend removes the plant-family
-substitution and exact joint-state initialization, but not those remaining
-oracle dependencies.
+measured camera, RobStride, or assembled-arm calibration. The default remains
+fail-closed, and any path that copies the live process must retain the
+`baseline-oracle-v0` label. The explicit
+`provisional-sensor-simulation-v0` path instead runs from camera/body beliefs
+and an independently constructed fixed-prior model. It is a valid bounded
+integration test of process-state denial, but its collapsed brush history,
+zero-history compliance, fixed substrate/model parameters, single motor
+realization, and one-particle horizon prevent sensor-equivalent hardware or
+painting-quality claims.
 
 ## Verification
 

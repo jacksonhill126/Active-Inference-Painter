@@ -21,6 +21,10 @@ from .spatial_state import (
 
 
 SPATIAL_VARIATIONAL_INFERENCE_VERSION = "spatial-variational-state-v0"
+SPATIAL_TRANSITION_PRIOR_VERSION = "spatial-action-transition-prior-v0"
+SPATIAL_TRANSITION_PRIOR_CALIBRATION_STATUS = (
+    "provisional_simulation_trained_not_hardware_calibrated"
+)
 
 
 class SpatialTransitionModel(Protocol):
@@ -85,6 +89,36 @@ class SpatialVariationalStateEstimator:
         return posterior
 
     @torch.no_grad()
+    def predict(
+        self,
+        previous: SpatialCanvasState,
+        action: StrokeAction,
+        dynamics: SpatialTransitionModel,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+    ) -> SpatialCanvasState:
+        """Propagate q(s_t) through p_theta(s_t+1 | s_t, a_t, m_t).
+
+        This is a transition prior, not an observation update, so it does not
+        create or overwrite a VFE record. The next delivered camera likelihood
+        is responsible for the posterior update and its VFE decomposition.
+        """
+
+        prior_mean, prior_variance = self._transition_moments(
+            previous,
+            action,
+            dynamics,
+            motor_primitive,
+        )
+        return spatial_state_from_pixel_posterior(
+            prior_mean,
+            prior_variance,
+            self.cfg,
+            posterior_revision=previous.posterior_revision + 1,
+            inference_model_id=SPATIAL_TRANSITION_PRIOR_VERSION,
+            calibration_status=SPATIAL_TRANSITION_PRIOR_CALIBRATION_STATUS,
+        )
+
+    @torch.no_grad()
     def infer(
         self,
         previous: SpatialCanvasState,
@@ -93,43 +127,12 @@ class SpatialVariationalStateEstimator:
         dynamics: SpatialTransitionModel,
         motor_primitive: MotorPrimitiveLatent | None = None,
     ) -> SpatialCanvasState:
-        current_mean = pixel_material_from_state(previous)
-        current_variance = np.exp(np.clip(pixel_logvar_from_state(previous, self.cfg), -30.0, 20.0)).astype(np.float32)
-        prior_mean = current_mean.copy()
-        identity_variance = float(np.exp(np.clip(self.cfg.local_identity_logvar, -30.0, 20.0)))
-        prior_variance = current_variance + identity_variance
-
-        raster = rasterize_stroke_action(
+        prior_mean, prior_variance = self._transition_moments(
+            previous,
             action,
-            current_mean.shape[-1],
-            motor_primitive=motor_primitive,
-            config=self.cfg,
+            dynamics,
+            motor_primitive,
         )
-        if isinstance(dynamics, LocalSpatialDynamicsEnsemble):
-            bounds = local_patch_bounds_for_raster(raster, current_mean.shape[-1], self.cfg)
-            if bounds is not None:
-                row_slice, col_slice = bounds.slices()
-                material_t = torch.tensor(
-                    current_mean[:, row_slice, col_slice],
-                    device=self.device,
-                    dtype=torch.float32,
-                ).unsqueeze(0)
-                action_t = torch.tensor(
-                    raster[:, row_slice, col_slice],
-                    device=self.device,
-                    dtype=torch.float32,
-                ).unsqueeze(0)
-                mean_t, aleatoric_t, epistemic_t = dynamics.predictive_moments(material_t, action_t)
-                prior_mean[:, row_slice, col_slice] = mean_t[0].cpu().numpy()
-                prior_variance[:, row_slice, col_slice] = (
-                    aleatoric_t[0] + epistemic_t[0]
-                ).cpu().numpy() + current_variance[:, row_slice, col_slice]
-        else:
-            material_t = torch.tensor(current_mean, device=self.device, dtype=torch.float32).unsqueeze(0)
-            action_t = torch.tensor(raster, device=self.device, dtype=torch.float32).unsqueeze(0)
-            mean_t, aleatoric_t, epistemic_t = dynamics.predictive_moments(material_t, action_t)
-            prior_mean = mean_t[0].cpu().numpy()
-            prior_variance = (aleatoric_t[0] + epistemic_t[0]).cpu().numpy() + current_variance
 
         observed = pixel_material_from_state(observation)
         observation_variance = spatial_observation_variance(observed, self.cfg)
@@ -179,6 +182,76 @@ class SpatialVariationalStateEstimator:
             inference_model_id=SPATIAL_VARIATIONAL_INFERENCE_VERSION,
             calibration_status=observation.calibration_status,
         )
+
+    def _transition_moments(
+        self,
+        previous: SpatialCanvasState,
+        action: StrokeAction,
+        dynamics: SpatialTransitionModel,
+        motor_primitive: MotorPrimitiveLatent | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        current_mean = pixel_material_from_state(previous)
+        current_variance = np.exp(
+            np.clip(pixel_logvar_from_state(previous, self.cfg), -30.0, 20.0)
+        ).astype(np.float32)
+        prior_mean = current_mean.copy()
+        identity_variance = float(
+            np.exp(np.clip(self.cfg.local_identity_logvar, -30.0, 20.0))
+        )
+        prior_variance = current_variance + identity_variance
+
+        raster = rasterize_stroke_action(
+            action,
+            current_mean.shape[-1],
+            motor_primitive=motor_primitive,
+            config=self.cfg,
+        )
+        if isinstance(dynamics, LocalSpatialDynamicsEnsemble):
+            bounds = local_patch_bounds_for_raster(
+                raster,
+                current_mean.shape[-1],
+                self.cfg,
+            )
+            if bounds is not None:
+                row_slice, col_slice = bounds.slices()
+                material_t = torch.tensor(
+                    current_mean[:, row_slice, col_slice],
+                    device=self.device,
+                    dtype=torch.float32,
+                ).unsqueeze(0)
+                action_t = torch.tensor(
+                    raster[:, row_slice, col_slice],
+                    device=self.device,
+                    dtype=torch.float32,
+                ).unsqueeze(0)
+                mean_t, aleatoric_t, epistemic_t = dynamics.predictive_moments(
+                    material_t,
+                    action_t,
+                )
+                prior_mean[:, row_slice, col_slice] = mean_t[0].cpu().numpy()
+                prior_variance[:, row_slice, col_slice] = (
+                    aleatoric_t[0] + epistemic_t[0]
+                ).cpu().numpy() + current_variance[:, row_slice, col_slice]
+        else:
+            material_t = torch.tensor(
+                current_mean,
+                device=self.device,
+                dtype=torch.float32,
+            ).unsqueeze(0)
+            action_t = torch.tensor(
+                raster,
+                device=self.device,
+                dtype=torch.float32,
+            ).unsqueeze(0)
+            mean_t, aleatoric_t, epistemic_t = dynamics.predictive_moments(
+                material_t,
+                action_t,
+            )
+            prior_mean = mean_t[0].cpu().numpy()
+            prior_variance = (
+                aleatoric_t[0] + epistemic_t[0]
+            ).cpu().numpy() + current_variance
+        return prior_mean, np.clip(prior_variance, 1e-12, 1e6)
 
 
 def _diagonal_gaussian_kl(

@@ -6,7 +6,10 @@ import math
 import numpy as np
 import pytest
 
-from active_painter.arm_agent_driver import ArmActiveInferenceDriver
+from active_painter.arm_agent_driver import (
+    ACTION_CONDITIONED_CAMERA_UPDATE_VERSION,
+    ArmActiveInferenceDriver,
+)
 from active_painter.camera_geometry import CameraRigSpec, load_camera_rig
 from active_painter.camera_inference import (
     CAMERA_SPATIAL_LIKELIHOOD_VERSION,
@@ -19,7 +22,9 @@ from active_painter.camera_observation import (
     CameraObservationBundle,
 )
 from active_painter.config import PainterConfig, SPATIAL_MATERIAL_PLANNER_STATE_KIND
+from active_painter.env import StrokeAction
 from active_painter.spatial_state import SpatialCanvasState
+from active_painter.spatial_inference import SPATIAL_TRANSITION_PRIOR_VERSION
 
 
 def _prior(
@@ -49,6 +54,8 @@ def _frame(
     product_id: str = "global",
     center: tuple[float, float] | None = None,
     span: tuple[float, float] | None = None,
+    capture_time_s: float = 1.0,
+    available_time_s: float = 1.04,
 ) -> CameraFrame:
     pixels = np.asarray(value, dtype=np.float32)
     if pixels.ndim == 0:
@@ -60,8 +67,8 @@ def _frame(
         sequence=sequence,
         product_kind=product_kind,
         product_id=product_id,
-        capture_time_s=1.0,
-        available_time_s=1.04,
+        capture_time_s=capture_time_s,
+        available_time_s=available_time_s,
         calibration_revision=rig.version,
         observation_model=rig.observation_model,
         registration="canvas_plane_homography",
@@ -83,7 +90,14 @@ def _frame(
 
 
 def _bundle(*frames: CameraFrame) -> CameraObservationBundle:
-    return CameraObservationBundle(monotonic_time_s=1.04, frames=frames)
+    monotonic_time_s = max(
+        (frame.available_time_s for frame in frames),
+        default=1.04,
+    )
+    return CameraObservationBundle(
+        monotonic_time_s=monotonic_time_s,
+        frames=frames,
+    )
 
 
 def test_camera_likelihood_updates_visible_factors_and_logs_vfe() -> None:
@@ -288,3 +302,87 @@ def test_sensor_driver_accepts_camera_bundle_without_process_access() -> None:
     assert diagnostics["observationBoundary"]["cameraExposureCount"] == 1
     assert diagnostics["cameraVfe"]["version"] == CAMERA_SPATIAL_LIKELIHOOD_VERSION
     assert "body posterior" in diagnostics["observationBoundary"]["blockedReason"]
+
+
+def test_executed_action_prior_waits_for_causally_later_camera_exposure() -> None:
+    cfg = PainterConfig(
+        planner_state_kind=SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+        spatial_grid_size=8,
+        candidate_policies=2,
+        planning_horizon=1,
+    )
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+    rig = load_camera_rig()
+    previous = _prior(cfg, variance=1e-4)
+    driver.agent.belief = previous
+    driver.belief = previous
+    action = StrokeAction(0.25, 0.5, 0.75, 0.5, 0.1, 0.6, tone=1.0)
+    brush_revision = driver.brush_load_beliefs["black"].revision
+    replay_size = len(driver.agent.replay)
+
+    prior = driver.record_executed_action_transition(action)
+
+    assert prior.posterior_revision == previous.posterior_revision + 1
+    assert prior.inference_model_id == SPATIAL_TRANSITION_PRIOR_VERSION
+    assert driver.action_camera_update_pending is True
+    assert driver.action_camera_capture_boundary_required is True
+    assert driver.brush_load_beliefs["black"].revision == brush_revision + 1
+    assert len(driver.agent.replay) == replay_size
+
+    # No frame is admissible until the runtime records the physical completion
+    # boundary. A delivered pre-action exposure also remains inadmissible after
+    # the boundary is known.
+    before_boundary = _bundle(
+        _frame(rig, 0.4, sequence=5, capture_time_s=1.9, available_time_s=2.0)
+    )
+    assert driver.ingest_camera_observation(before_boundary) is prior
+    driver.register_action_camera_capture_boundary(2.0)
+    stale = _bundle(
+        _frame(rig, 0.4, sequence=6, capture_time_s=1.99, available_time_s=2.01)
+    )
+    assert driver.ingest_camera_observation(stale) is prior
+    assert driver.action_camera_update_pending is True
+
+    eligible = _bundle(
+        _frame(rig, 0.2, sequence=7, capture_time_s=2.0, available_time_s=2.04)
+    )
+    posterior = driver.ingest_camera_observation(eligible)
+
+    assert posterior.posterior_revision == prior.posterior_revision + 1
+    assert posterior.inference_model_id.startswith(
+        f"{ACTION_CONDITIONED_CAMERA_UPDATE_VERSION}:"
+        f"{SPATIAL_TRANSITION_PRIOR_VERSION}:"
+    )
+    assert driver.action_camera_update_pending is False
+    assert driver.action_transition_prior_count == 1
+    assert driver.action_camera_update_count == 1
+    assert driver.rejected_pre_action_camera_frames == 2
+    assert len(driver.agent.replay) == replay_size + 1
+    assert driver.trained_transitions == 1
+    assert driver.agent.last_camera_vfe is not None
+    assert driver.agent.last_camera_vfe.total == pytest.approx(
+        driver.agent.last_camera_vfe.complexity
+        + driver.agent.last_camera_vfe.negative_log_likelihood
+    )
+    diagnostics = driver.diagnostics()["observationBoundary"]["actionCameraLoop"]
+    assert diagnostics["pending"] is False
+    assert diagnostics["completedUpdateCount"] == 1
+    assert diagnostics["lastUpdate"]["brushCameraLikelihoodApplied"] is False
+
+    driver.ingest_camera_observation(
+        _bundle(
+            _frame(
+                rig,
+                0.2,
+                sequence=8,
+                capture_time_s=2.1,
+                available_time_s=2.14,
+            )
+        )
+    )
+    assert driver.action_camera_update_count == 1
+    assert len(driver.agent.replay) == replay_size + 1

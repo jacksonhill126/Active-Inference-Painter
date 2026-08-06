@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,8 @@ from PIL import Image
 
 from .arm_agent_driver import (
     OBSERVATION_ACCESS_MODE,
+    PROVISIONAL_SENSOR_SIMULATION_VERSION,
+    SENSOR_OBSERVATION_ACCESS_MODE,
     ArmActiveInferenceDriver,
 )
 from .arm_control import scripted_contact_pressure, scripted_pose
@@ -25,6 +27,12 @@ from .web_robot_model import load_robot_visual_model, retarget_legacy_robot_stat
 
 FOVEA_TRACE_INTERFACE_VERSION = "fovea-trace-v0"
 DEFAULT_FOVEA_TRACE_RETENTION_S = 10.0
+PROVISIONAL_SENSOR_NATIVE_RESOLUTION_OVERRIDES = {
+    "canvas_right_oblique": (640, 360),
+    "canvas_left_oblique": (640, 360),
+    "canvas_inspection_deployed": (640, 360),
+    "brush_standoff_overhead": (320, 240),
+}
 
 
 @dataclass(slots=True)
@@ -50,6 +58,7 @@ class WebSimRuntime:
     device: str | None = None
     plant_backend: str = "native"
     observation_access_mode: str = OBSERVATION_ACCESS_MODE
+    provisional_sensor_policy: bool = False
     fovea_trace_retention_s: float = DEFAULT_FOVEA_TRACE_RETENTION_S
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
@@ -76,10 +85,22 @@ class WebSimRuntime:
     )
     _next_camera_delivery_poll_time_s: float = field(default=0.0, init=False)
     _operator_fovea_sequence: int = field(default=0, init=False)
+    _initial_sensor_camera_pending: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.fovea_trace_retention_s) or self.fovea_trace_retention_s <= 0.0:
             raise ValueError("fovea_trace_retention_s must be finite and positive")
+        if self.provisional_sensor_policy and self.plant_backend != "mujoco":
+            raise ValueError(
+                "provisional sensor policy requires plant_backend='mujoco'"
+            )
+        if (
+            self.provisional_sensor_policy
+            and self.observation_access_mode != SENSOR_OBSERVATION_ACCESS_MODE
+        ):
+            raise ValueError(
+                "provisional sensor policy requires observation_access_mode='sensor_equivalent'"
+            )
         self.code_build = code_build_info()
         self.robot_model = load_robot_visual_model()
         sim_config = PainterConfig(
@@ -98,15 +119,39 @@ class WebSimRuntime:
         replay_capacity = 5_000 if self.planner_state_kind == "spatial_material" else 50_000
         driver_config = PainterConfig(
             canvas_size=64,
-            candidate_policies=32,
-            planning_horizon=4,
-            passage_proposal_mix=0.45,
-            passage_plan_proposal_mix=0.15,
+            # The provisional sensor profile is intentionally a bounded
+            # first-mark smoke configuration. It keeps the active-inference
+            # factorization intact while avoiding minutes of uncalibrated
+            # multi-particle motor forecasts before any camera-closed stroke
+            # has been demonstrated.
+            candidate_policies=8 if self.provisional_sensor_policy else 32,
+            planning_horizon=1 if self.provisional_sensor_policy else 4,
+            passage_proposal_mix=0.0 if self.provisional_sensor_policy else 0.45,
+            passage_plan_proposal_mix=(
+                0.0 if self.provisional_sensor_policy else 0.15
+            ),
             # Now the PRIOR MEAN of the policy-precision Gamma belief
             # (beta0 = alpha0 / 0.35), not a hand-tuned softmax temperature.
             policy_precision=0.35,
             batch_size=32,
-            motor_forecast_candidates=2,
+            motor_forecast_candidates=1 if self.provisional_sensor_policy else 2,
+            motor_forecast_samples=1 if self.provisional_sensor_policy else 3,
+            motor_realization_kinds=(
+                ("cartesian_ik",)
+                if self.provisional_sensor_policy
+                else (
+                    "cartesian_ik",
+                    "joint_spline",
+                    "elbow_pivot",
+                    "upper_arm_roll_positive",
+                    "upper_arm_roll_negative",
+                )
+            ),
+            motor_realization_candidate_limit=(
+                1
+                if self.provisional_sensor_policy
+                else 5
+            ),
             planner_state_kind=self.planner_state_kind,
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,
@@ -131,7 +176,32 @@ class WebSimRuntime:
             on_stop=self._complete_stopped_painting,
             device=self.device,
             observation_access_mode=self.observation_access_mode,
+            provisional_sensor_policy=self.provisional_sensor_policy,
         )
+        if self.provisional_sensor_policy:
+            from .mujoco_backend import MujocoJointPlant
+
+            forecast_config = replace(
+                driver_config,
+                # The camera posterior currently lives at planner-cell
+                # resolution. Matching the independent canvas to that support
+                # prevents a forecast-only 64x64 hidden field from entering a
+                # 16x16 sensor belief during the provisional smoke loop.
+                canvas_size=self.spatial_grid_size,
+                canvas_grain_seed=driver_config.canvas_grain_seed + 1_000_003,
+                brush_seed=driver_config.brush_seed + 2_000_003,
+            )
+            forecast_template = ArmPainterSim(
+                config=forecast_config,
+                plant=MujocoJointPlant(),
+            )
+            self.agent_driver.configure_sensor_forecast_template(
+                forecast_template,
+                template_id=(
+                    f"{PROVISIONAL_SENSOR_SIMULATION_VERSION}:"
+                    "independent-mujoco-model-and-material-priors-v0"
+                ),
+            )
         if self.plant_backend == "mujoco":
             self.body_estimator = BodyStateEstimator(
                 self.sim.plant.backend.capabilities,
@@ -142,6 +212,7 @@ class WebSimRuntime:
             self.agent_enabled = False
         self.telemetry_log = ArmTelemetryLog(max_samples=self.telemetry_max_samples)
         self.agent_driver.reset(self.sim)
+        self._restart_initial_sensor_camera_sync()
         self._record_telemetry(force=True)
 
     def start(self) -> None:
@@ -157,6 +228,7 @@ class WebSimRuntime:
         if self._camera_process is not None:
             self._camera_process.close()
             self._camera_process = None
+        self.agent_driver.close_sensor_forecast_template()
         close = getattr(self.sim.plant, "close", None)
         if callable(close):
             close()
@@ -239,6 +311,13 @@ class WebSimRuntime:
         self.body_estimator.reset()
         self._update_body_posterior()
 
+    def _restart_initial_sensor_camera_sync(self) -> None:
+        self._initial_sensor_camera_pending = bool(
+            self.provisional_sensor_policy
+            and self.observation_access_mode == SENSOR_OBSERVATION_ACCESS_MODE
+        )
+        self._next_camera_delivery_poll_time_s = 0.0
+
     def command(self, data: dict[str, Any]) -> dict[str, Any]:
         action = str(data.get("type", ""))
         with self._lock:
@@ -263,11 +342,16 @@ class WebSimRuntime:
                 self.telemetry_log.clear()
                 self._next_telemetry_time = 0.0
                 self.agent_driver.reset(self.sim)
+                self._restart_initial_sensor_camera_sync()
                 self._record_telemetry(force=True)
             elif action == "clear":
                 self.sim.canvas.clear()
+                self.sim.unload_all_brushes()
+                if self._camera_process is not None:
+                    self._camera_process.reset()
                 self._clear_fovea_trace()
                 self.agent_driver.reset(self.sim)
+                self._restart_initial_sensor_camera_sync()
             elif action == "clear_telemetry":
                 self.telemetry_log.clear()
                 self._next_telemetry_time = self.sim_time
@@ -283,9 +367,9 @@ class WebSimRuntime:
                         "ok": False,
                         "error": (
                             "active inference is fail-closed: camera-conditioned "
-                            "painting inference is connected, but sensor-conditioned "
-                            "body initialization and the action-conditioned live "
-                            "observation loop are not"
+                            "painting inference, MuJoCo body initialization, and the "
+                            "action-conditioned camera clock are connected, but "
+                            "remaining forecast/controller latents are not"
                         ),
                     }
                 self.agent_enabled = not self.agent_enabled
@@ -394,6 +478,13 @@ class WebSimRuntime:
                     "consumptionBoundary": (
                         "registered global/foveal products only; native and "
                         "edge products ignored by painting-state likelihood"
+                    ),
+                    "postActionScheduling": (
+                        "automatic polling until a causally post-action registered "
+                        "camera exposure completes the pending material update"
+                    ),
+                    "initialSensorCameraPending": (
+                        self._initial_sensor_camera_pending
                     ),
                     "foveation": self._foveation_state(),
                 },
@@ -587,10 +678,19 @@ class WebSimRuntime:
         return pair
 
     def _advance_pending_camera_delivery(self) -> None:
-        if self.plant_backend != "mujoco" or not self._pending_fovea_delivery_deadlines:
+        action_update_pending = self.agent_driver.action_camera_update_pending
+        if self.plant_backend != "mujoco" or (
+            not self._pending_fovea_delivery_deadlines
+            and not action_update_pending
+            and not self._initial_sensor_camera_pending
+        ):
             return
         _, backend = self._camera_backend()
         now = float(backend.data.time)
+        if self.agent_driver.action_camera_capture_boundary_required:
+            # Called after the physical step that completed the action, so this
+            # timestamp excludes exposures captured during the action itself.
+            self.agent_driver.register_action_camera_capture_boundary(now)
         self._pending_fovea_delivery_deadlines = {
             request_id: deadline
             for request_id, deadline in self._pending_fovea_delivery_deadlines.items()
@@ -598,11 +698,17 @@ class WebSimRuntime:
         }
         if (
             not self._pending_fovea_delivery_deadlines
-            or now + 1e-12 < self._next_camera_delivery_poll_time_s
-        ):
+            and not self.agent_driver.action_camera_update_pending
+            and not self._initial_sensor_camera_pending
+        ) or now + 1e-12 < self._next_camera_delivery_poll_time_s:
             return
         self._next_camera_delivery_poll_time_s = now + 1.0 / 120.0
         self._camera_observations_locked()
+        if (
+            self._initial_sensor_camera_pending
+            and self.agent_driver.camera_observation_count > 0
+        ):
+            self._initial_sensor_camera_pending = False
 
     def _record_fovea_observations(self, observation: Any) -> None:
         from .camera_observation import FOVEA_CANVAS_PRODUCT
@@ -702,7 +808,13 @@ class WebSimRuntime:
         if self._camera_process is None:
             from .camera_observation import CameraObservationProcess
 
-            self._camera_process = CameraObservationProcess()
+            self._camera_process = CameraObservationProcess(
+                native_resolution_overrides=(
+                    PROVISIONAL_SENSOR_NATIVE_RESOLUTION_OVERRIDES
+                    if self.provisional_sensor_policy
+                    else None
+                )
+            )
         return self._camera_process, backend
 
     @staticmethod
@@ -726,9 +838,13 @@ class WebSimRuntime:
         self.sim.reset_pose()
         self._reset_body_estimator()
         self.sim.canvas.clear()
+        if self._camera_process is not None:
+            self._camera_process.reset()
+        self._clear_fovea_trace()
         self.sim.intended_contact_pressure = 0.0
         self.sim.refresh_contact()
         self.agent_driver.reset(self.sim)
+        self._restart_initial_sensor_camera_sync()
 
     def _save_canvas_snapshot(self, painting_index: int) -> Path:
         archive = Path(self.archive_dir)
