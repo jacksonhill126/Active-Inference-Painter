@@ -21,6 +21,7 @@ from .brush_loading import (
     BrushLoadingModel,
     BrushPreparationInference,
 )
+from .body_inference import BodyVFEComponents
 from .config import (
     PainterConfig,
     SPATIAL_MATERIAL_PLANNER_STATE_KIND,
@@ -61,6 +62,7 @@ from .policies import (
     policy_stop_log_prior,
 )
 from .passage_inference import PassageBelief, infer_passage_observation
+from .plant_interface import BodyBeliefSnapshot
 from .proposal import (
     BASE_TARGET_NAME,
     BELIEF_SOURCE_SUMMARY,
@@ -190,6 +192,8 @@ class ArmActiveInferenceDriver:
     checkpoint_architecture: dict[str, object] = field(default_factory=dict, init=False)
     last_stop_blocked: bool = field(default=False, init=False)
     last_execution_forecast: ExecutionForecast | None = field(default=None, init=False)
+    body_belief: BodyBeliefSnapshot | None = field(default=None, init=False)
+    body_vfe: BodyVFEComponents | None = field(default=None, init=False)
     last_motor_rejections: int = field(default=0, init=False)
     last_motor_primitive_candidates: int = field(default=0, init=False)
     planning: bool = field(default=False, init=False)
@@ -197,6 +201,7 @@ class ArmActiveInferenceDriver:
     last_planning_profile: dict[str, object] = field(default_factory=dict, init=False)
     _planning_profile_current: dict[str, object] | None = field(default=None, init=False)
     _planning_forecast_cache: dict[tuple[object, ...], ExecutionForecast] = field(default_factory=dict, init=False)
+    _planning_body_belief: BodyBeliefSnapshot | None = field(default=None, init=False)
     _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
@@ -904,6 +909,7 @@ class ArmActiveInferenceDriver:
             self.last_planning_profile = {}
             self._planning_profile_current = None
             self._planning_forecast_cache = {}
+            self._planning_body_belief = None
             self._planning_started_at = None
             self._pending_current = None
             self._pending_stopped = False
@@ -991,6 +997,21 @@ class ArmActiveInferenceDriver:
             for factor in (self.agent.last_camera_vfe.factors if self.agent.last_camera_vfe else ())
         )
         return posterior
+
+    def ingest_body_belief(
+        self,
+        belief: BodyBeliefSnapshot,
+        vfe: BodyVFEComponents,
+    ) -> None:
+        """Accept only the sensor estimator's posterior and VFE diagnostics."""
+
+        if belief.joint_names != JOINT_NAMES:
+            raise ValueError(
+                "Body belief joint names/order must match yaw, pitch, roll, elbow."
+            )
+        with self._planner_lock:
+            self.body_belief = belief
+            self.body_vfe = vfe
 
     def _require_oracle_diagnostic_mode(self, operation: str) -> None:
         if self._observation_boundary_blocked:
@@ -1320,6 +1341,7 @@ class ArmActiveInferenceDriver:
             self._planning_started_at = time.perf_counter()
             self._pending_error = None
             body_snapshot = copy.deepcopy(sim)
+            self._planning_body_belief = copy.deepcopy(self.body_belief)
             generation = self._planner_generation
         thread = threading.Thread(
             target=self._background_local_passage_plan,
@@ -1456,6 +1478,7 @@ class ArmActiveInferenceDriver:
             self._transition_to_learn = None
             state = self._planner_state(sim)
             body_snapshot = copy.deepcopy(sim)
+            self._planning_body_belief = copy.deepcopy(self.body_belief)
             self.planning = True
             self._planning_started_at = time.perf_counter()
             self._pending_error = None
@@ -1723,11 +1746,24 @@ class ArmActiveInferenceDriver:
                 round(brush_belief.load_mean, 6),
                 round(brush_belief.black_fraction_mean, 6),
             )
+        body_key: tuple[object, ...] = ()
+        if self._planning_body_belief is not None:
+            body_key = (
+                self._planning_body_belief.inference_model_id,
+                self._planning_body_belief.posterior_revision,
+            )
         return (
             tuple(float(x) for x in action.vector())
             + (primitive_key, preparation_key)
             + belief_key
+            + body_key
         )
+
+    def _body_forecast_noise_seed(self) -> int:
+        belief = self._planning_body_belief
+        if belief is None:
+            return 0
+        return int(104_729 + 1_009 * belief.posterior_revision)
 
     def _refresh_composition_diagnostics(self, policy: Policy | None = None) -> None:
         # Cached so UI polling never runs a model forward concurrently with
@@ -2178,6 +2214,8 @@ class ArmActiveInferenceDriver:
                 summary_fn,
                 dt=1.0 / 45.0,
                 max_workers=workers,
+                initial_body_belief=self._planning_body_belief,
+                independent_noise_seed=self._body_forecast_noise_seed(),
             )
             self._profile_add_seconds("motorForecastSeconds", time.perf_counter() - started)
             self._profile_increment("motorForecastCount", len(computed))
@@ -2864,6 +2902,8 @@ class ArmActiveInferenceDriver:
                 or brush_preparation.kind == "reload"
             ),
             brush_belief=brush_belief,
+            initial_body_belief=self._planning_body_belief,
+            independent_noise_seed=self._body_forecast_noise_seed(),
         )
 
     def diagnostics(self) -> dict[str, Any]:
@@ -2920,6 +2960,7 @@ class ArmActiveInferenceDriver:
                 ),
             }
         oracle_mode = self.observation_access_mode == ORACLE_OBSERVATION_ACCESS_MODE
+        body_connected = self.body_belief is not None and self.body_vfe is not None
         return {
             "enabled": self.enabled,
             "stopped": self.stopped,
@@ -2938,6 +2979,7 @@ class ArmActiveInferenceDriver:
                     self.agent, SpatialActiveInferencePainter
                 ),
                 "cameraExposureCount": self.camera_observation_count,
+                "bodyPosteriorConnected": body_connected,
                 "materialStateAccess": (
                     "exact VerticalCanvas fields and deterministic transforms; "
                     "explicit diagnostic-only exception"
@@ -2945,17 +2987,33 @@ class ArmActiveInferenceDriver:
                     else "denied"
                 ),
                 "bodyForecastInitialization": (
-                    "deep copy of ArmPainterSim process state; explicit "
-                    "diagnostic-only exception"
-                    if oracle_mode
-                    else "denied"
+                    (
+                        f"{self.body_belief.inference_model_id} posterior revision "
+                        f"{self.body_belief.posterior_revision}; diagonal joint "
+                        "posterior and independent future-noise seed"
+                    )
+                    if body_connected and self.body_belief is not None
+                    else (
+                        "deep copy of ArmPainterSim process state; explicit "
+                        "diagnostic-only exception"
+                        if oracle_mode
+                        else "denied"
+                    )
                 ),
                 "blockedReason": (
                     (
-                        "camera-conditioned painting posterior is implemented; "
-                        "sensor-conditioned body posterior and motor-forecast "
-                        "initialization, plus action-conditioned live observation "
-                        "scheduling, are not connected"
+                        (
+                            "camera-conditioned painting posterior and "
+                            "sensor-conditioned body posterior/forecast "
+                            "initialization are implemented; belief-derived "
+                            "material forecast construction and action-conditioned "
+                            "live observation scheduling are not connected"
+                            if body_connected
+                            else "camera-conditioned painting posterior is implemented; "
+                            "sensor-conditioned body posterior and motor-forecast "
+                            "initialization, plus action-conditioned live observation "
+                            "scheduling, are not connected"
+                        )
                         if isinstance(self.agent, SpatialActiveInferencePainter)
                         else "camera likelihood requires the spatial_material planner; "
                         "summary mode is obsolete"
@@ -2994,6 +3052,10 @@ class ArmActiveInferenceDriver:
             "motorPrimitiveCandidateCount": self.last_motor_primitive_candidates,
             "motorPrimitivePosteriorMass": motor_posterior_mass,
             "executionForecast": self._execution_forecast_diagnostics(),
+            "bodyPosterior": (
+                asdict(self.body_belief) if self.body_belief is not None else None
+            ),
+            "bodyVFE": asdict(self.body_vfe) if self.body_vfe is not None else None,
             "stateRepresentationLifecycle": (
                 {
                     "kind": SUMMARY_PLANNER_STATE_KIND,

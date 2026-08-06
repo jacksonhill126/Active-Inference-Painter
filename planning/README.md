@@ -61,9 +61,12 @@ controller retarget, and a selectable execution backend in the `S0-S2` support
 track. The draft fixes RobStride 03 at `yaw`/`pitch` and RobStride 02 at
 `roll`/`elbow`; it is not yet a calibrated hardware twin. Counterfactual motor
 forecasts now preserve the selected plant, including independent MuJoCo rollout
-state when MuJoCo is selected. Exact-process initialization remains an explicit
-`baseline-oracle-v0` limitation until the body posterior is connected. S0
-stabilizes schemas and provenance, not controller gains or mechanical design.
+state when MuJoCo is selected. The MuJoCo runtime now initializes forecast
+q/qvel from a sensor-conditioned body posterior with independent future-noise
+seeds. Copied material/brush/model context, missing contact-to-compliance
+initialization, and unsampled body parameters remain explicit
+`baseline-oracle-v0` limitations. S0 stabilizes schemas and provenance, not
+controller gains or mechanical design.
 Simulator migration improves the generative process and transfer testing; it
 does not by itself validate active inference.
 

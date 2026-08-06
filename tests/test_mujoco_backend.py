@@ -9,6 +9,7 @@ pytest.importorskip("mujoco")
 from active_painter.arm_control import ik_pose_for_canvas_point
 from active_painter.arm_agent_driver import canvas_summary_state
 from active_painter.arm_sim import ArmPainterSim
+from active_painter.body_inference import MUJOCO_BODY_LIKELIHOOD, BodyStateEstimator
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.mujoco_backend import MujocoJointPlant, MujocoPlantBackend
@@ -282,6 +283,11 @@ def test_mujoco_motor_forecast_uses_mujoco_dynamics_without_mutating_live_plant(
     sim.reset_pose()
     initial_state = sim.plant.backend.state_snapshot()
     action = StrokeAction(0.38, 0.32, 0.62, 0.68, 0.08, 0.7, 1.0)
+    estimator = BodyStateEstimator(
+        sim.plant.backend.capabilities,
+        MUJOCO_BODY_LIKELIHOOD,
+    )
+    body_belief = estimator.update(sim.plant.backend.read_sensors())
 
     assert sim.plant.forecast_current_scale == pytest.approx(
         sim.plant.backend._model_peak_current
@@ -301,13 +307,18 @@ def test_mujoco_motor_forecast_uses_mujoco_dynamics_without_mutating_live_plant(
         action,
         canvas_summary_state,
         dt=1.0 / 45.0,
+        initial_body_belief=body_belief,
+        independent_noise_seed=401,
     )
 
     assert forecast.forecast_plant_backend_id == "mujoco-robstride-electromechanical-v4"
-    assert forecast.forecast_initialization == (
-        "baseline-oracle-v0 exact MuJoCo process snapshot"
-    )
+    assert forecast.forecast_initialization.startswith("BodyBeliefSnapshot revision 0")
     assert "exact MJCF dynamics/contact" in forecast.forecast_approximation
+    assert "contact probability/force" in forecast.forecast_approximation
+    assert forecast.body_inference_model_id == body_belief.inference_model_id
+    assert forecast.body_calibration_status == (
+        "provisional_simulation_only_not_hardware_calibrated"
+    )
     assert forecast.proprioceptive_observation_dim == 27
     assert np.isfinite(forecast.proprioceptive_mean).all()
     assert sim.plant.backend.data.time == pytest.approx(initial_state["time"])
@@ -339,8 +350,20 @@ def test_web_runtime_can_select_direct_mujoco_state() -> None:
     assert state["counterfactualPlant"]["backendId"] == (
         "mujoco-robstride-electromechanical-v4"
     )
-    assert state["counterfactualPlant"]["initialization"] == (
-        "baseline-oracle-v0 exact MuJoCo process snapshot"
+    assert state["counterfactualPlant"]["initialization"].startswith(
+        "BodyBeliefSnapshot revision 8"
+    )
+    assert state["agent"]["observationBoundary"]["bodyPosteriorConnected"] is True
+    assert state["agent"]["bodyPosterior"]["posterior_revision"] == 8
+    assert state["agent"]["bodyPosterior"]["inference_model_id"].startswith(
+        "body-inference-v0:mujoco-ideal-sensor-body-likelihood-v0"
+    )
+    assert state["agent"]["bodyPosterior"]["calibration_status"] == (
+        "provisional_simulation_only_not_hardware_calibrated"
+    )
+    assert state["agent"]["bodyVFE"]["total"] == pytest.approx(
+        state["agent"]["bodyVFE"]["complexity"]
+        + state["agent"]["bodyVFE"]["negative_log_likelihood"]
     )
     assert state["robot"]["mode"] == "mujoco_direct"
     assert (

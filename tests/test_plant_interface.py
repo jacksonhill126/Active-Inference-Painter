@@ -128,3 +128,14 @@ def test_counterfactual_request_starts_from_belief_and_independent_noise_seed() 
     assert request.independent_noise_seed == 912
     assert not hasattr(request, "sim")
     assert not hasattr(request, "rng_state")
+
+    with pytest.raises(ValueError, match="independent_noise_seed"):
+        CounterfactualRolloutRequest(
+            request_id="forecast-negative-seed",
+            initial_belief=_belief(),
+            stroke_intent=request.stroke_intent,
+            motor_primitive_kind="elbow_pivot",
+            model_snapshot_id="native-abstract-v0:weights-9",
+            sample_count=1,
+            independent_noise_seed=-1,
+        )

@@ -93,6 +93,29 @@ class BodyLikelihoodSpec:
             )
 
 
+# Explicit simulation-only assumptions for the current ideal MuJoCo sensor
+# packet. These are numerical likelihood/process floors, not measurements of
+# either RobStride encoders or the assembled arm. Keeping them in a named,
+# versioned object prevents the runtime from silently inventing precision.
+MUJOCO_BODY_LIKELIHOOD = BodyLikelihoodSpec(
+    model_id="mujoco-ideal-sensor-body-likelihood-v0",
+    calibration_status="provisional_simulation_only_not_hardware_calibrated",
+    encoder_position_std_rad=1e-3,
+    encoder_velocity_std_rad_s=1e-2,
+    position_process_std_rad_sqrt_s=5e-4,
+    velocity_process_std_rad_s_per_sqrt_s=5e-2,
+    initial_velocity_std_rad_s=1.0,
+    initial_contact_probability=0.05,
+    contact_onset_rate_hz=0.2,
+    contact_break_rate_hz=2.0,
+    contact_switch_true_positive=0.999,
+    contact_switch_false_positive=0.001,
+    contact_force_std_n=0.05,
+    initial_contact_force_std_n=5.0,
+    contact_force_process_std_n_sqrt_s=1.0,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BodyVFEFactor:
     """One likelihood factor's contribution to variational free energy."""
@@ -258,6 +281,10 @@ class BodyStateEstimator:
                 else None
             ),
             posterior_revision=0,
+            inference_model_id=(
+                f"{BODY_INFERENCE_VERSION}:{self.likelihood.model_id}"
+            ),
+            calibration_status=self.likelihood.calibration_status,
         )
 
     def _transition_prior(
@@ -327,6 +354,8 @@ class BodyStateEstimator:
             contact_force_mean_n=force_mean,
             contact_force_variance_n2=force_variance,
             posterior_revision=previous.posterior_revision + 1,
+            inference_model_id=previous.inference_model_id,
+            calibration_status=previous.calibration_status,
         )
 
     def update(self, packet: PhysicalSensorPacket) -> BodyBeliefSnapshot:
@@ -413,6 +442,8 @@ class BodyStateEstimator:
             contact_force_mean_n=force_mean,
             contact_force_variance_n2=force_variance,
             posterior_revision=prior.posterior_revision,
+            inference_model_id=prior.inference_model_id,
+            calibration_status=prior.calibration_status,
         )
         complexity = float(sum(factor.complexity for factor in factors))
         negative_log_likelihood = float(

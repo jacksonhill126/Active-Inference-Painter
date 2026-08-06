@@ -42,13 +42,24 @@ Keep these four concepts distinct in code, documentation, and status reports:
 Realized execution and counterfactual motor prediction must preserve the
 selected plant: native execution forecasts through `native-abstract-v0`, while
 MuJoCo execution forecasts through independent MuJoCo data under
-`mujoco-robstride-electromechanical-v4`. The current driver still initializes
-both from an exact process snapshot and therefore permits forecast-driven
-policy inference only in the explicit `baseline-oracle-v0` diagnostic. MuJoCo
-body-parameter uncertainty is not yet sampled. Never describe these forecasts
-as sensor-conditioned, hardware-calibrated, or sufficient for embodiment
-claims. Never state that no specific motors have been selected without
-explicitly limiting that statement to the native abstract plant.
+`mujoco-robstride-electromechanical-v4`. In the MuJoCo runtime,
+`BodyStateEstimator` now conditions forecast joint position and velocity on
+the latest `PhysicalSensorPacket`; particle zero uses the posterior mean and
+later particles sample its declared diagonal variance with future plant noise
+isolated from the live process RNG. The named likelihood is explicitly
+`provisional_simulation_only_not_hardware_calibrated`.
+
+This is only a body-state initialization correction. Forecasts still begin by
+copying the process material/brush/model snapshot, the inferred contact
+probability/force is not yet mapped into MuJoCo brush-compliance state, native
+runtime execution has no `PlantBackend` sensor adapter, and MuJoCo
+body-parameter uncertainty is not sampled. Forecast-driven painting policy
+inference therefore remains fail-closed outside the explicit
+`baseline-oracle-v0` diagnostic. Describe the joint initialization as
+sensor-conditioned, never the complete motor/material forecast as
+sensor-equivalent, hardware-calibrated, or sufficient for embodiment claims.
+Never state that no specific motors have been selected without explicitly
+limiting that statement to the native abstract plant.
 
 The canonical hardware-plant record is `models/README.md` plus
 `models/active_inference_painter.xml`; the semantic boundary is

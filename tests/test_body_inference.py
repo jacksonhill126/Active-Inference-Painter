@@ -8,6 +8,7 @@ import pytest
 
 from active_painter.body_inference import (
     BODY_INFERENCE_VERSION,
+    MUJOCO_BODY_LIKELIHOOD,
     BodyLikelihoodSpec,
     BodyStateEstimator,
 )
@@ -101,6 +102,12 @@ def test_body_posterior_fuses_transition_prior_with_permitted_observations() -> 
     assert BODY_INFERENCE_VERSION == "body-inference-v0"
     assert first.posterior_revision == 0
     assert second.posterior_revision == 1
+    assert first.inference_model_id == (
+        "body-inference-v0:test-body-likelihood-v0"
+    )
+    assert first.calibration_status == "synthetic_test_only"
+    assert second.inference_model_id == first.inference_model_id
+    assert second.calibration_status == first.calibration_status
     assert second.monotonic_time_s == pytest.approx(0.01)
     assert second.joint_names == JOINTS
     second_observation = np.asarray((0.42, -0.61, 0.21, 1.02))
@@ -229,3 +236,16 @@ def test_missing_optional_contact_channels_leave_contact_at_transition_prior() -
 def test_body_likelihood_requires_declared_nondefault_precision() -> None:
     with pytest.raises(ValueError, match="encoder_position_std_rad"):
         replace(_spec(), encoder_position_std_rad=0.0)
+
+
+def test_mujoco_body_likelihood_is_explicitly_provisional_simulation_only() -> None:
+    spec = MUJOCO_BODY_LIKELIHOOD
+
+    assert spec.model_id == "mujoco-ideal-sensor-body-likelihood-v0"
+    assert spec.calibration_status == (
+        "provisional_simulation_only_not_hardware_calibrated"
+    )
+    assert spec.encoder_position_std_rad > 0.0
+    assert spec.encoder_velocity_std_rad_s > 0.0
+    assert spec.position_process_std_rad_sqrt_s > 0.0
+    assert spec.velocity_process_std_rad_s_per_sqrt_s > 0.0

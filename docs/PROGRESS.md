@@ -6,7 +6,7 @@ has failed, and what comes next. Detailed task state remains in
 
 ## Current Snapshot
 
-Snapshot date: 2026-08-04.
+Snapshot date: 2026-08-05.
 
 Phase: M1 formal baseline audit, with bounded M2 sensor-path and simulation
 support work proceeding in parallel. M1 has not passed its lock decision.
@@ -22,6 +22,9 @@ The current prototype can:
 - infer a compact encoder/contact body posterior through an isolated estimator;
 - preserve the selected native or MuJoCo plant in counterfactual motor
   forecasts, with independent MuJoCo rollout state and explicit provenance;
+- feed the MuJoCo sensor packet into that body estimator and initialize
+  forecast joint position/velocity from a frozen posterior revision with
+  independent future-noise seeds;
 - verify the AI-104/AI-105 VFE/EFE acceptance matrix against independent
   analytic, enumerated, and fine-grid references;
 - checkpoint learned state and export telemetry;
@@ -52,14 +55,14 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 448 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, documentation-contract, and MuJoCo forecast-alignment coverage |
+| Current test collection | 451 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body-posterior forecast, documentation-contract, and MuJoCo alignment coverage |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
 | Current deterministic CI gate | 164 passed; 20.82 seconds observed | Includes both proposal suites and all files listed in `.github/workflows/ci.yml`; two expected obsolete-summary warnings |
 | Pre-AI111 complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
-| MuJoCo forecast alignment | 60 focused motor, plant, MuJoCo, documentation, and runtime tests passed | Selected-plant copying, independent rollout state, live-state non-mutation, contact/material execution, provenance, and the fail-closed sensor boundary are covered |
+| Body/MuJoCo forecast alignment | 90 affected motor, plant, MuJoCo, web-runtime, documentation, and boundary tests passed in 278.69 seconds | Posterior sampling, frozen planning revisions, selected-plant copying, independent rollout noise, live-state non-mutation, provenance/VFE, and the fail-closed sensor boundary are covered |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -79,10 +82,27 @@ captured in a run manifest.
    major runtime phases, and capture three manifested baseline replicas.
 5. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-6. After M1, connect the body posterior to motor forecasts and continuously
+6. Replace copied material/brush/contact forecast initialization with declared
+   beliefs, map the contact posterior into brush compliance, and continuously
    pair executed-action transition priors with delivered camera updates.
 
 ## Progress Log
+
+### 2026-08-05: body-posterior motor-forecast initialization
+
+- Connected the MuJoCo physical sensor packet to `BodyStateEstimator` at
+  runtime initialization and after every physics step. Body VFE complexity and
+  negative log likelihood remain separately logged.
+- Each planning pass freezes one `BodyBeliefSnapshot`; motor particle zero uses
+  the posterior q/qvel mean and later particles sample its declared diagonal
+  uncertainty under an independent seed. Forecasts cannot continue the live
+  native process RNG.
+- Added version/calibration provenance to body snapshots and execution
+  forecasts. The current MuJoCo likelihood is explicitly provisional
+  simulation-only and not hardware-calibrated.
+- Kept the default policy loop fail-closed. Exact material/brush/model context,
+  contact-to-compliance initialization, continuous camera scheduling, and
+  MuJoCo parameter uncertainty remain open.
 
 ### 2026-08-04: selected-plant motor forecast alignment
 
@@ -93,9 +113,10 @@ captured in a run manifest.
 - Proprioceptive forecasts use physical MuJoCo positions, targets, joint limits,
   current, torque, velocity, contact, and per-joint RobStride/MJCF scales.
 - Added explicit backend, initialization, and approximation provenance. The
-  path remains `baseline-oracle-v0` because it starts from exact process state;
-  MuJoCo body-parameter uncertainty and live body-posterior initialization are
-  still open.
+  historical path at this checkpoint remained `baseline-oracle-v0` because it
+  started from exact process state; MuJoCo body-parameter uncertainty was also
+  open. The 2026-08-05 entry supersedes the joint-state-initialization part of
+  that limitation.
 
 ### 2026-08-04: formal-reference progress, proposal recovery, and AI-111 result
 

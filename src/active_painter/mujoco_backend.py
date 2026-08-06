@@ -523,6 +523,16 @@ class MujocoJointPlant:
     def select_forecast_noise_sample(self, sample_index: int) -> None:
         _ = sample_index
 
+    def initialize_forecast_randomness(
+        self,
+        independent_noise_seed: int,
+        sample_index: int,
+    ) -> None:
+        # The current MJCF plant is deterministic. Accept and isolate the seed
+        # now so adding declared MuJoCo parameter/process particles later does
+        # not require another forecast-boundary change.
+        _ = independent_noise_seed, sample_index
+
     def _legacy_point_from_physical(self, point_m: np.ndarray) -> np.ndarray:
         canvas = self.robot_model["canvas"]
         source_y = self.robot_model["compatibility"]["sourceCanvasContactY"]
@@ -613,6 +623,35 @@ class MujocoJointPlant:
         self._physical_target_deg = target
         self._sequence = 0
         self._sync_telemetry()
+
+    def initialize_forecast_state(
+        self,
+        joint_position_rad: np.ndarray,
+        joint_velocity_rad_s: np.ndarray,
+    ) -> ArmPose:
+        """Initialize physical MuJoCo state from an agent body-posterior draw."""
+
+        position = np.asarray(joint_position_rad, dtype=np.float64)
+        velocity = np.asarray(joint_velocity_rad_s, dtype=np.float64)
+        if position.shape != (len(JOINT_NAMES),) or velocity.shape != (
+            len(JOINT_NAMES),
+        ):
+            raise ValueError("Forecast body state must contain one value per joint.")
+        limits = np.asarray(self.backend.capabilities.position_limits_rad)
+        position = np.clip(position, limits[:, 0], limits[:, 1])
+        self.backend.set_state(
+            position,
+            joint_velocity_rad_s=velocity,
+            control_rad=position,
+        )
+        self._physical_target_deg = {
+            name: float(np.rad2deg(position[index]))
+            for index, name in enumerate(JOINT_NAMES)
+        }
+        self._logical_pose = self._logical_pose_from_backend()
+        self._sequence = 0
+        self._sync_telemetry()
+        return self._logical_pose
 
     def step(
         self,

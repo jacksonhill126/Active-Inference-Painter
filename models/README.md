@@ -51,14 +51,19 @@ maps realized tip motion back into the existing canvas coordinates. Policy
 selection and the material process are unchanged.
 
 Counterfactual motor forecasts now preserve the selected backend. Under MuJoCo,
-each policy particle receives independent `MjData` initialized from the current
-MuJoCo snapshot while sharing the immutable
+each policy particle receives independent `MjData` while sharing the immutable
 `mujoco-robstride-electromechanical-v4` model. Forecast current, torque,
 velocity, and acceleration channels use per-joint RobStride/MJCF normalization
-rather than one generic native scale. This removes the native-versus-MuJoCo
-plant substitution, but it is still a `baseline-oracle-v0` exact-state
-initialization: a sensor-conditioned body posterior and MuJoCo body-parameter
-particles remain unimplemented.
+rather than one generic native scale. In the MuJoCo runtime, the latest encoder,
+contact-switch, and contact-force packet updates
+`body-inference-v0:mujoco-ideal-sensor-body-likelihood-v0`; joint position and
+velocity forecast particles start from that posterior and an independent
+future-noise seed. The likelihood is explicitly provisional simulation-only,
+not hardware-calibrated. Contact belief is not yet mapped into the brush
+compression/flexure state, material and brush forecast context is still copied
+from the process, and MuJoCo body-parameter particles remain unimplemented.
+Those remaining oracle dependencies keep painting policy inference in the
+`baseline-oracle-v0` diagnostic.
 
 ## Direct-Mount Actuator Assignment
 

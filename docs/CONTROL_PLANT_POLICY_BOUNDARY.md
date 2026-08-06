@@ -32,10 +32,13 @@ claims.
 Realized execution and counterfactual prediction preserve the selected plant.
 Native execution forecasts with `native-abstract-v0`; MuJoCo execution
 forecasts with independent data under
-`mujoco-robstride-electromechanical-v4`. The current driver still initializes
-those forecasts from exact process state, so this matched-plant path remains an
-explicit `baseline-oracle-v0` diagnostic rather than a conforming
-belief-conditioned `ExecutionForecaster`. The canonical plant fields and
+`mujoco-robstride-electromechanical-v4`. The MuJoCo runtime now updates a
+`BodyStateEstimator` from physical sensor packets and freezes that posterior
+for each planning pass. Motor particles initialize joint position/velocity
+from its mean and diagonal variance under an independent future-noise seed.
+The containing material/brush/model snapshot remains oracle-conditioned, so
+the overall path is still an explicit `baseline-oracle-v0` diagnostic rather
+than a fully conforming `ExecutionForecaster`. The canonical plant fields and
 actuator assignment live in `models/README.md` and
 `models/active_inference_painter.xml`.
 
@@ -81,7 +84,10 @@ agent-facing interface.
 
 State estimation transforms sensor history and transition priors into a
 `BodyBeliefSnapshot`. Planning and counterfactual motor prediction consume
-that posterior, not the live generative-process object.
+that posterior for MuJoCo joint-state initialization. The current rollout
+container still copies material, brush, contact/model context from the live
+generative-process object; this is a declared nonconformance, not body
+evidence.
 
 ### Evaluation
 
@@ -159,21 +165,30 @@ could not possess.
 | Native realized-execution path | implemented; legacy direct `JointPlant` loop, not yet a `PlantBackend` adapter |
 | MuJoCo realized-execution path | implemented and selectable; `PlantBackend` in SI units |
 | Selected-plant motor forecast | implemented; native-to-native and MuJoCo-to-MuJoCo with independent rollout state and explicit provenance |
-| Current motor forecast initialization | nonconforming exact-process snapshot; oracle diagnostic only |
+| MuJoCo forecast joint-state initialization | implemented from frozen `BodyBeliefSnapshot`; posterior mean plus diagonal particles and independent future-noise seed |
+| MuJoCo body likelihood | explicit `mujoco-ideal-sensor-body-likelihood-v0`; provisional simulation-only, not hardware-calibrated |
+| Remaining forecast initialization | nonconforming copied material, brush, contact/model context; oracle diagnostic only |
 | MuJoCo forecast parameter uncertainty | not implemented; deterministic plant particles currently share the immutable MJCF model |
-| Live proprioceptive posterior feeding forecasts | not implemented |
+| Contact-posterior initialization of brush compliance | not implemented; forecast provenance names this approximation |
+| Live proprioceptive posterior feeding forecasts | implemented for the MuJoCo runtime; native `PlantBackend` adapter remains open |
 | Hardware backend | not implemented |
 
-Migration of the runtime forecast path depends on the M2 sensor package,
-observation likelihood, and compact state estimator. Until then, diagnostics
-and research reports using forecast-driven policy inference must retain the
-`baseline-oracle-v0` label. Selecting the MuJoCo execution backend removes the
-plant-family substitution, but it does not remove the exact-state
-initialization limitation.
+The joint-state part of the runtime forecast path now crosses the M2 sensor
+boundary. The named likelihood/profile is a numerical simulation assumption,
+not measured RobStride or assembled-arm calibration. Diagnostics and research
+reports using forecast-driven painting policy inference must retain the
+`baseline-oracle-v0` label until material/brush/contact initialization is
+belief-derived and the action-conditioned observation loop is live. Selecting
+the MuJoCo execution backend removes the plant-family substitution and exact
+joint-state initialization, but not those remaining oracle dependencies.
 
 ## Verification
 
 `tests/test_plant_interface.py` verifies joint-order and SI-unit validation,
 sensor packet shape checks, the absence of simulator-truth/process fields from
 agent-facing records, and belief-conditioned counterfactual requests with an
-independent noise seed.
+independent noise seed. `tests/test_body_inference.py`,
+`tests/test_stroke_execution.py`, and `tests/test_mujoco_backend.py` verify
+estimator provenance, posterior-particle initialization, independence from the
+live process RNG/state, MuJoCo plant preservation, and separate body-VFE
+diagnostics.

@@ -246,6 +246,47 @@ class JointPlant:
             self.telemetry.actuator_angle_deg[name] = float(getattr(pose.clipped(), name))
             self.telemetry.encoder_angle_deg[name] = float(getattr(pose.clipped(), name))
 
+    def initialize_forecast_state(
+        self,
+        joint_position_rad: np.ndarray,
+        joint_velocity_rad_s: np.ndarray,
+    ) -> ArmPose:
+        """Initialize native forecast state from a sampled body posterior."""
+
+        position = np.asarray(joint_position_rad, dtype=np.float64)
+        velocity = np.asarray(joint_velocity_rad_s, dtype=np.float64)
+        if position.shape != (len(JOINT_NAMES),) or velocity.shape != (
+            len(JOINT_NAMES),
+        ):
+            raise ValueError("Forecast body state must contain one value per joint.")
+        pose = ArmPose(
+            **{
+                name: float(np.rad2deg(position[index]))
+                for index, name in enumerate(JOINT_NAMES)
+            }
+        ).clipped()
+        self.reset_state(pose)
+        clipped_position = pose.radians()
+        for index, name in enumerate(JOINT_NAMES):
+            self.velocity[name] = float(velocity[index])
+            self.motor_velocity[name] = float(velocity[index])
+            self.motor_angle[name] = float(clipped_position[name])
+            self.telemetry.actuator_velocity_rad_s[name] = float(velocity[index])
+            self.telemetry.encoder_velocity_rad_s[name] = float(velocity[index])
+        return pose
+
+    def initialize_forecast_randomness(
+        self,
+        independent_noise_seed: int,
+        sample_index: int,
+    ) -> None:
+        """Start future process noise independently of the live process RNG."""
+
+        seed = np.random.SeedSequence(
+            [int(independent_noise_seed), int(sample_index), 0x4E415449]
+        )
+        self._rng = np.random.default_rng(seed)
+
     def select_forecast_noise_sample(self, sample_index: int) -> None:
         """Choose a reproducible independent continuation for a rollout particle."""
 

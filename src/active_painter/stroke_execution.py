@@ -11,6 +11,7 @@ from .arm_control import ik_pose_for_canvas_point
 from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES, clip_scalar
 from .brush_loading import BrushLoadBelief
 from .env import StrokeAction
+from .plant_interface import BodyBeliefSnapshot
 from .policies import MotorPrimitiveLatent
 
 
@@ -85,6 +86,9 @@ class ExecutionForecast:
     forecast_plant_backend_id: str = "native-abstract-v0"
     forecast_initialization: str = "baseline-oracle-v0 exact native process snapshot"
     forecast_approximation: str = "native representative plant"
+    body_posterior_revision: int | None = None
+    body_inference_model_id: str | None = None
+    body_calibration_status: str | None = None
 
     def diagnostics(self, *, include_state_fields: bool = True) -> dict[str, object]:
         omitted = {"next_state_mean", "next_state_variance", "canvas_delta_mean"}
@@ -481,7 +485,12 @@ _JITTERED_BODY_PARAMETERS = (
 )
 
 
-def _jitter_body_parameters(working: ArmPainterSim, noise_sample_index: int) -> None:
+def _jitter_body_parameters(
+    working: ArmPainterSim,
+    noise_sample_index: int,
+    *,
+    independent_noise_seed: int | None = None,
+) -> None:
     """Perturb the forecast body model per rollout particle.
 
     The deep-copied plant represents the agent's belief about its own body;
@@ -495,7 +504,17 @@ def _jitter_body_parameters(working: ArmPainterSim, noise_sample_index: int) -> 
     fraction = float(working.config.body_param_jitter_fraction)
     if fraction <= 0.0 or noise_sample_index <= 0:
         return
-    rng = np.random.default_rng(9173 + 31 * int(noise_sample_index))
+    rng = np.random.default_rng(
+        9173 + 31 * int(noise_sample_index)
+        if independent_noise_seed is None
+        else np.random.SeedSequence(
+            [
+                int(independent_noise_seed),
+                int(noise_sample_index),
+                0x50415241,
+            ]
+        )
+    )
     sigma = float(np.log1p(max(0.0, fraction)))
     for name in _JITTERED_BODY_PARAMETERS:
         if not hasattr(working.plant, name):
@@ -557,6 +576,56 @@ def _forecast_joint_limit_proximity(
     )
 
 
+def _initialize_from_body_belief(
+    working: ArmPainterSim,
+    belief: BodyBeliefSnapshot,
+    *,
+    independent_noise_seed: int,
+    sample_index: int,
+) -> None:
+    """Sample the declared diagonal body posterior into forecast plant state."""
+
+    if belief.joint_names != JOINT_NAMES:
+        raise ValueError(
+            "Body belief joint names/order must match yaw, pitch, roll, elbow."
+        )
+    if independent_noise_seed < 0:
+        raise ValueError("independent_noise_seed must be non-negative.")
+    position_mean = np.asarray(belief.joint_position_mean_rad, dtype=np.float64)
+    velocity_mean = np.asarray(belief.joint_velocity_mean_rad_s, dtype=np.float64)
+    if sample_index == 0:
+        position = position_mean
+        velocity = velocity_mean
+    else:
+        rng = np.random.default_rng(
+            np.random.SeedSequence(
+                [
+                    int(independent_noise_seed),
+                    int(sample_index),
+                    0x424F4459,
+                ]
+            )
+        )
+        position = rng.normal(
+            position_mean,
+            np.sqrt(np.asarray(belief.joint_position_variance_rad2)),
+        )
+        velocity = rng.normal(
+            velocity_mean,
+            np.sqrt(np.asarray(belief.joint_velocity_variance_rad2_s2)),
+        )
+    initializer = getattr(working.plant, "initialize_forecast_state", None)
+    if not callable(initializer):
+        raise TypeError(
+            "Selected forecast plant cannot initialize from BodyBeliefSnapshot."
+        )
+    logical_pose = initializer(position, velocity)
+    working.actual_pose = logical_pose
+    working.target_pose = logical_pose
+    working.intended_contact_pressure = 0.0
+    working.refresh_contact()
+
+
 def _forecast_stroke_execution_once(
     sim: ArmPainterSim,
     action: StrokeAction,
@@ -568,13 +637,37 @@ def _forecast_stroke_execution_once(
     noise_sample_index: int = 0,
     brush_reload: bool = True,
     brush_belief: BrushLoadBelief | None = None,
+    initial_body_belief: BodyBeliefSnapshot | None = None,
+    independent_noise_seed: int = 0,
 ) -> ExecutionForecast:
     timing = timing or adaptive_stroke_timing(sim, action)
+    if independent_noise_seed < 0:
+        raise ValueError("independent_noise_seed must be non-negative.")
     controller = controller or controller_for_motor_primitive(motor_primitive)
     motor_primitive_kind = "cartesian_ik" if motor_primitive is None else motor_primitive.kind
     working = copy.deepcopy(sim)
-    working.plant.select_forecast_noise_sample(noise_sample_index)
-    _jitter_body_parameters(working, noise_sample_index)
+    if initial_body_belief is None:
+        working.plant.select_forecast_noise_sample(noise_sample_index)
+    else:
+        randomness = getattr(working.plant, "initialize_forecast_randomness", None)
+        if not callable(randomness):
+            raise TypeError(
+                "Selected forecast plant cannot isolate future process noise."
+            )
+        randomness(independent_noise_seed, noise_sample_index)
+        _initialize_from_body_belief(
+            working,
+            initial_body_belief,
+            independent_noise_seed=independent_noise_seed,
+            sample_index=noise_sample_index,
+        )
+    _jitter_body_parameters(
+        working,
+        noise_sample_index,
+        independent_noise_seed=(
+            independent_noise_seed if initial_body_belief is not None else None
+        ),
+    )
     before_state = summary_fn(working)
     working.select_brush(action.tone)
     working.deposition_amount = action.amount
@@ -822,6 +915,30 @@ def _forecast_stroke_execution_once(
         ]
     )
 
+    plant_initialization = str(
+        getattr(
+            working.plant,
+            "counterfactual_initialization",
+            "baseline-oracle-v0 exact process snapshot",
+        )
+    )
+    plant_approximation = str(
+        getattr(
+            working.plant,
+            "counterfactual_approximation",
+            "unversioned plant forecast approximation",
+        )
+    )
+    if initial_body_belief is not None:
+        plant_initialization = (
+            f"BodyBeliefSnapshot revision {initial_body_belief.posterior_revision}; "
+            "diagonal joint posterior with independent future-noise seed"
+        )
+        plant_approximation = (
+            f"{plant_approximation}; contact probability/force are not yet "
+            "mapped into brush-compliance latent state"
+        )
+
     return ExecutionForecast(
         next_state_mean=after_state.astype(np.float32),
         next_state_variance=variance,
@@ -863,19 +980,22 @@ def _forecast_stroke_execution_once(
                 getattr(working.plant, "backend_id", "native-abstract-v0"),
             )
         ),
-        forecast_initialization=str(
-            getattr(
-                working.plant,
-                "counterfactual_initialization",
-                "baseline-oracle-v0 exact process snapshot",
-            )
+        forecast_initialization=plant_initialization,
+        forecast_approximation=plant_approximation,
+        body_posterior_revision=(
+            initial_body_belief.posterior_revision
+            if initial_body_belief is not None
+            else None
         ),
-        forecast_approximation=str(
-            getattr(
-                working.plant,
-                "counterfactual_approximation",
-                "unversioned plant forecast approximation",
-            )
+        body_inference_model_id=(
+            initial_body_belief.inference_model_id
+            if initial_body_belief is not None
+            else None
+        ),
+        body_calibration_status=(
+            initial_body_belief.calibration_status
+            if initial_body_belief is not None
+            else None
         ),
     )
 
@@ -891,6 +1011,8 @@ def forecast_stroke_execution(
     rollout_samples: int | None = None,
     brush_reload: bool = True,
     brush_belief: BrushLoadBelief | None = None,
+    initial_body_belief: BodyBeliefSnapshot | None = None,
+    independent_noise_seed: int = 0,
 ) -> ExecutionForecast:
     """Monte Carlo predictive density over canvas and proprioceptive outcomes."""
 
@@ -910,6 +1032,8 @@ def forecast_stroke_execution(
             noise_sample_index=index,
             brush_reload=brush_reload,
             brush_belief=brush_belief,
+            initial_body_belief=initial_body_belief,
+            independent_noise_seed=independent_noise_seed,
         )
         for index in range(sample_count)
     ]
@@ -993,6 +1117,8 @@ def forecast_stroke_executions_batch(
     dt: float = 1.0 / 90.0,
     rollout_samples: int | None = None,
     max_workers: int = 1,
+    initial_body_belief: BodyBeliefSnapshot | None = None,
+    independent_noise_seed: int = 0,
 ) -> list[ExecutionForecast]:
     """Schedule independent motor likelihoods without changing their physics.
 
@@ -1030,6 +1156,8 @@ def forecast_stroke_executions_batch(
             rollout_samples=rollout_samples,
             brush_reload=brush_reload,
             brush_belief=brush_belief,
+            initial_body_belief=initial_body_belief,
+            independent_noise_seed=independent_noise_seed,
         )
 
     worker_count = min(len(request_list), max(1, int(max_workers)))

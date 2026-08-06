@@ -597,6 +597,8 @@ async function pollState() {
   document.getElementById("btnAgent").classList.toggle("active", state.agentEnabled);
   const efe = state.agent?.efe || {};
   const vfe = state.agent?.vfe || {};
+  const bodyPosterior = state.agent?.bodyPosterior || {};
+  const bodyVfe = state.agent?.bodyVFE || {};
   const executionForecast = state.agent?.executionForecast || {};
   const motorPrimitive = state.agent?.executingMotorPrimitive || {};
   const belief = state.agent?.belief || {};
@@ -668,6 +670,13 @@ async function pollState() {
     row("Transition model", state.agent?.transitionModel || "-"),
     row("VFE units", vfe.units || "-"),
     row("VFE approximation", vfe.approximation || "-"),
+    row("Body posterior model", bodyPosterior.inference_model_id || "-"),
+    row("Body posterior revision", String(bodyPosterior.posterior_revision ?? "-")),
+    row("Body calibration", bodyPosterior.calibration_status || "-"),
+    row(
+      "Body VFE",
+      `${num(bodyVfe.total)} = ${num(bodyVfe.complexity)} complexity + ${num(bodyVfe.negative_log_likelihood)} negative log likelihood`
+    ),
     row("Agent phase", agentPhaseLabel(state.agent)),
     row("Current planner time", `${num(state.agent?.currentPlanningSeconds)} s`),
     row("Last planner time", `${num(state.agent?.lastPlanningSeconds)} s`),

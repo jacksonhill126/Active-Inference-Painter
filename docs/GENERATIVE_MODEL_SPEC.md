@@ -33,14 +33,16 @@ measurements a physical robot could obtain.
 The live runtime now defaults to the fail-closed `sensor-boundary-v0`: it
 does not run policy inference, learning, or oracle bootstrap. A fixed-camera
 likelihood and spatial posterior now exist, as does a separate body estimator;
-the latter has not yet replaced exact simulator initialization in motor
-forecasts, and current/deflection factors remain incomplete.
+the MuJoCo runtime now uses the latter to replace exact joint-position/velocity
+initialization in motor forecasts. Material/brush/contact forecast context and
+current/deflection factors remain incomplete.
 `oracle_material_state` remains an explicit diagnostic-only opt-in. The
 complete access audit is maintained in
 `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`.
 
-A first non-oracle M2 body-inference factorization is implemented but is not
-yet connected to painting policy inference. For each joint it uses
+A first non-oracle M2 body-inference factorization is implemented and connected
+to MuJoCo motor-forecast joint-state initialization, but not to live painting
+policy execution. For each joint it uses
 
 ```text
 p(q_t | q_(t-1), dq_(t-1))  diagonal constant-velocity Gaussian prior
@@ -64,6 +66,15 @@ transition and observation precisions must be supplied in a versioned
 voltage, temperature, deflection, and fault samples do not enter this
 likelihood yet. This is a declared incomplete factorization, not evidence that
 the full sensor-equivalent posterior exists.
+
+At runtime, `mujoco-ideal-sensor-body-likelihood-v0` supplies explicit
+simulation-only precision/process floors. Its calibration status is
+`provisional_simulation_only_not_hardware_calibrated`. Each planning pass
+freezes one posterior revision; rollout particle zero uses its mean and later
+particles sample the diagonal joint-state variance. Future native process noise
+is seeded independently of the live process. Contact probability/force is not
+yet mapped into the MuJoCo brush-compliance latent, and forecast material/brush
+state still comes from the copied process snapshot.
 
 This specification is "executable" in the limited engineering sense that every
 factor and free-energy term maps to a named implementation location. It does
@@ -91,8 +102,9 @@ new camera posterior but not throughout the live controller:
 - controller and hard-safety code may use process state below policy
   selection;
 - oracle painting inference receives exact derived material state; sensor mode
-  may assimilate registered camera pixels but remains blocked from policy
-  execution by body-forecast initialization;
+  may assimilate registered camera pixels and initialize MuJoCo joint forecasts
+  from the body posterior, but remains blocked from policy execution by copied
+  material/brush/contact forecast context and incomplete continuous scheduling;
 - visualization and evaluation receive additional process truth.
 
 The active-inference painting boundary begins at candidate painting policies
@@ -1038,8 +1050,9 @@ details:
 
 1. Oracle diagnostic mode still uses exact simulator material state as its
    observation; sensor mode uses the analytic camera likelihood but remains
-   blocked from live control by body-forecast initialization and continuous
-   action-conditioned observation scheduling.
+   blocked from live control by copied material/brush/contact forecast context
+   and continuous action-conditioned observation scheduling. MuJoCo forecast
+   q/qvel initialization is now sensor-conditioned.
 2. Summary and pixel posteriors are diagonal Gaussian.
 3. Derived channels may be double-counted before deterministic projection. The
    compression gap and both baseline members are computed over all six material

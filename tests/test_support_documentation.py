@@ -43,6 +43,12 @@ def test_support_documents_do_not_restore_superseded_mujoco_status() -> None:
         "counterfactual motor forecasts still deep-copy `native-abstract-v0`",
         "counterfactual motor forecasts currently use the native abstract plant",
         "counterfactual motor forecasts still use a deep-copied native plant",
+        "body posterior is not connected to motor-forecast",
+        "does not yet initialize motor forecasts",
+        "sensor-conditioned body-state initialization remains future work",
+        "both oracle paths start from exact process state",
+        "forecast initialization remains `baseline-oracle-v0` until m2 connects",
+        "native abstract body remains the declared counterfactual forecast approximation",
     )
 
     for path in SUPPORT_DOCUMENTS:

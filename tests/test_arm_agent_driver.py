@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import shutil
@@ -6,6 +7,8 @@ import time
 import numpy as np
 import pytest
 import torch
+
+import active_painter.arm_agent_driver as arm_agent_driver_module
 
 from active_painter.arm_control import ik_pose_for_canvas_point
 from active_painter.arm_agent_driver import (
@@ -17,11 +20,13 @@ from active_painter.arm_agent_driver import (
     pose_for_execution,
 )
 from active_painter.arm_sim import ArmPainterSim, ArmPose
+from active_painter.body_inference import BodyVFEComponents
 from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
 from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
 from active_painter.precision_beliefs import LEDGER_KEYS, POLICY_PRECISION_KEY
+from active_painter.plant_interface import BodyBeliefSnapshot
 from active_painter.spatial_agent import SpatialActiveInferencePainter
 from active_painter.spatial_state import SpatialCanvasState
 from active_painter.stroke_execution import ExecutionForecast, StrokeTiming, adaptive_stroke_timing
@@ -645,6 +650,78 @@ def test_active_inference_driver_diagnostics_with_execution_forecast_are_json_se
     assert forecast["state_vector_dim"] == 6
     assert forecast["canvas_delta_abs_mean"] == 0.0
     assert "retained for inference" in forecast["state_fields_omitted"]
+
+
+def test_motor_forecast_uses_one_frozen_body_posterior_per_planning_pass(
+    monkeypatch,
+) -> None:
+    cfg = PainterConfig(canvas_size=24, motor_forecast_candidates=1)
+    sim = ArmPainterSim(cfg)
+    driver = oracle_driver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+
+    def belief(revision: int) -> BodyBeliefSnapshot:
+        return BodyBeliefSnapshot(
+            monotonic_time_s=float(revision),
+            joint_names=("yaw", "pitch", "roll", "elbow"),
+            joint_position_mean_rad=(0.0, -0.8, 0.0, 1.7),
+            joint_position_variance_rad2=(1e-4,) * 4,
+            joint_velocity_mean_rad_s=(0.0,) * 4,
+            joint_velocity_variance_rad2_s2=(1e-3,) * 4,
+            contact_probability=0.1,
+            contact_force_mean_n=0.0,
+            contact_force_variance_n2=0.01,
+            posterior_revision=revision,
+            inference_model_id="body-inference-v0:driver-test-v0",
+            calibration_status="synthetic_test_only",
+        )
+
+    vfe = BodyVFEComponents(
+        total=0.0,
+        complexity=0.0,
+        negative_log_likelihood=0.0,
+        expected_log_likelihood=0.0,
+        factors=(),
+        used_observations=("encoder_position_rad", "encoder_velocity_rad_s"),
+        unassimilated_observations=(),
+    )
+    frozen = belief(5)
+    driver.ingest_body_belief(frozen, vfe)
+    driver._planning_body_belief = copy.deepcopy(driver.body_belief)
+    driver.ingest_body_belief(belief(6), vfe)
+    action = StrokeAction(0.4, 0.45, 0.6, 0.55, 0.05, 0.6, 1.0)
+    policy = Policy(
+        (action, StrokeAction.stop_action()),
+        motor_primitive=MotorPrimitiveLatent("cartesian_ik"),
+    )
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def fake_batch(*args, **kwargs):
+        captured.update(kwargs)
+        return [sentinel]
+
+    monkeypatch.setattr(
+        arm_agent_driver_module,
+        "forecast_stroke_executions_batch",
+        fake_batch,
+    )
+    result = driver._forecast_motor_realizations(
+        sim,
+        action,
+        [policy],
+        canvas_summary_state,
+        {},
+    )
+
+    assert result == [sentinel]
+    assert captured["initial_body_belief"] == frozen
+    assert captured["independent_noise_seed"] == 104_729 + 1_009 * 5
+    assert driver.body_belief is not None
+    assert driver.body_belief.posterior_revision == 6
 
 
 def test_active_inference_driver_lifts_brush_while_waiting_for_background_plan() -> None:

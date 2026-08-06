@@ -32,10 +32,12 @@ python -m active_painter.web_server
 Open `http://127.0.0.1:8017`.
 
 The live default is deliberately fail-closed: the viewer runs, but active
-policy inference remains disabled until the fixed-camera/body likelihood and
-sensor-conditioned posterior are implemented. This prevents the model from
-silently receiving exact pose, contact, canvas material, or copied simulator
-state.
+policy inference remains disabled. The fixed-camera material likelihood and a
+MuJoCo encoder/contact body posterior are implemented, and the latter now
+initializes motor-forecast joint state. Belief-derived material forecast
+construction and continuous action-conditioned camera updating are still
+incomplete, so the model is not allowed to fall back to exact canvas, brush,
+or contact-process state.
 
 The former hidden-state baseline is retained only as an explicitly labelled
 diagnostic comparator:
@@ -117,10 +119,14 @@ Four related terms refer to different decisions and models:
 
 Counterfactual motor forecasts preserve the selected plant: native execution
 uses native forecasts, while MuJoCo execution uses independent MuJoCo rollout
-data under the same immutable model. Forecast initialization still deep-copies
-exact process state, so forecast-driven policy inference remains confined to
-the explicit `baseline-oracle-v0` diagnostic until the body posterior is
-connected. MuJoCo parameter uncertainty is not yet sampled. See the canonical
+data under the same immutable model. In the MuJoCo runtime, encoder/contact
+samples feed a versioned body estimator and forecast particles initialize
+joint position/velocity from that posterior with independent future-noise
+seeds. Its likelihood precision is provisional simulation-only, contact belief
+is not yet mapped into brush compliance, and the copied material/brush/model
+forecast context remains oracle-conditioned. Forecast-driven policy inference
+therefore remains confined to the explicit `baseline-oracle-v0` diagnostic;
+MuJoCo parameter uncertainty is not yet sampled. See the canonical
 [model record](models/README.md), the [native reference](docs/NATIVE_PLANT_REFERENCE.md),
 and the [control/plant/policy boundary](docs/CONTROL_PLANT_POLICY_BOUNDARY.md).
 

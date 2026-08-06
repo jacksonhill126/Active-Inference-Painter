@@ -159,6 +159,8 @@ class BodyBeliefSnapshot:
     contact_force_mean_n: float | None
     contact_force_variance_n2: float | None
     posterior_revision: int
+    inference_model_id: str = "unversioned-body-inference"
+    calibration_status: str = "unspecified"
 
     def __post_init__(self) -> None:
         joint_count = len(self.joint_names)
@@ -184,6 +186,10 @@ class BodyBeliefSnapshot:
             raise ValueError("contact_force_variance_n2 must be non-negative.")
         if self.posterior_revision < 0:
             raise ValueError("posterior_revision must be non-negative.")
+        if not self.inference_model_id or not self.calibration_status:
+            raise ValueError(
+                "inference_model_id and calibration_status must be non-empty."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +209,8 @@ class CounterfactualRolloutRequest:
             raise ValueError("request_id and model_snapshot_id must be non-empty.")
         if self.sample_count <= 0:
             raise ValueError("sample_count must be positive.")
+        if self.independent_noise_seed < 0:
+            raise ValueError("independent_noise_seed must be non-negative.")
 
 
 @dataclass(frozen=True, slots=True)

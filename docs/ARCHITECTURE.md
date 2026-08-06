@@ -1455,13 +1455,23 @@ target, current, torque, velocity, limit proximity, brush compliance, contact,
 and realized paint registration therefore come from MuJoCo. Per-joint
 RobStride/MJCF envelopes normalize the proprioceptive likelihood channels.
 
-This is a matched-plant result, not yet a conforming sensor-conditioned
-forecaster. The current oracle driver initializes planning from an exact
-`ArmPainterSim`/MuJoCo process snapshot. MuJoCo body-parameter particles are not
-yet sampled, and the legacy logical Cartesian retarget remains below policy
-selection. Runtime and forecast diagnostics label the initialization
-`baseline-oracle-v0` and name these approximations. Connecting the compact body
-posterior and validating predictive distributions remain separate M2 work.
+This is a matched-plant result with sensor-conditioned joint-state
+initialization, not yet a fully conforming sensor-equivalent forecaster. In the
+MuJoCo runtime, `BodyStateEstimator` consumes `PhysicalSensorPacket` samples;
+planning freezes its latest posterior revision, initializes particle zero at
+the posterior joint-position/velocity mean, and samples later particles from
+the declared diagonal variance with an independent future-noise seed. The
+current named precision profile is provisional simulation-only, not hardware
+calibration.
+
+The containing `ArmPainterSim` snapshot still supplies exact material, brush,
+and model context; contact probability/force is not mapped into brush
+compression/flexure; MuJoCo body-parameter particles are not sampled; and the
+legacy logical Cartesian retarget remains below policy selection. Runtime and
+forecast diagnostics expose the body model, calibration status, posterior
+revision, VFE decomposition, and these approximations. Those remaining
+dependencies keep live painting policy inference fail-closed and the opt-in
+comparator labeled `baseline-oracle-v0`.
 
 The code-version counter fingerprints files under `src/active_painter`, `web`,
 `models/active_inference_painter.xml`, and `pyproject.toml`; it does not
@@ -1660,8 +1670,11 @@ palette/solvent/cleaning action geometry. Reload is currently instantaneous.
 The motor forecast runs independent data copies of the selected simulator
 family used as the world. Native particles include process noise and parameter
 jitter; MuJoCo particles currently preserve its deterministic plant and do not
-yet sample body-parameter uncertainty. Both oracle paths start from exact
-process state. This remains easier than sensor-conditioned prediction or
+yet sample body-parameter uncertainty. MuJoCo runtime particles initialize
+joint position/velocity from a sensor-conditioned diagonal posterior with
+independent future-noise seeds; native oracle forecasts still use copied
+dynamic state. Both paths continue to copy exact material, brush, and model
+context. This remains easier than fully sensor-equivalent prediction or
 sim-to-real deployment, where hardware will introduce unmodeled dynamics.
 
 ### 31.10 No production robot safety layer

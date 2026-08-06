@@ -1,3 +1,4 @@
+import copy
 import json
 import threading
 import time
@@ -9,10 +10,11 @@ import torch
 import active_painter.stroke_execution as stroke_execution_module
 
 from active_painter.arm_agent_driver import canvas_summary_state
-from active_painter.arm_sim import ArmPainterSim
+from active_painter.arm_sim import ArmPainterSim, JOINT_NAMES, JointPlant
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.motor_planning import motor_efe_terms, motor_realization_log_evidence
+from active_painter.plant_interface import BodyBeliefSnapshot
 from active_painter.precision_beliefs import constant_modality_weights
 from active_painter.policies import MotorPrimitiveLatent, Policy
 from active_painter.stroke_execution import (
@@ -55,6 +57,110 @@ def test_execution_forecast_diagnostics_are_json_serializable() -> None:
     assert isinstance(diagnostics["next_state_mean"], list)
     assert isinstance(diagnostics["next_state_variance"], list)
     assert isinstance(diagnostics["canvas_delta_mean"], list)
+
+
+def test_body_posterior_initializes_forecast_particles_with_independent_noise(
+    monkeypatch,
+) -> None:
+    sim = ArmPainterSim(
+        PainterConfig(
+            canvas_size=24,
+            motor_forecast_samples=3,
+            body_param_jitter_fraction=0.0,
+        )
+    )
+    belief = BodyBeliefSnapshot(
+        monotonic_time_s=2.0,
+        joint_names=JOINT_NAMES,
+        joint_position_mean_rad=(0.10, -0.70, 0.02, 1.60),
+        joint_position_variance_rad2=(4e-4, 9e-4, 4e-4, 9e-4),
+        joint_velocity_mean_rad_s=(0.20, -0.10, 0.05, 0.15),
+        joint_velocity_variance_rad2_s2=(0.01, 0.02, 0.01, 0.02),
+        contact_probability=0.2,
+        contact_force_mean_n=0.4,
+        contact_force_variance_n2=0.04,
+        posterior_revision=11,
+        inference_model_id="body-inference-v0:test-sensors-v0",
+        calibration_status="synthetic_test_only",
+    )
+    action = StrokeAction(0.42, 0.45, 0.58, 0.55, 0.05, 0.6, 1.0)
+    timing = StrokeTiming(approach=0.02, press=0.02, paint=0.03, lift=0.02)
+    initialized: list[tuple[np.ndarray, np.ndarray]] = []
+    original_initializer = JointPlant.initialize_forecast_state
+
+    def capture_initializer(self, joint_position_rad, joint_velocity_rad_s):
+        initialized.append(
+            (
+                np.asarray(joint_position_rad, dtype=np.float64).copy(),
+                np.asarray(joint_velocity_rad_s, dtype=np.float64).copy(),
+            )
+        )
+        return original_initializer(self, joint_position_rad, joint_velocity_rad_s)
+
+    monkeypatch.setattr(JointPlant, "initialize_forecast_state", capture_initializer)
+    live_pose = copy.deepcopy(sim.actual_pose)
+    live_plant_state = copy.deepcopy(sim.plant.state_snapshot())
+    first = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        timing=timing,
+        dt=0.01,
+        initial_body_belief=belief,
+        independent_noise_seed=912,
+    )
+    first_initializations = copy.deepcopy(initialized)
+
+    assert len(first_initializations) == 3
+    np.testing.assert_allclose(
+        first_initializations[0][0], belief.joint_position_mean_rad
+    )
+    np.testing.assert_allclose(
+        first_initializations[0][1], belief.joint_velocity_mean_rad_s
+    )
+    assert not np.allclose(
+        first_initializations[1][0], first_initializations[0][0]
+    )
+    assert not np.allclose(
+        first_initializations[2][1], first_initializations[0][1]
+    )
+    assert sim.actual_pose == live_pose
+    assert sim.plant.state_snapshot()["rng_state"] == live_plant_state["rng_state"]
+    assert first.body_posterior_revision == 11
+    assert first.body_inference_model_id == belief.inference_model_id
+    assert first.body_calibration_status == belief.calibration_status
+    assert "BodyBeliefSnapshot revision 11" in first.forecast_initialization
+    assert "contact probability/force" in first.forecast_approximation
+
+    # Advancing the live process RNG cannot alter belief-conditioned particles:
+    # future rollout noise is initialized from the request seed instead.
+    sim.plant._rng.random(37)
+    initialized.clear()
+    second = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        timing=timing,
+        dt=0.01,
+        initial_body_belief=belief,
+        independent_noise_seed=912,
+    )
+    for expected, actual in zip(first_initializations, initialized, strict=True):
+        np.testing.assert_allclose(actual[0], expected[0], rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(actual[1], expected[1], rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(second.next_state_mean, first.next_state_mean)
+    np.testing.assert_allclose(second.next_state_variance, first.next_state_variance)
+
+    with pytest.raises(ValueError, match="independent_noise_seed"):
+        forecast_stroke_execution(
+            sim,
+            action,
+            canvas_summary_state,
+            timing=timing,
+            dt=0.01,
+            initial_body_belief=belief,
+            independent_noise_seed=-1,
+        )
 
 
 def test_contact_pressure_ramps_before_the_stroke_sweep() -> None:

@@ -224,9 +224,13 @@ Notes:
   `mujoco-robstride-electromechanical-v4` with independent `MjData`, matched
   contact/material registration, per-joint RobStride/MJCF normalization, and
   explicit forecast provenance.
-- Initialization still uses exact process state in `baseline-oracle-v0`, and
-  MuJoCo body-parameter uncertainty is not yet sampled. A sensor-conditioned
-  `ExecutionForecaster` must not be claimed.
+- Revised 2026-08-05: the MuJoCo runtime updates `BodyStateEstimator` from
+  physical sensor packets and forecast q/qvel particles start from a frozen
+  posterior revision with independent future-noise seeds. The precision profile
+  is provisional simulation-only. Material/brush/model context is still copied,
+  contact belief is not mapped into brush compliance, and MuJoCo body-parameter
+  uncertainty is not sampled. A fully sensor-equivalent `ExecutionForecaster`
+  must not be claimed.
 
 ### T-309 Add backend parity checks
 

@@ -291,6 +291,12 @@ Acceptance:
 - Demonstrate native forecast and execution behavior with boundary tests and
   update the sensor-access ledger.
 
+Progress, 2026-08-05: the MuJoCo runtime now builds the live body posterior
+only from `PhysicalSensorPacket` and initializes forecast q/qvel particles from
+that posterior under an independent seed. The working forecast still receives
+copied material/brush/model state, and native execution still lacks the
+`PlantBackend` sensor adapter, so T-109 remains blocked rather than accepted.
+
 ## Reference Gate
 
 S0 is complete when:

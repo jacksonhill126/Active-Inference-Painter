@@ -10,8 +10,12 @@ painting controller retains the native logical coordinate convention through a
 named, tested retarget at the backend boundary.
 
 This is still not a calibrated hardware twin. Datasheet-derived, estimated,
-visual-only, and unmeasured fields remain explicit, and the native abstract
-body remains the declared counterfactual forecast approximation.
+visual-only, and unmeasured fields remain explicit. Counterfactual forecasts
+now preserve the selected plant: MuJoCo execution predicts through independent
+`MjData` under the same immutable model, and its runtime q/qvel initialization
+comes from a provisional sensor-conditioned body posterior. Copied
+material/brush/model context, contact-to-compliance initialization, and MuJoCo
+parameter uncertainty remain declared forecast approximations.
 
 ## Physical-Draft And Retarget Contracts
 

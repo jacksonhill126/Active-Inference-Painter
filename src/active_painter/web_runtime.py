@@ -16,6 +16,7 @@ from .arm_agent_driver import (
 )
 from .arm_control import scripted_contact_pressure, scripted_pose
 from .arm_sim import ArmPainterSim, JOINT_NAMES
+from .body_inference import MUJOCO_BODY_LIKELIHOOD, BodyStateEstimator
 from .config import PainterConfig, SPATIAL_MATERIAL_PLANNER_STATE_KIND
 from .telemetry_log import ArmTelemetryLog
 from .version import CodeBuildInfo, code_build_info
@@ -55,6 +56,7 @@ class WebSimRuntime:
     telemetry_log: ArmTelemetryLog = field(init=False)
     code_build: CodeBuildInfo = field(init=False)
     robot_model: dict[str, Any] = field(init=False)
+    body_estimator: BodyStateEstimator | None = field(default=None, init=False)
     sim_time: float = field(default=0.0, init=False)
     painting_count: int = field(default=0, init=False)
     last_saved_canvas: str | None = field(default=None, init=False)
@@ -130,6 +132,12 @@ class WebSimRuntime:
             device=self.device,
             observation_access_mode=self.observation_access_mode,
         )
+        if self.plant_backend == "mujoco":
+            self.body_estimator = BodyStateEstimator(
+                self.sim.plant.backend.capabilities,
+                MUJOCO_BODY_LIKELIHOOD,
+            )
+            self._update_body_posterior()
         if self.agent_driver.observation_boundary_blocked:
             self.agent_enabled = False
         self.telemetry_log = ArmTelemetryLog(max_samples=self.telemetry_max_samples)
@@ -193,6 +201,7 @@ class WebSimRuntime:
             self.sim.set_target(scripted_pose(self.sim_time))
             self.sim.intended_contact_pressure = scripted_contact_pressure(self.sim_time)
         self.sim.step(fixed_dt)
+        self._update_body_posterior()
         self._advance_pending_camera_delivery()
         self._record_telemetry()
 
@@ -210,6 +219,26 @@ class WebSimRuntime:
         )
         self._next_telemetry_time = self.sim_time + self.telemetry_sample_period
 
+    def _update_body_posterior(self) -> None:
+        if self.body_estimator is None:
+            return
+        backend = getattr(self.sim.plant, "backend", None)
+        if backend is None:
+            raise RuntimeError("Body estimator requires a physical sensor backend.")
+        posterior = self.body_estimator.update(backend.read_sensors())
+        if self.body_estimator.last_vfe is None:
+            raise RuntimeError("Body estimator update did not produce VFE diagnostics.")
+        self.agent_driver.ingest_body_belief(
+            posterior,
+            self.body_estimator.last_vfe,
+        )
+
+    def _reset_body_estimator(self) -> None:
+        if self.body_estimator is None:
+            return
+        self.body_estimator.reset()
+        self._update_body_posterior()
+
     def command(self, data: dict[str, Any]) -> dict[str, Any]:
         action = str(data.get("type", ""))
         with self._lock:
@@ -223,6 +252,7 @@ class WebSimRuntime:
                 self.paused = bool(data.get("value", False))
             elif action == "reset":
                 self.sim.reset_pose()
+                self._reset_body_estimator()
                 self.sim.canvas.clear()
                 if self._camera_process is not None:
                     self._camera_process.reset()
@@ -301,6 +331,26 @@ class WebSimRuntime:
                     max(0.0, float(contact.deflection) * 0.0254),
                 )
                 robot_state["brushBendRad"] = {"x": 0.0, "z": 0.0}
+            body_belief = self.agent_driver.body_belief
+            counterfactual_initialization = getattr(
+                self.sim.plant,
+                "counterfactual_initialization",
+                "unversioned",
+            )
+            counterfactual_approximation = getattr(
+                self.sim.plant,
+                "counterfactual_approximation",
+                "unversioned",
+            )
+            if body_belief is not None:
+                counterfactual_initialization = (
+                    f"BodyBeliefSnapshot revision {body_belief.posterior_revision}; "
+                    "diagonal joint posterior with independent future-noise seed"
+                )
+                counterfactual_approximation = (
+                    f"{counterfactual_approximation}; contact probability/force are "
+                    "not yet mapped into brush-compliance latent state"
+                )
             return {
                 "simTime": self.sim_time,
                 "codeVersion": self.code_build.version,
@@ -358,16 +408,8 @@ class WebSimRuntime:
                         "counterfactual_backend_id",
                         self.plant_backend,
                     ),
-                    "initialization": getattr(
-                        self.sim.plant,
-                        "counterfactual_initialization",
-                        "unversioned",
-                    ),
-                    "approximation": getattr(
-                        self.sim.plant,
-                        "counterfactual_approximation",
-                        "unversioned",
-                    ),
+                    "initialization": counterfactual_initialization,
+                    "approximation": counterfactual_approximation,
                 },
                 "brushTone": "black" if self.sim.brush_tone >= 0.5 else "white",
                 "canvas": {
@@ -682,6 +724,7 @@ class WebSimRuntime:
         if self.save_every_paintings > 0 and self.painting_count % self.save_every_paintings == 0:
             self.last_saved_canvas = str(self._save_canvas_snapshot(self.painting_count))
         self.sim.reset_pose()
+        self._reset_body_estimator()
         self.sim.canvas.clear()
         self.sim.intended_contact_pressure = 0.0
         self.sim.refresh_contact()

@@ -405,11 +405,15 @@ inference. The process has matching finite reservoirs and pure-color reloads.
 The camera-conditioned material posterior now exists and is reachable through
 `SpatialActiveInferencePainter.assimilate_camera_observation` and the driver
 sensor boundary. Camera evidence is not yet reduced to the local statistic
-used by the brush posterior, and the body component is not yet wired into live
-painting inference or motor-forecast initialization. The live loop also does
-not yet pair each executed-action transition prior with the delivered camera
-likelihood update. AI-204 remains not
-accepted on those grounds. On 2026-07-29 the
+used by the brush posterior. On 2026-08-05 the MuJoCo runtime began updating
+the body posterior from each `PhysicalSensorPacket`; planning now freezes that
+revision and initializes motor-forecast q/qvel particles from its mean and
+diagonal variance under an independent future-noise seed. The named MuJoCo
+likelihood is provisional simulation-only and body VFE is logged separately.
+This does not yet initialize material/brush state from beliefs, map contact
+belief into brush compliance, or pair each executed-action transition prior
+with the delivered camera likelihood update. AI-204 remains not accepted on
+those grounds. On 2026-07-29 the
 six-aggregate summary planner was formally marked
 `obsolete_compatibility_fixture`; it is not an acceptable compact posterior
 for AI-204.
@@ -766,10 +770,11 @@ Owner: Jackson/Codex
 Estimate: 3-5 days
 Acceptance: Native execution and motor forecasts consume physical sensor packets and posterior snapshots without copied live simulator or process-RNG state.
 Notes: The live default now fails closed before copied simulator state can
-reach the model, while the explicit oracle comparator retains the old forecast
-path. T-109 remains blocked until sensor-conditioned execution and
-`BodyBeliefSnapshot` forecasts replace that comparator rather than merely
-disabling it.
+reach the model. On 2026-08-05 the MuJoCo runtime began initializing forecast
+q/qvel from `BodyBeliefSnapshot` with independent future plant noise. T-109
+remains blocked because native execution lacks a `PlantBackend` sensor adapter
+and the forecast container still copies material/brush/model state rather than
+building all initial latents from beliefs.
 
 ## S1: MuJoCo Physical Draft And Logical Retarget
 
@@ -943,7 +948,7 @@ Depends on: T-301, T-305
 Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Initial MuJoCo live-execution versus forecast-rollout scope is decided and documented.
-Notes: Initially accepted 2026-07-28 with a deferred native forecast approximation. Revised 2026-08-04: MuJoCo execution now produces independent same-model MuJoCo/contact counterfactuals with explicit backend, exact-state initialization, and approximation provenance. Sensor-conditioned initialization and MuJoCo body-parameter particles remain deferred.
+Notes: Initially accepted 2026-07-28 with a deferred native forecast approximation. Revised 2026-08-04: MuJoCo execution now produces independent same-model MuJoCo/contact counterfactuals with explicit backend and approximation provenance. Revised 2026-08-05: MuJoCo q/qvel initialization is sensor-conditioned through a frozen `BodyBeliefSnapshot` and independent seed. Material/brush/model context, contact-to-compliance initialization, and MuJoCo body-parameter particles remain deferred.
 
 ### T-309 Add backend parity checks
 

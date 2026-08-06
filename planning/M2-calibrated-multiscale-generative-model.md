@@ -110,7 +110,7 @@ in the predicted material state.
 
 ### AI-201 Define the sensor-equivalent M2 observation package
 
-Status: `Blocked`  
+Status: `Active`
 Track: Sensors/Active Inference  
 Depends on: M1  
 Owner: Jackson/Codex  
@@ -172,7 +172,7 @@ Acceptance:
 
 ### AI-204 Build the compact state-inference path
 
-Status: `Blocked`  
+Status: `Active`
 Track: Variational Inference  
 Depends on: AI-203  
 Owner: Jackson/Codex  
@@ -192,6 +192,13 @@ Acceptance:
 - Compare posterior estimates against hidden simulator labels only for
   evaluation.
 - Verify VFE terms against M1 fixtures and report inference latency.
+
+Progress, 2026-08-05: `BodyStateEstimator` is connected to the MuJoCo sensor
+packet and motor forecasts initialize q/qvel from a frozen posterior revision
+with independent future-noise seeds. The material/relational factorization,
+belief-derived material/brush/contact rollout initialization, contact-to-brush
+compliance mapping, and continuous action-conditioned update schedule remain
+open; see the canonical status in `PROJECT_TRACKER.md`.
 
 ### AI-205 Align local dynamics training with live execution
 

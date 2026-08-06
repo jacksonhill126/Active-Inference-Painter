@@ -576,9 +576,10 @@ priors are explicit in the XML and marked provisional.
 
 Physical HDMI acquisition, physical lens/capture calibration, and a learned
 camera encoder are not implemented. Sensor-equivalent control still fails
-closed because the existing body posterior is not connected to motor-forecast
-initialization and the action-conditioned transition-prior/camera-update loop
-is not yet scheduled continuously; camera likelihood construction no longer
+closed because belief-derived material/brush/contact forecast construction and
+the action-conditioned transition-prior/camera-update loop are not yet
+scheduled continuously. The MuJoCo body posterior now initializes forecast
+joint position/velocity, so body-to-motor joint-state initialization no longer
 causes that block.
 
 `active_painter.camera_calibration` now supplies the first hardware
@@ -607,14 +608,26 @@ required through a versioned `BodyLikelihoodSpec`; the implementation has no
 silent numerical defaults and is not called calibrated until hardware or
 declared simulation measurements supply them.
 
-This is not yet wired into painting policy inference. Motor current, bus
-voltage, tool deflection, temperature, and fault flags are explicitly reported
-as unassimilated by this posterior. Faults remain hard-safety inputs, while
-current/deflection need declared conditional likelihoods before they may
-provide contact or load evidence. The camera-conditioned material posterior is
-present; body-to-motor-forecast initialization and continuous action-
-conditioned observation scheduling remain fail-closed boundaries for live
-policy inference.
+The MuJoCo web runtime now wires this estimator to
+`MujocoPlantBackend.read_sensors()` on initialization and after every physics
+step. The driver retains the latest posterior and its separately decomposed
+body VFE, then freezes one posterior revision for each planning pass. Forecast
+particle zero uses posterior mean joint position/velocity; later particles
+sample the diagonal posterior variance, and native future process noise is
+seeded independently of the live process RNG. The current named likelihood,
+`mujoco-ideal-sensor-body-likelihood-v0`, is explicitly
+`provisional_simulation_only_not_hardware_calibrated`.
+
+This is wired into motor-forecast initialization, not a completed live painting
+posterior. Motor current, bus voltage, tool deflection, temperature, and fault
+flags are explicitly reported as unassimilated. Faults remain hard-safety
+inputs, while current/deflection need declared conditional likelihoods before
+they may provide contact or load evidence. Contact probability/force is not
+yet mapped into the MuJoCo brush-compression/flexure latent. The forecast still
+copies material, brush, and model context from `ArmPainterSim`, and the live
+loop does not yet pair every executed-action transition prior with its delivered
+camera likelihood update. Those are the remaining fail-closed boundaries for
+painting policy inference.
 
 To reproduce the legacy upper-bound comparator, opt in explicitly:
 
@@ -676,10 +689,13 @@ Cartesian targets into the hardware-oriented MJCF workspace and maps the
 realized tip back to the material canvas. Counterfactual motor forecasts now
 preserve the selected plant: MuJoCo forecasts own independent `MjData` under
 the same immutable MJCF model and report per-joint RobStride-normalized current,
-torque, velocity, and acceleration consequences. They still initialize from an
-exact process snapshot and do not sample MuJoCo body-parameter uncertainty, so
-they remain `baseline-oracle-v0`; sensor-conditioned body-state initialization
-remains future work.
+torque, velocity, and acceleration consequences. In the MuJoCo runtime their
+joint position/velocity now starts from the frozen body posterior rather than
+exact MuJoCo q/qvel; particle randomness is isolated from the live process.
+Exact material/brush/model context is still copied, contact belief is not
+mapped into brush compliance, and MuJoCo body-parameter uncertainty is not
+sampled. Those limitations retain the `baseline-oracle-v0` painting-policy
+label even though joint-state initialization is sensor-conditioned.
 When the active-inference driver selects `stop`, the web runtime automatically
 starts a fresh painting. Every fifth completed painting is saved by default to
 `runs/web/painting_####.png`; use `--save-every-paintings` and `--archive-dir`

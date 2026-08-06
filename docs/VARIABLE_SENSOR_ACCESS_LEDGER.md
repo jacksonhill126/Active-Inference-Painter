@@ -62,16 +62,19 @@ posterior beliefs -> EFE -> painting policy
 commands -> conventional controller -> hard safety -> plant
 ```
 
-The explicit oracle comparator is:
+The retained oracle dependencies and corrected MuJoCo body boundary are:
 
 ```text
 VerticalCanvas material arrays --------------------+
                                                      |
 true ArmPainterSim pose/contact ---------------------+--> agent and controller
                                                      |
-deep copy of full simulator, parameters, and RNG ----+--> motor-policy rollout
+copied canvas/brush/model context --------------------+--> motor-policy rollout
+native dynamic state/RNG (no body belief) -----------+
 
-simulated encoder/current packet ------------------------> diagnostics only
+MuJoCo PhysicalSensorPacket -> BodyStateEstimator -> q/qvel rollout particles
+                                              independent future plant seed
+
 perfect canvas render -----------------------------------> browser only
 ```
 
@@ -86,10 +89,12 @@ planner state from `ArmPainterSim` raises `PrivilegedStateAccessError`.
 
 This is boundary enforcement, not completed sensor inference. The default
 therefore reports `sensor_equivalent=false` and `model_access_blocked=true`
-until the sensor-conditioned body posterior initializes motor forecasts and
-the action-conditioned transition/camera update is scheduled in the live
-loop. The camera-conditioned painting posterior is now implemented but does
-not weaken those remaining blocks. The old behavior is available only through the explicit
+until belief-derived material/brush/contact forecast construction replaces the
+remaining copied process context and the action-conditioned transition/camera
+update is scheduled in the live loop. The camera-conditioned painting
+posterior and MuJoCo body-conditioned q/qvel forecast initialization are now
+implemented, but do not weaken those remaining blocks. The old behavior is
+available only through the explicit
 `oracle_material_state` diagnostic mode.
 
 ## 4. Temporary Oracle Baseline
@@ -276,8 +281,12 @@ The native `JointPlant` contains exact:
 - inertia, friction, stiffness, backlash, coupling, and gravity parameters;
 - process-noise parameters and RNG state.
 
-The motor planner receives these through a deep copy of `ArmPainterSim`.
-Nominal plant parameters may legitimately become part of the agent's
+The rollout container still receives these through a deep copy of
+`ArmPainterSim`. When the MuJoCo runtime supplies a `BodyBeliefSnapshot`, the
+forecast resets joint position/velocity from that posterior and isolates future
+plant randomness rather than retaining the copied q/qvel/RNG continuation.
+Native oracle forecasts without a body belief still retain the copied dynamic
+state. Nominal plant parameters may legitimately become part of the agent's
 generative model, but reading the process instance's exact parameter and
 dynamic state is not parameter inference. Future work must distinguish:
 
@@ -302,10 +311,14 @@ also assimilate optional contact-switch and force factors. It produces the
 agent-safe `BodyBeliefSnapshot` and a per-factor VFE decomposition without
 reading a process object.
 
-That estimator is not yet wired into the live painting posterior or controller,
-so it does not remove the existing oracle paths by itself. Its likelihood
-precision has no silent default and remains uncalibrated until a declared
-hardware or simulation profile is supplied. Motor current, bus voltage,
+The MuJoCo runtime now updates that estimator at initialization and after each
+physics step, exposes body VFE separately, and freezes one posterior revision
+per planning pass. Forecast particle zero uses its q/qvel mean and later
+particles sample its diagonal variance with an independent future-noise seed.
+The named `mujoco-ideal-sensor-body-likelihood-v0` profile is explicitly
+provisional simulation-only and not hardware-calibrated. This connection does
+not enable the live painting policy loop because its material/brush/contact
+forecast boundary remains oracle-conditioned. Motor current, bus voltage,
 temperature, tool deflection, and faults remain explicitly unassimilated:
 faults belong to hard safety, while current and deflection require conditional
 load/contact likelihoods rather than an informal confidence score.
@@ -358,24 +371,26 @@ inferred from sensory consequences.
 
 ## 8. Counterfactual Forecast Leakage
 
-Global and local planning currently call `copy.deepcopy(sim)`. The resulting
-snapshot includes:
+Global and local planning still call `copy.deepcopy(sim)` to construct the
+rollout container. Before a MuJoCo motor forecast, q/qvel is replaced from the
+frozen body posterior and future plant noise uses the request-derived seed.
+The remaining snapshot includes:
 
 - exact material fields;
-- true pose and plant dynamic state;
-- exact contact state;
 - exact brush RNG and bristle realization (load/average mixture are replaced
   from the model belief for the stroke forecast);
 - exact process parameters;
-- plant RNG state;
 - brush RNG state.
 
-Each motor alternative then deep-copies that snapshot again. Plant parameter
-jitter adds uncertainty, but it does not remove the privileged initial state.
-Rollout particle zero retains the copied plant RNG continuation, and the brush
-RNG is copied without an independent-noise boundary. Depending on intervening
-live steps, this can correlate counterfactual and process noise in a way no
-physical agent could exploit.
+The contact state is regenerated after sampled q/qvel initialization, but the
+posterior contact probability/force is not yet mapped into MuJoCo brush
+compression/flexure. Each motor alternative deep-copies the container again.
+Plant parameter jitter adds limited uncertainty; MuJoCo parameters are not yet
+sampled. The brush RNG is copied without an independent-noise boundary. Native
+oracle forecasts that receive no `BodyBeliefSnapshot` also retain exact plant
+dynamic state and copied plant RNG. Thus the body-state leak is corrected for
+the MuJoCo runtime, while material/brush/model and native-fallback leakage
+remain.
 
 This does **not** mean simulation-based prediction is illegitimate. The
 principled replacement is:
@@ -387,7 +402,7 @@ principled replacement is:
 4. propagate parameter uncertainty separately;
 5. compare predicted sensory outcomes with later sensor observations.
 
-Until that path exists, embodied EFE results must be labeled
+Until the remaining path exists, embodied EFE results must be labeled
 oracle-conditioned.
 
 ## 9. Passage And Hierarchy Leakage
@@ -431,7 +446,7 @@ remain external to active-inference preferences.
 | Exact material arrays and aggregates | Sensor-only perception, physical deployment, sensor-driven hierarchy | `AI-103`, `AI-201` through `AI-204`, `AI-216` |
 | True pose and Cartesian tip | Sensor-driven embodiment and controller portability | `T-109`, `AI-201`, `AI-203`, `AI-204`, `AI-216` |
 | Exact contact state in control and learning | Calibrated contact inference and physical reliability learning | `T-109`, `AI-201`, `AI-203`, `AI-204`, `AI-216` |
-| Full simulator snapshot and copied RNG | Non-oracle embodied prediction | `T-109`, `AI-202`, `AI-203`, `AI-204`, `AI-216` |
+| Copied material/brush/model snapshot, brush RNG, and native oracle dynamic/RNG fallback | Fully non-oracle embodied prediction; MuJoCo q/qvel initialization is already posterior-conditioned | `T-109`, `AI-202`, `AI-203`, `AI-204`, `AI-216` |
 | Exact plant parameters | Identified dynamics or calibrated energetic prediction | `AI-107`, `T-109`, `T-106`, later calibration work |
 | Exact material delta in passage update | Sensor-driven passage belief | `AI-103`, `AI-203`, `AI-204`, `AI-207`, `AI-210`, `AI-216` |
 | Mixed truth and sensor telemetry | Reproducible hardware-comparable diagnostics | `T-105`, `T-106` |
