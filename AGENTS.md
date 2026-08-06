@@ -20,6 +20,35 @@ Conventional forward kinematics, inverse kinematics, trajectory interpolation, r
 
 IK may realize or predict a Cartesian painting policy. It must not choose the painting policy.
 
+## Plant and motor vocabulary
+
+Keep these four concepts distinct in code, documentation, and status reports:
+
+- **Hardware actuator assignment:** RobStride 03 at `yaw` and `pitch`, and
+  RobStride 02 at `roll` and `elbow`, are selected and fixed in the current
+  hardware-oriented draft. This is a design configuration, not a runtime
+  latent. The associated plant is not yet calibrated against assembled
+  hardware.
+- **Native plant:** `native-abstract-v0` / `JointPlant` is a representative
+  abstract actuator and arm model. Its parameters are not identified from the
+  selected RobStride motors.
+- **MuJoCo plant:** `mujoco-robstride-electromechanical-v4` is the selectable,
+  hardware-oriented realized-execution backend. It is vendor-grounded but
+  still contains documented derived and approximate parameters.
+- **Motor realization:** active inference may infer a conditional
+  controller/trajectory realization such as Cartesian IK, joint spline, elbow
+  pivot, or upper-arm roll. This does not select an actuator product or SKU.
+
+MuJoCo realized execution and counterfactual motor prediction are not yet the
+same plant: policy forecasts still use `native-abstract-v0` as a named
+transitional approximation. Never describe those forecasts as
+RobStride-calibrated. Never state that no specific motors have been selected
+without explicitly limiting that statement to the native abstract plant.
+
+The canonical hardware-plant record is `models/README.md` plus
+`models/active_inference_painter.xml`; the semantic boundary is
+`docs/CONTROL_PLANT_POLICY_BOUNDARY.md`.
+
 ## Terminal coverage rule
 
 Coverage is a material state derived from paint thickness, not visible tone. White paint on white ground still increases coverage.

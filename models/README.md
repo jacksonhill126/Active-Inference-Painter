@@ -56,6 +56,11 @@ approximation, not a claim that the two plants have identical dynamics.
 
 ## Direct-Mount Actuator Assignment
 
+These actuator products are selected and fixed in the current
+hardware-oriented design draft. Active inference does not select them at
+runtime, and the associated plant has not yet been calibrated against assembled
+hardware.
+
 | Joint | Actuator | Rated / peak torque | Rated / no-load speed | Envelope | Mass |
 | --- | --- | ---: | ---: | ---: | ---: |
 | `yaw` | RobStride 03 | 20 / 60 N m | 100 / 195 rpm | 106 x 106 x 56 mm | 0.880 kg |

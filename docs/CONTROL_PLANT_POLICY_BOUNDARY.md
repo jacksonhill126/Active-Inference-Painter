@@ -3,13 +3,14 @@
 Status: accepted interface contract
 Task: T-103
 Date: 2026-07-24
+Implementation status reviewed: 2026-08-04
 Interface: `plant-interface-v1`
 
 ## Purpose
 
 This contract separates active-inference painting decisions from conventional
 robot execution and from the generative process. It is shared by the native
-simulator, a future MuJoCo backend, and eventual hardware.
+simulator, the implemented MuJoCo simulation backend, and eventual hardware.
 
 Defining this boundary does not make the native runtime sensor-equivalent.
 The live default now fails closed before policy inference or learning can read
@@ -18,6 +19,21 @@ material, contact, parameter, brush, and RNG state, but that path is reachable
 only through the explicit `oracle_material_state` diagnostic mode. It remains
 a documented `baseline-oracle-v0` exception and must not satisfy M2 embodiment
 claims.
+
+## Plant And Motor Vocabulary
+
+| Concept | Contract meaning |
+| --- | --- |
+| Hardware actuator assignment | Fixed in the current hardware-oriented draft: RobStride 03 at `yaw`/`pitch`, RobStride 02 at `roll`/`elbow`. It is configuration, not an inferred policy variable. |
+| Native plant | `native-abstract-v0` / `JointPlant`; representative mechanics not identified from the selected motors. |
+| MuJoCo plant | `mujoco-robstride-electromechanical-v4`; a selectable vendor-grounded realized-execution model, not yet a calibrated hardware twin. |
+| Motor realization | A conditional controller/trajectory latent. It does not select an actuator product. |
+
+Realized execution and counterfactual prediction are separate choices. The
+MuJoCo backend can execute the selected policy, while current motor forecasts
+still deep-copy `native-abstract-v0`. This is a named transitional
+approximation. The canonical plant fields and actuator assignment live in
+`models/README.md` and `models/active_inference_painter.xml`.
 
 ## Semantic Layers
 
@@ -36,8 +52,11 @@ Active-inference policy selection compares predicted consequences of
 
 ### Policy realization
 
-IK, motor-primitive selection, trajectory interpolation, collision checking,
-and low-level control realize a selected painting policy. They may:
+For each painting-policy candidate, active inference may infer a conditional
+motor-realization latent from declared likelihood, precision, and EFE terms.
+The latent selects a controller/trajectory family, not hardware. IK,
+trajectory interpolation, collision checking, and low-level control implement
+that realization. They may:
 
 - reject physically inadmissible candidates;
 - predict energy, uncertainty, contact loss, and execution error;
@@ -133,15 +152,17 @@ could not possess.
 | Interface types and field validation | conforming |
 | Separation of simulator-only truth type | conforming |
 | Counterfactual request schema | conforming |
-| Current native command loop | legacy, not yet adapted |
-| Current motor forecast initialization | nonconforming oracle path |
+| Native realized-execution path | implemented; legacy direct `JointPlant` loop, not yet a `PlantBackend` adapter |
+| MuJoCo realized-execution path | implemented and selectable; `PlantBackend` in SI units |
+| Current motor forecast model | `native-abstract-v0` deep-copy; oracle-only transitional path, not MuJoCo-matched |
 | Live proprioceptive posterior feeding forecasts | not implemented |
-| MuJoCo backend | not implemented |
 | Hardware backend | not implemented |
 
 Migration of the runtime forecast path depends on the M2 sensor package,
 observation likelihood, and compact state estimator. Until then, diagnostics
-and research reports must retain the `baseline-oracle-v0` label.
+and research reports using forecast-driven policy inference must retain the
+`baseline-oracle-v0` label. Selecting the MuJoCo execution backend does not
+remove that forecast limitation.
 
 ## Verification
 

@@ -26,8 +26,8 @@ dependencies, validation gates, and execution tasks.
 - `M7-safety-and-staged-hardware-bring-up.md`: detailed plan for external safety, staged commissioning, sensors, wet trials, shadow inference, and bounded autonomy.
 - `M8-research-experiment-program.md`: detailed plan for capability-gated H1-H6 studies, developmental runs, interactions, transfer, and research synthesis.
 - `S0-plant-reference-contract.md`: support plan for versioning the Python plant, material, command, observation, control-boundary, and telemetry reference.
-- `S1-mujoco-abstract-clone.md`: support plan for matching the Python arm simulator in MuJoCo.
-- `S2-mujoco-backend-adapter.md`: support plan for connecting the existing controller and paint model to MuJoCo.
+- `S1-mujoco-abstract-clone.md`: historical filename for the superseding hardware-oriented MuJoCo physical draft and tested logical retarget plan.
+- `S2-mujoco-backend-adapter.md`: support plan for the implemented selectable MuJoCo execution backend and Python paint-process connection.
 
 ## Project Map
 
@@ -54,11 +54,16 @@ predictive and calibration gates.
 
 ### 4. Simulation Support
 
-Use the Python arm simulator as a versioned abstract reference. Build MuJoCo as
-an abstract clone and execution backend in the `S0-S2` support track. S0
-stabilizes schemas and provenance, not controller gains or mechanical design.
-Simulator migration improves the generative process and transfer testing; it
-does not by itself validate active inference.
+Use the Python arm simulator as the versioned `native-abstract-v0` reference.
+The original exact-clone plan was superseded by the hardware-oriented
+`mujoco-robstride-electromechanical-v4` physical draft, a tested logical
+controller retarget, and a selectable execution backend in the `S0-S2` support
+track. The draft fixes RobStride 03 at `yaw`/`pitch` and RobStride 02 at
+`roll`/`elbow`; it is not yet a calibrated hardware twin. Counterfactual motor
+forecasts still use the native abstract plant as an explicit transitional
+approximation. S0 stabilizes schemas and provenance, not controller gains or
+mechanical design. Simulator migration improves the generative process and
+transfer testing; it does not by itself validate active inference.
 
 ### 5. Painting And Material Model
 

@@ -104,6 +104,23 @@ model. Conventional inverse kinematics, trajectory generation, motor control,
 collision checks, and hard safety constraints realize or veto a selected
 policy below that boundary.
 
+## Plant And Motor Terminology
+
+Four related terms refer to different decisions and models:
+
+| Term | Current meaning |
+| --- | --- |
+| Hardware actuator assignment | Fixed in the current hardware-oriented draft: RobStride 03 for `yaw`/`pitch`, RobStride 02 for `roll`/`elbow`. It is not selected dynamically. |
+| Native plant | `native-abstract-v0` / `JointPlant`, a representative model not identified from those motors. |
+| MuJoCo plant | `mujoco-robstride-electromechanical-v4`, a selectable vendor-grounded realized-execution backend, not yet a calibrated hardware twin. |
+| Motor realization | An inferred controller/trajectory latent; it chooses how to realize a painting policy, not which motor product is installed. |
+
+Counterfactual motor forecasts currently use the native abstract plant even
+when MuJoCo realizes the selected action. That mismatch is a named transitional
+approximation. See the canonical [model record](models/README.md), the
+[native reference](docs/NATIVE_PLANT_REFERENCE.md), and the
+[control/plant/policy boundary](docs/CONTROL_PLANT_POLICY_BOUNDARY.md).
+
 ## Implemented Prototype
 
 - Stochastic four-degree-of-freedom arm, encoder, actuator, compliance, and

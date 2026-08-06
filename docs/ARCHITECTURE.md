@@ -303,10 +303,25 @@ The active-inference boundary is important:
 - IK and trajectory interpolation realize that selected policy;
 - IK is not allowed to choose what should be painted.
 
-### 6.2 Joint and motor plant
+### 6.2 Native abstract joint and motor plant
 
-`JointPlant` is a stochastic, coupled, quasi-direct-drive-style actuator model.
-Its values are representative rather than identified from a specific motor.
+`JointPlant` is the `native-abstract-v0` realized-execution plant and the
+current counterfactual motor-forecast model. It is a stochastic, coupled,
+quasi-direct-drive-style actuator model whose values are representative rather
+than identified from a specific motor.
+
+This native model must not be confused with either the selectable
+`mujoco-robstride-electromechanical-v4` backend or the inferred motor-realization
+latent:
+
+| Concept | Current status |
+| --- | --- |
+| Native plant | Representative `JointPlant`; selectable for realized execution and still used for counterfactual forecasts. |
+| MuJoCo plant | Hardware-oriented realized-execution backend with fixed RobStride 03 `yaw`/`pitch` and RobStride 02 `roll`/`elbow` assignments. Vendor-grounded, but not a calibrated hardware twin. |
+| Motor realization | Conditional controller/trajectory latent used to realize a painting-policy candidate; not an actuator SKU choice. |
+
+The canonical actuator assignment and approximation ledger are in
+`models/README.md` and `models/active_inference_painter.xml`.
 
 It includes:
 
