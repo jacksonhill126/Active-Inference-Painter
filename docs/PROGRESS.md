@@ -30,7 +30,8 @@ It has not yet demonstrated:
 - a complete live painting loop driven only by sensor-equivalent observations;
 - calibrated predictive uncertainty at live scale;
 - a predictively necessary global or relational latent;
-- proposal-budget convergence or a correction for finite-candidate bias;
+- a proposal-invariant policy posterior or a correction for finite-candidate
+  bias; the completed convergence audit was negative;
 - a frozen or cross-fitted safeguard for the self-trained composition
   preference;
 - MuJoCo parity;
@@ -49,12 +50,12 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 429 tests collected | Adds the 14-test learned-proposal recovery suite to the prior 415-test baseline |
+| Current test collection | 435 tests collected | Adds 14 learned-proposal integrity tests and 6 AI-111 convergence/provenance tests to the prior 415-test baseline |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
-| Learned-proposal recovery suite | 14 passed | Covers normalized support, real-sampler agreement, zero-mix parity, training, checkpoint continuation, and EFE separation |
-| Current deterministic CI gate | 151 passed; 64.84 seconds observed | Includes the proposal suite and all files listed in `.github/workflows/ci.yml` |
-| Current complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
+| Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
+| Current deterministic CI gate | 157 passed; 57.74 seconds observed | Includes both proposal suites and all files listed in `.github/workflows/ci.yml` |
+| Pre-AI111 complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 
 These timings are local observations, not stable performance claims. Hardware,
@@ -63,25 +64,24 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Keep the learned proposal at its zero-emission default while running the
-   candidate-budget, horizon, seed, mixture, posterior-mass, and top-action
-   convergence experiments required by AI-111.
-2. Close AI-104/AI-105 acceptance around the independent reference harness,
+1. Close AI-104/AI-105 acceptance around the independent reference harness,
    including the remaining summary-VFE Monte Carlo tolerance.
-3. Build the leakage-resistant live-scale baseline corpus in AI-108, then
+2. Build the leakage-resistant live-scale baseline corpus in AI-108, then
    measure held-out likelihood and uncertainty calibration in AI-107/AI-109.
-4. Resolve the composition-preference closed loop and finite-proposal bias in
-   AI-110/AI-111. Until then, treat both mechanisms as provisional ablations.
-5. Define checkpoint inheritance and online-learning semantics, profile the
+3. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
+   negative convergence result into an explicit M3 proposal correction. Until
+   then, keep the learned mix at zero and label posterior mass as conditional on
+   the sampled candidate set.
+4. Define checkpoint inheritance and online-learning semantics, profile the
    major runtime phases, and capture three manifested baseline replicas.
-6. Make the M1 lock decision before treating ongoing M2 work as an accepted
+5. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-7. After M1, connect the body posterior to motor forecasts and continuously
+6. After M1, connect the body posterior to motor forecasts and continuously
    pair executed-action transition priors with delivered camera updates.
 
 ## Progress Log
 
-### 2026-08-04: formal-reference progress and interrupted proposal work
+### 2026-08-04: formal-reference progress, proposal recovery, and AI-111 result
 
 - Added an independent reference-oracle harness covering terminal coverage
   risk, transition information gain, policy posterior normalization, summary
@@ -99,8 +99,12 @@ captured in a run manifest.
   exist; dedicated tests and documentation reconciliation were not completed
   before the work stopped. The handoff recovery added a 14-test suite and fixed
   learned-density support rejection plus private-RNG checkpoint continuation.
-  Convergence evidence remains absent. Its mixture weight defaults to zero and
-  it is not an accepted solution to finite-proposal bias.
+  A subsequent 360-cell AI-111 audit found that stop posterior mass and
+  deep-horizon winning geometry do not converge under the tested candidate
+  budgets. The current result is therefore explicitly
+  `Q(pi | sampled candidate set S)`, not a proposal-invariant posterior. Its
+  mixture weight remains zero and it is not an accepted solution to
+  finite-proposal bias.
 
 ### 2026-07-28: MuJoCo physical draft, backend, and contact-driven paint
 

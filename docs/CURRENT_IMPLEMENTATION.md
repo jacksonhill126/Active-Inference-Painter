@@ -292,8 +292,12 @@ EFE, not composition rewards.
   also does not correct finite-candidate bias. Sampling, density, training,
   checkpoint continuation, exact zero-mixture parity, and separation from EFE
   are covered by `tests/test_proposal.py`. The candidate-count, horizon, seed,
-  mixture, posterior-mass, and top-action convergence evidence required by
-  `AI-111` is not complete.
+  mixture, posterior-mass, and top-action grid in
+  `tests/test_proposal_convergence.py` and
+  `docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md` produced a negative result:
+  the current posterior is stable only as `Q(pi | sampled set S)`, not as a
+  proposal-invariant continuous-policy posterior. The learned emission default
+  therefore remains zero pending an M3 correction.
 - **Receding-horizon passage inference.** A global plan predicts several
   passages but execution commits only to the first. Within that passage, each
   observed mark updates a slow diagonal-Gaussian posterior over center,

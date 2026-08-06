@@ -31,10 +31,13 @@ fallback-belief refusal, checkpoint parameter/optimizer/RNG continuation, and
 unchanged shared-model initialization and EFE under the default gate. It found
 and fixed two concrete defects: foreign continuous/tone values were being
 clamped into learned support, and checkpoint resume reset the proposal's private
-random stream. No candidate-count, horizon, seed, mixture, posterior-mass, or
-top-action convergence experiment has been run, and no importance correction is
-applied. The feature therefore does not resolve finite-proposal bias or close
-`AI-111`.
+random stream. The subsequent AI-111 audit added an exact equal-EFE multiplicity
+control and a 360-cell candidate-count/horizon/seed/mixture grid. It found that
+stop posterior mass and deep-horizon winning geometry do not converge under the
+tested budgets; the full result is in
+`docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md`. No importance correction is
+applied. The current result is therefore accepted only as conditional on its
+sampled candidate set, and the feature does not resolve finite-proposal bias.
 
 ## 2026-08-03 pass (motion-manifold bootstrap of the composition hierarchy)
 

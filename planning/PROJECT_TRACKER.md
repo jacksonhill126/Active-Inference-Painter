@@ -235,13 +235,13 @@ Acceptance: Compression gap is formally approved with frozen/cross-fitted safegu
 
 ### AI-111 Separate proposal distributions from policy priors
 
-Status: `Active`
+Status: `Answered (negative convergence result; M3 correction required)`
 Track: Policy Inference  
 Depends on: AI-101, AI-105  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Candidate frequency, intended policy prior, proposal density, and finite-budget bias have explicit semantics and convergence tests.
-Notes: A bounded implementation experiment proceeded ahead of AI-105 acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage proposal trained toward the existing base-EFE posterior and mixed with the hand-written sampler; its emission mix defaults to zero and it never enters EFE, VFE, preferences, or the normalized policy posterior. It does not correct finite-candidate bias. `tests/test_proposal.py` now covers normalized/support-bounded densities, empirical hand-sampler agreement, exact zero-mixture/RNG parity, mixed-source attribution, posterior-only training, checkpoint continuation, and unchanged EFE under the default gate. Candidate-count, horizon, seed, mixture, posterior-mass, and top-action convergence evidence remains absent, so the task is active rather than validated.
+Notes: A bounded implementation experiment proceeded ahead of AI-105 acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage proposal trained toward the existing base-EFE posterior and mixed with the hand-written sampler; its emission mix defaults to zero and it never enters EFE, VFE, preferences, or the normalized policy posterior. It does not correct finite-candidate bias. `tests/test_proposal.py` covers normalized/support-bounded densities, empirical hand-sampler agreement, exact zero-mixture/RNG parity, mixed-source attribution, posterior-only training, checkpoint continuation, and unchanged EFE under the default gate. `tests/test_proposal_convergence.py` plus `docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md` add an equal-EFE control and a 360-cell candidate-count/horizon/seed/mixture audit. The result is negative: stop mass and deep-horizon winning geometry do not converge under the tested budgets. The current posterior is accepted only as `Q(pi | sampled candidate set S)`; mixtures are computational budget splits, learned emission remains zero, and M3 requires a complete base-measure/prior/proposal correction before proposal-invariant claims.
 
 ### AI-112 Define online learning and inheritance semantics
 

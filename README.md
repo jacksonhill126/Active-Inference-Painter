@@ -70,6 +70,7 @@ python -m pytest -q \
   tests/test_precision_beliefs.py \
   tests/test_preferences.py \
   tests/test_proposal.py \
+  tests/test_proposal_convergence.py \
   tests/test_reference_oracle.py \
   tests/test_sensor_access_contract.py \
   tests/test_spatial_state.py \
@@ -118,9 +119,11 @@ policy below that boundary.
 - An in-progress amortized mark/passage proposal network conditioned on canvas
   and relational beliefs. Its emission mixture defaults to zero; a dedicated
   unit suite covers density normalization/support, sampler parity, training,
-  checkpoint continuation, and separation from EFE, while proposal-budget
-  convergence validation remains incomplete. It is not a policy prior or a
-  correction for finite-candidate bias.
+  checkpoint continuation, and separation from EFE. The proposal-budget audit
+  found that posterior mass and deep-horizon winning geometry do not converge
+  under the tested budgets, so the result is explicitly conditional on the
+  sampled candidate set. It is not a policy prior or a correction for
+  finite-candidate bias.
 - Registered global/requested-foveal camera observations, a provisional camera
   likelihood, and isolated compact body/brush posterior components. These are
   not yet connected into a complete sensor-only painting loop.
@@ -187,6 +190,7 @@ that every planned feature will be built.
 - [`docs/RESEARCH_CHARTER.md`](docs/RESEARCH_CHARTER.md): scientific intent and scope.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): long-form architecture brief.
 - [`docs/GENERATIVE_MODEL_SPEC.md`](docs/GENERATIVE_MODEL_SPEC.md): implemented probabilistic factorization, VFE/EFE map, and approximation register.
+- [`docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md`](docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md): AI-111 candidate-budget, horizon, seed, and mixture result.
 - [`docs/OBSERVATION_FACTOR_AUDIT.md`](docs/OBSERVATION_FACTOR_AUDIT.md): independent material factors, units, normalization, and provisional likelihoods.
 - [`docs/NATIVE_PLANT_REFERENCE.md`](docs/NATIVE_PLANT_REFERENCE.md): versioned native arm, canvas, contact, and material contract.
 - [`docs/CONTROL_PLANT_POLICY_BOUNDARY.md`](docs/CONTROL_PLANT_POLICY_BOUNDARY.md): backend-neutral command, sensor, belief, forecast, and evaluation interfaces.

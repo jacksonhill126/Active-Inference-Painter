@@ -1685,13 +1685,17 @@ rollout for every candidate.
 
 ### Fourth: learned policy proposals
 
-Finish and validate the provisional amortized proposal as a computational
-proposal, not a policy prior. Required evidence includes normalized support and
-density tests, zero-mixture parity, checkpoint/diagnostic tests, and
-candidate-count, horizon, seed, mixture, posterior-mass, and top-action
-convergence. Final selection remains EFE inference; the learned proposal must
-not be added to the policy posterior merely because it was trained toward that
-posterior.
+Retain the provisional amortized proposal as a computational proposal, not a
+policy prior. Normalized support/density, zero-mixture parity,
+checkpoint/diagnostic, and candidate-count/horizon/seed/mixture tests now exist.
+The convergence result was negative: the current result is only
+`Q(pi | sampled candidate set S)`, and deep-horizon winning geometry remained
+unstable through 128 candidates. Final selection remains EFE inference; the
+learned proposal must not be added to the policy posterior merely because it
+was trained toward that posterior. M3 requires an explicit mixed
+discrete/continuous prior and proposal correction before the mix can be enabled
+or proposal-invariant posterior claims can be made. See
+`docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md`.
 
 ### Fifth: deeper passage memory
 
@@ -1721,6 +1725,7 @@ only a per-kind scalar reliability inflation.
 | `policies.py` | Mark, passage, polyline, passage-plan, and stop-policy definitions |
 | `policy_ranges.py` | Shared representational bounds and hand-written/learned proposal support |
 | `proposal.py` | Provisional amortized mark/passage proposal density and training objective |
+| `proposal_convergence.py` | Evaluation-only AI-111 candidate-budget, horizon, seed, and mixture audit |
 | `precision_beliefs.py` | Gamma modality/policy precision beliefs and gap-increment belief |
 | `passage_inference.py` | Slow passage posterior and mark observations |
 | `canvas_hierarchy.py` | Compression gap, canvas latent, relational latent, passage transitions |
@@ -1759,7 +1764,8 @@ level now sees native pixels. The main gaps are:
 - local dynamics have limited contextual range;
 - global structure is compressed at 16 x 16;
 - candidate geometry is still largely hand-proposed; the provisional learned
-  proposal is disabled for emission by default and not yet validated;
+  proposal is disabled for emission by default, and the convergence audit
+  rejects a proposal-invariant interpretation of the current posterior;
 - the hierarchy has no semantic visual training signal;
 - embodied forecasts are computationally expensive;
 - the mechanical and paint processes are plausible simulations rather than

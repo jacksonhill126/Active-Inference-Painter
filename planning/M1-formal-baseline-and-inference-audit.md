@@ -382,7 +382,7 @@ Acceptance:
 
 ### AI-111 Separate proposal distributions from policy priors
 
-Status: `Active`
+Status: `Answered (negative convergence result; M3 correction required)`
 Track: Policy Inference  
 Depends on: AI-101, AI-105  
 Owner: Jackson/Codex  
@@ -414,9 +414,17 @@ Notes:
 - `tests/test_proposal.py` now covers declared support and normalization,
   empirical hand-sampler agreement, exact zero-mixture/RNG parity, mixed-source
   attribution, posterior-only training, checkpoint continuation, and unchanged
-  EFE under the default gate. The implementation remains incomplete because
-  candidate-count, horizon, seed, mixture, posterior-mass, and action-stability
-  convergence evidence has not been produced.
+  EFE under the default gate.
+- `tests/test_proposal_convergence.py` and
+  `docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md` add the exact equal-EFE
+  multiplicity control and a 360-cell grid over candidate count, horizon, seed,
+  and learned mixture. The result is negative for proposal invariance: stop mass
+  and deep-horizon winning geometry do not converge under the tested budgets.
+- Decision: the current implementation reports only
+  `Q(pi | sampled candidate set S)`. Mixtures are computational budget splits,
+  not policy priors; learned emission stays zero. M3 must declare the full mixed
+  discrete/continuous base measure, `P(pi)`, and `r(pi | belief)`, then test a
+  `log P - log r` correction before making proposal-invariant claims.
 
 ### AI-112 Define online learning and inheritance semantics
 

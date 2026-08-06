@@ -100,7 +100,7 @@
         "name": "policy_posterior",
         "grounding": "policy_posterior",
         "reported_in": "policy_posterior",
-        "factor_reference": "provisional_until_AI-105_and_AI-111",
+        "factor_reference": "candidate_set_conditional_until_AI-105_and_M3_proposal_correction",
         "units": "probability",
         "reduction": "normalized_over_sampled_candidates",
         "trace": "traces/policy-posterior.jsonl",
@@ -111,8 +111,8 @@
   "approximations": [
     {
       "name": "finite_policy_proposal_set",
-      "status": "unresolved",
-      "effect": "sampled_candidate_frequency_may_differ_from_declared_policy_prior",
+      "status": "accepted_limitation_for_M1",
+      "effect": "posterior_is_Q_pi_conditional_on_sampled_candidate_set",
       "decision_task": "AI-111"
     },
     {

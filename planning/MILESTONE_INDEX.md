@@ -8,10 +8,12 @@ Status snapshot: 2026-08-04.
 
 M1 reference verification has advanced in the working tree, and bounded M2
 camera/body components are under active development, but neither changes the
-gate ordering below. M1 remains active until held-out calibration,
-proposal/composition decisions, inheritance semantics, reproducible replicas,
-and the AI-115 lock are accepted. M2 implementation performed ahead of that
-lock is provisional and does not make the M2 milestone active.
+gate ordering below. AI-111 now has a negative proposal-convergence decision:
+the posterior is conditional on its sampled candidate set and M3 needs a
+correction. M1 remains active until held-out calibration, the composition
+decision, inheritance semantics, reproducible replicas, and the AI-115 lock are
+accepted. M2 implementation performed ahead of that lock is provisional and
+does not make the M2 milestone active.
 
 ## Research And Delivery Milestones
 

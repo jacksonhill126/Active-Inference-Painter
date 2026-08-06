@@ -873,9 +873,14 @@ current posterior. The learned proposal may improve which hypotheses enter the
 finite set, but it does not correct that bias. The dedicated unit suite now
 covers density normalization/support, empirical sampler agreement, exact
 zero-mixture parity, training, checkpoint continuation, and EFE separation.
-`AI-111` remains active until candidate-count, horizon, seed, mixture,
-posterior-mass, and top-action convergence evidence exists and an explicit
-correction or proposal-only interpretation is accepted.
+The 360-cell candidate-count/horizon/seed/mixture audit recorded in
+`docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md` produced a negative convergence
+result. The accepted M1 interpretation is therefore explicitly
+`Q(pi | sampled candidate set S)`: mixture weights are computational budget
+splits, and posterior mass is not proposal invariant. Learned emission remains
+zero by default. A complete mixed discrete/continuous `P(pi)`, normalized
+`r(pi | belief)`, and tested `log P - log r` correction (or a permanently
+set-conditional claim boundary) is required before M3.
 
 ### 10.3 Passage-local prior
 
@@ -1015,7 +1020,7 @@ research claims.
 | PRIOR-PASSAGE | Transition prior | `p(z_passage_r+1|z_passage_r)` | `PassageBelief.transition_log_prior` | Explicit local prior |
 | PRIOR-MOTOR | Policy prior | uniform `p(m|pi)` | `motor_planning.py` | Explicit |
 | PRIOR-BRUSH | Policy prior | `p(preserve/reload)` | `brush_loading.py` | Explicit |
-| PROP-PAINT | Proposal only | finite hand-written/learned `q_proposal(z_pi|belief)` | `policies.PolicySampler`, `proposal.PolicyProposalNetwork`, `policy_ranges.py` | Uncorrected finite proposal; learned emission mix defaults to zero and validation is incomplete |
+| PROP-PAINT | Proposal only | finite hand-written/learned `q_proposal(z_pi|belief)` | `policies.PolicySampler`, `proposal.PolicyProposalNetwork`, `policy_ranges.py` | Uncorrected finite proposal; learned emission defaults to zero; AI-111 accepts only `Q(pi | sampled set S)` after negative convergence evidence |
 | EFE-PIX | Expected free energy | risk/ambiguity hierarchy | `spatial_efe.py` | Approximate, decomposed |
 | EFE-MOTOR | Expected free energy | proprioceptive EFE: pragmatic `-` `I(s;o)` `-` `N_reliability` | `motor_planning.py`, `efe.py`, `spatial_efe.py`, driver | Approximate, decomposed; three components separately logged, excess-entropy ambiguity logged but not summed |
 | EFE-BRUSH | Expected free energy | conditional material/pigment risk and ambiguity | `brush_loading.py`, driver | Approximate, decomposed |
@@ -1300,9 +1305,12 @@ details:
     hand-written baseline by default. `tests/test_proposal.py` now checks the
     normalized/support-bounded densities, hand-sampler agreement, mixture
     attribution, posterior-only objective, fallback refusal, checkpoint
-    continuation, and no EFE change under the default gate. The implementation
-    remains an in-progress approximation because no proposal-budget convergence
-    claim is accepted under `AI-111`.
+    continuation, and no EFE change under the default gate.
+    `tests/test_proposal_convergence.py` adds an exact equal-EFE multiplicity
+    control plus a fixed 360-cell spatial grid. Stop posterior mass and
+    deep-horizon winning geometry did not converge under the tested budgets.
+    The accepted approximation is a posterior conditional on the sampled set,
+    not a proposal-invariant posterior over continuous painting policies.
 
 ## 14. Required Next Decisions
 
@@ -1336,9 +1344,13 @@ This specification records the following current decision state:
 
 - `AI-107`: whether predictive variances are calibrated;
 - `AI-110`: whether the composition preference can be retained;
-- `AI-111`: PARTIALLY IMPLEMENTED. Hand-written and learned proposals are now
-  explicitly separate from policy priors, but dedicated tests, convergence
-  evidence, and the correction-versus-proposal-only decision remain open;
+- `AI-111`: ANSWERED FOR THE CURRENT M1 BASELINE, WITH A NEGATIVE CONVERGENCE
+  RESULT. Hand-written and learned proposals are explicitly separate from
+  policy priors; mixture weights are computational choices; and the current
+  posterior is accepted only as `Q(pi | sampled candidate set S)`. The
+  learned-proposal mix remains zero. M3 must implement and validate a complete
+  base-measure/prior/proposal correction before making proposal-invariant
+  posterior claims;
 - `AI-112`: what learned and episodic state may persist between runs.
 
 No claim of principled sensor-based active inference should pass the M1 gate
