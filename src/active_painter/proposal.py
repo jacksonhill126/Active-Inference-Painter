@@ -809,10 +809,16 @@ class PolicyProposalNetwork(nn.Module):
         else:
             kind = "mark"
             stroke_count = 1
-        tone_log_probabilities = _masked_log_softmax(
-            heads.tone_logit, _tone_mask(config, heads.tone_logit.device)
-        )
-        tone = float(self._categorical_draw(tone_log_probabilities))
+        if config.stroke_tone_prior is None:
+            tone_log_probabilities = _masked_log_softmax(
+                heads.tone_logit, _tone_mask(config, heads.tone_logit.device)
+            )
+            tone = float(self._categorical_draw(tone_log_probabilities))
+        else:
+            # A fixed configured tone is a one-point categorical, including for
+            # legal intermediate tones. It consumes no proposal RNG and the
+            # learned binary head has no authority to round it to black/white.
+            tone = float(config.stroke_tone_prior)
 
         support = proposal_support_for(family, kind)
         values: dict[str, float] = {}
@@ -882,7 +888,11 @@ class PolicyProposalNetwork(nn.Module):
         count_log_probabilities = _masked_log_softmax(
             heads.stroke_count_logits, _stroke_count_mask(config, device)
         )
-        tone_log_probabilities = _masked_log_softmax(heads.tone_logit, _tone_mask(config, device))
+        tone_log_probabilities = (
+            _masked_log_softmax(heads.tone_logit, _tone_mask(config, device))
+            if config.stroke_tone_prior is None
+            else None
+        )
         sign_log_probabilities = _masked_log_softmax(
             heads.turn_sign_logit, torch.ones(2, dtype=torch.bool, device=device)
         )
@@ -911,14 +921,28 @@ class PolicyProposalNetwork(nn.Module):
                     terms[key] = terms[key] + _logit_normal_log_density(
                         value, loc, scale, support[parameter]
                     )
-            index = min(1, max(0, int(round(latent.tone))))
-            terms["tone"] = terms["tone"] + tone_log_probabilities[index]
+            if config.stroke_tone_prior is None:
+                if latent.tone in (0.0, 1.0):
+                    assert tone_log_probabilities is not None
+                    terms["tone"] = terms["tone"] + tone_log_probabilities[int(latent.tone)]
+                else:
+                    terms["tone"] = terms["tone"] + torch.full_like(zero, float("-inf"))
+            elif latent.tone != float(config.stroke_tone_prior):
+                # A configured tone is a one-point categorical controlled by
+                # the declared policy setting, not something the learned head
+                # may round to a nearby binary value.
+                terms["tone"] = terms["tone"] + torch.full_like(zero, float("-inf"))
             if family == "passage":
                 terms["kind"] = terms["kind"] + kind_log_probabilities[PROPOSAL_KINDS.index(kind)]
-                count_index = min(
-                    PROPOSAL_STROKE_COUNT_SUPPORT - 1, max(0, int(latent.stroke_count) - 1)
-                )
-                terms["stroke_count"] = terms["stroke_count"] + count_log_probabilities[count_index]
+                count = float(latent.stroke_count)
+                if count.is_integer() and 1 <= int(count) <= PROPOSAL_STROKE_COUNT_SUPPORT:
+                    terms["stroke_count"] = (
+                        terms["stroke_count"] + count_log_probabilities[int(count) - 1]
+                    )
+                else:
+                    terms["stroke_count"] = (
+                        terms["stroke_count"] + torch.full_like(zero, float("-inf"))
+                    )
         return terms
 
     def log_density(
@@ -1052,8 +1076,11 @@ def _logit_normal_log_density(
     on the boundary and leave the divergence undefined.
     """
 
+    numeric = float(value)
+    if not math.isfinite(numeric) or not interval.contains(numeric):
+        return torch.full((), float("-inf"), device=loc.device, dtype=loc.dtype)
     span = interval.width
-    unit = (float(value) - interval.low) / span
+    unit = (numeric - interval.low) / span
     unit = min(max(unit, 1e-9), 1.0 - 1e-9)
     u = torch.as_tensor(math.log(unit / (1.0 - unit)), device=loc.device, dtype=loc.dtype)
     z = (u - loc) / scale
@@ -1074,7 +1101,10 @@ def _log_logit_normal_log_density(
     rather than a clipped one.
     """
 
-    positive = max(float(value), 1e-12)
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric <= 0.0 or not interval.contains(numeric):
+        return torch.full((), float("-inf"), device=loc.device, dtype=loc.dtype)
+    positive = numeric
     span = interval.log_width
     unit = (math.log(positive) - math.log(interval.low)) / span
     unit = min(max(unit, 1e-9), 1.0 - 1e-9)

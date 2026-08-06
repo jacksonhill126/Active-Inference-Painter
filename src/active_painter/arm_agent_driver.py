@@ -735,6 +735,15 @@ class ArmActiveInferenceDriver:
                 # `proposal_update_count` is a registered buffer, so it rides
                 # inside `state_dict` and round-trips without a separate key.
                 self.agent.policy_proposal.load_state_dict(payload["proposal_state"])
+                proposal_generator_state = payload.get("proposal_generator_state")
+                if isinstance(proposal_generator_state, torch.Tensor):
+                    # The proposal owns a private CPU generator so its candidate
+                    # stream cannot perturb PolicySampler or global torch RNG.
+                    # It is learned-run state just as surely as optimizer moments:
+                    # resume at the next draw, not back at the initial seed.
+                    self.agent.policy_proposal.generator.set_state(
+                        proposal_generator_state.detach().cpu()
+                    )
                 if (
                     self.agent.policy_proposal_optimizer is not None
                     and payload.get("proposal_optimizer_state") is not None
@@ -815,6 +824,9 @@ class ArmActiveInferenceDriver:
                     payload["composition_optimizer_state"] = self.agent.composition_optimizer.state_dict()
                 if self.agent.policy_proposal is not None:
                     payload["proposal_state"] = self.agent.policy_proposal.state_dict()
+                    payload["proposal_generator_state"] = (
+                        self.agent.policy_proposal.generator.get_state()
+                    )
                     payload["last_proposal_loss"] = self.agent.last_proposal_loss
                     # Reporting only, never compared: see
                     # `_learned_proposal_architecture`.

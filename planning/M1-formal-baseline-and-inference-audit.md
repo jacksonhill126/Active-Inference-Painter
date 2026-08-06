@@ -411,9 +411,12 @@ Notes:
 - This object is a computational proposal only. It is never added to EFE, VFE,
   a prior preference, or the normalized painting-policy posterior, and it does
   not correct finite-candidate bias. The emission mixture defaults to zero.
-- The implementation remains incomplete: `tests/test_proposal.py` is referenced
-  by the source but absent, and candidate-count, horizon, seed, mixture, and
-  action-stability convergence evidence has not been produced.
+- `tests/test_proposal.py` now covers declared support and normalization,
+  empirical hand-sampler agreement, exact zero-mixture/RNG parity, mixed-source
+  attribution, posterior-only training, checkpoint continuation, and unchanged
+  EFE under the default gate. The implementation remains incomplete because
+  candidate-count, horizon, seed, mixture, posterior-mass, and action-stability
+  convergence evidence has not been produced.
 
 ### AI-112 Define online learning and inheritance semantics
 

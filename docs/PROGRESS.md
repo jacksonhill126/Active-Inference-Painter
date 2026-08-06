@@ -49,9 +49,12 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Test collection | 415 tests collected | Includes the new reference-oracle, modality-unit, precision-belief, and motion-manifold suites |
+| Current test collection | 429 tests collected | Adds the 14-test learned-proposal recovery suite to the prior 415-test baseline |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
+| Learned-proposal recovery suite | 14 passed | Covers normalized support, real-sampler agreement, zero-mix parity, training, checkpoint continuation, and EFE separation |
+| Current deterministic CI gate | 151 passed; 64.84 seconds observed | Includes the proposal suite and all files listed in `.github/workflows/ci.yml` |
+| Current complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 
 These timings are local observations, not stable performance claims. Hardware,
@@ -60,8 +63,9 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Stabilize and review the current uncommitted working tree; complete the
-   learned-proposal tests and documentation before expanding its scope.
+1. Keep the learned proposal at its zero-emission default while running the
+   candidate-budget, horizon, seed, mixture, posterior-mass, and top-action
+   convergence experiments required by AI-111.
 2. Close AI-104/AI-105 acceptance around the independent reference harness,
    including the remaining summary-VFE Monte Carlo tolerance.
 3. Build the leakage-resistant live-scale baseline corpus in AI-108, then
@@ -92,10 +96,11 @@ captured in a run manifest.
   gradient budget than the default supplies.
 - Began an amortized learned policy-proposal distribution conditioned on canvas
   and relational beliefs. Sampling, training, checkpoint, and diagnostic paths
-  exist, but dedicated proposal tests, convergence evidence, and documentation
-  reconciliation were not completed before the work stopped. Its mixture
-  weight defaults to zero and it is not an accepted solution to finite-proposal
-  bias.
+  exist; dedicated tests and documentation reconciliation were not completed
+  before the work stopped. The handoff recovery added a 14-test suite and fixed
+  learned-density support rejection plus private-RNG checkpoint continuation.
+  Convergence evidence remains absent. Its mixture weight defaults to zero and
+  it is not an accepted solution to finite-proposal bias.
 
 ### 2026-07-28: MuJoCo physical draft, backend, and contact-driven paint
 

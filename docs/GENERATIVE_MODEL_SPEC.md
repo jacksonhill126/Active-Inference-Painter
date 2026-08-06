@@ -870,9 +870,11 @@ Consequently, proposal frequency affects the finite-budget result. Comments
 that call low-coverage or passage proposal frequency an "empirical policy
 prior" are not mathematically realized as normalized `p(pi)` terms in the
 current posterior. The learned proposal may improve which hypotheses enter the
-finite set, but it does not correct that bias. `AI-111` remains active until the
-dedicated proposal tests and candidate-count, horizon, seed, mixture,
-posterior-mass, and top-action convergence evidence exist and an explicit
+finite set, but it does not correct that bias. The dedicated unit suite now
+covers density normalization/support, empirical sampler agreement, exact
+zero-mixture parity, training, checkpoint continuation, and EFE separation.
+`AI-111` remains active until candidate-count, horizon, seed, mixture,
+posterior-mass, and top-action convergence evidence exists and an explicit
 correction or proposal-only interpretation is accepted.
 
 ### 10.3 Passage-local prior
@@ -1295,10 +1297,12 @@ details:
     cancellation does not remove finite-candidate bias or the self-training loop
     created when future training support is partly supplied by the learned
     proposal itself. `learned_proposal_mix=0.0` keeps emitted candidates on the
-    hand-written baseline by default. The current implementation is an
-    in-progress approximation: source comments reference
-    `tests/test_proposal.py`, which is absent, and no convergence claim is
-    accepted under `AI-111`.
+    hand-written baseline by default. `tests/test_proposal.py` now checks the
+    normalized/support-bounded densities, hand-sampler agreement, mixture
+    attribution, posterior-only objective, fallback refusal, checkpoint
+    continuation, and no EFE change under the default gate. The implementation
+    remains an in-progress approximation because no proposal-budget convergence
+    claim is accepted under `AI-111`.
 
 ## 14. Required Next Decisions
 

@@ -3,7 +3,7 @@
 This is the historical engineering audit and change record for the early
 prototype. Current milestone status is maintained in `planning/`.
 
-## 2026-08-04 in-progress pass (amortized policy proposal; not accepted)
+## 2026-08-04 in-progress pass and recovery (amortized policy proposal; not accepted)
 
 The working tree contains an interrupted Feature-D implementation of an
 amortized candidate-policy proposal conditioned on canvas and relational
@@ -21,14 +21,20 @@ so it is amortized inference rather than an external reward. The emission mix
 defaults to zero; the hand-written sampler remains the live candidate source
 unless an experiment explicitly raises it.
 
-This pass is NOT complete and records no acceptance result. The source refers
-to `tests/test_proposal.py`, but that file is absent. No candidate-count,
-horizon, seed, mixture, posterior-mass, or top-action convergence experiment has
-been run, and no importance correction is applied. The feature therefore does
-not resolve finite-proposal bias or close `AI-111`. Basic import, sampling,
-density, gradient, zero-mixture-parity, and mandatory-stop smoke checks passed
-during the 2026-08-04 handoff review, but those checks are not a replacement for
-the missing probabilistic test suite.
+This pass is NOT complete and records no acceptance result. At interruption the
+source referred to `tests/test_proposal.py`, but that file was absent. The
+handoff recovery added a 14-test probabilistic suite covering declared-support
+containment, numerical density normalization, out-of-support rejection,
+empirical agreement with the real hand-written sampler, exact zero-mixture/RNG
+parity, mandatory stop, mixed-source attribution, posterior-weighted training,
+fallback-belief refusal, checkpoint parameter/optimizer/RNG continuation, and
+unchanged shared-model initialization and EFE under the default gate. It found
+and fixed two concrete defects: foreign continuous/tone values were being
+clamped into learned support, and checkpoint resume reset the proposal's private
+random stream. No candidate-count, horizon, seed, mixture, posterior-mass, or
+top-action convergence experiment has been run, and no importance correction is
+applied. The feature therefore does not resolve finite-proposal bias or close
+`AI-111`.
 
 ## 2026-08-03 pass (motion-manifold bootstrap of the composition hierarchy)
 

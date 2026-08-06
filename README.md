@@ -69,6 +69,7 @@ python -m pytest -q \
   tests/test_plant_interface.py \
   tests/test_precision_beliefs.py \
   tests/test_preferences.py \
+  tests/test_proposal.py \
   tests/test_reference_oracle.py \
   tests/test_sensor_access_contract.py \
   tests/test_spatial_state.py \
@@ -115,9 +116,11 @@ policy below that boundary.
   material-coverage preference.
 - Hierarchical mark, polyline, passage, and passage-plan proposals.
 - An in-progress amortized mark/passage proposal network conditioned on canvas
-  and relational beliefs. Its emission mixture defaults to zero, dedicated
-  validation is incomplete, and it is not a policy prior or a correction for
-  finite-candidate bias.
+  and relational beliefs. Its emission mixture defaults to zero; a dedicated
+  unit suite covers density normalization/support, sampler parity, training,
+  checkpoint continuation, and separation from EFE, while proposal-budget
+  convergence validation remains incomplete. It is not a policy prior or a
+  correction for finite-candidate bias.
 - Registered global/requested-foveal camera observations, a provisional camera
   likelihood, and isolated compact body/brush posterior components. These are
   not yet connected into a complete sensor-only painting loop.

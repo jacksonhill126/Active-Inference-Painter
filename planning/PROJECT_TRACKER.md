@@ -241,7 +241,7 @@ Depends on: AI-101, AI-105
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Candidate frequency, intended policy prior, proposal density, and finite-budget bias have explicit semantics and convergence tests.
-Notes: A bounded implementation experiment proceeded ahead of AI-105 acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage proposal trained toward the existing base-EFE posterior and mixed with the hand-written sampler; its emission mix defaults to zero and it never enters EFE, VFE, preferences, or the normalized policy posterior. It does not correct finite-candidate bias. Dedicated `tests/test_proposal.py` plus candidate-count, horizon, seed, mixture, posterior-mass, and top-action convergence evidence remain absent, so the task is active rather than validated.
+Notes: A bounded implementation experiment proceeded ahead of AI-105 acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage proposal trained toward the existing base-EFE posterior and mixed with the hand-written sampler; its emission mix defaults to zero and it never enters EFE, VFE, preferences, or the normalized policy posterior. It does not correct finite-candidate bias. `tests/test_proposal.py` now covers normalized/support-bounded densities, empirical hand-sampler agreement, exact zero-mixture/RNG parity, mixed-source attribution, posterior-only training, checkpoint continuation, and unchanged EFE under the default gate. Candidate-count, horizon, seed, mixture, posterior-mass, and top-action convergence evidence remains absent, so the task is active rather than validated.
 
 ### AI-112 Define online learning and inheritance semantics
 

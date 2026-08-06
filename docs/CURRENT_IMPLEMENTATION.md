@@ -289,10 +289,11 @@ EFE, not composition rewards.
   the hand-written baseline unless an experiment explicitly raises the mix.
   The network is a proposal, not a policy prior: its log density is never added
   to EFE, VFE, a preference, or the normalized painting-policy posterior. It
-  also does not correct finite-candidate bias. Sampling, training, checkpoint,
-  and diagnostic paths exist, but the dedicated proposal test suite and the
-  candidate-count/horizon/seed/mixture convergence evidence required by
-  `AI-111` are not complete.
+  also does not correct finite-candidate bias. Sampling, density, training,
+  checkpoint continuation, exact zero-mixture parity, and separation from EFE
+  are covered by `tests/test_proposal.py`. The candidate-count, horizon, seed,
+  mixture, posterior-mass, and top-action convergence evidence required by
+  `AI-111` is not complete.
 - **Receding-horizon passage inference.** A global plan predicts several
   passages but execution commits only to the first. Within that passage, each
   observed mark updates a slow diagonal-Gaussian posterior over center,

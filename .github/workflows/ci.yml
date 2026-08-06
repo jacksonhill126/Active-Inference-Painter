@@ -41,6 +41,7 @@ jobs:
           tests/test_plant_interface.py
           tests/test_precision_beliefs.py
           tests/test_preferences.py
+          tests/test_proposal.py
           tests/test_reference_oracle.py
           tests/test_sensor_access_contract.py
           tests/test_spatial_state.py
