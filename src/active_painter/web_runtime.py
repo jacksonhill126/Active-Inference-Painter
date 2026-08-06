@@ -39,6 +39,11 @@ class WebSimRuntime:
     telemetry_sample_period: float = 1.0 / 15.0
     driver_bootstrap_transitions: int = 96
     driver_bootstrap_train_steps: int = 24
+    # Bootstrap mark source and the episode-boundary canvas/relational gradient
+    # budget. Both are declared here rather than buried in PainterConfig defaults
+    # so an attribution A/B run is self-documenting from the command line.
+    driver_bootstrap_generator: str = "motion_manifold"
+    driver_bootstrap_composition_train_steps: int = 0
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
     device: str | None = None
@@ -95,6 +100,8 @@ class WebSimRuntime:
             planning_horizon=4,
             passage_proposal_mix=0.45,
             passage_plan_proposal_mix=0.15,
+            # Now the PRIOR MEAN of the policy-precision Gamma belief
+            # (beta0 = alpha0 / 0.35), not a hand-tuned softmax temperature.
             policy_precision=0.35,
             batch_size=32,
             motor_forecast_candidates=2,
@@ -102,6 +109,8 @@ class WebSimRuntime:
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,
             replay_capacity=replay_capacity,
+            bootstrap_generator=self.driver_bootstrap_generator,
+            bootstrap_composition_train_steps=self.driver_bootstrap_composition_train_steps,
         )
         self.sim = ArmPainterSim(sim_config)
         if self.plant_backend == "mujoco":

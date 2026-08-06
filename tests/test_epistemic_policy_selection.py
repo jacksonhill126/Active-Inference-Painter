@@ -10,7 +10,8 @@ from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents, ExpectedFreeEnergy
 from active_painter.env import StrokeAction
 from active_painter.models import DynamicsEnsemble, GaussianBelief, ObservationModel
-from active_painter.policies import Policy
+from active_painter.policies import Policy, policy_posterior_from_efe
+from active_painter.precision_beliefs import POLICY_PRECISION_KEY, PrecisionLedger
 from active_painter.preferences import TerminalCoveragePreference
 
 
@@ -165,8 +166,19 @@ def test_uncertainty_gated_epistemic_value_can_change_policy_preference(
     assert_decompositions_are_not_mixed(uncertain_with_epistemic)
 
     policy_totals = torch.tensor([certain_with_epistemic.total, uncertain_with_epistemic.total])
-    posterior = torch.softmax(-epistemic_cfg.policy_precision * (policy_totals - policy_totals.min()), dim=0)
+    # Call the SHARED production helper rather than re-deriving the softmax here.
+    # A hand-rolled copy would keep passing while silently testing a formula
+    # production no longer uses.
+    posterior = policy_posterior_from_efe(
+        policy_totals,
+        torch.zeros_like(policy_totals),
+        PrecisionLedger(epistemic_cfg).mean(POLICY_PRECISION_KEY),
+    )
     assert posterior[1] > posterior[0]
+    # The shared helper is the canonical Q(pi) = softmax(log p(pi) - gamma G):
+    # the min-shift is exactly cancelled by the softmax normalizer.
+    unshifted = torch.softmax(-epistemic_cfg.policy_precision * policy_totals, dim=0)
+    assert torch.allclose(posterior, unshifted, atol=1e-9)
 
 
 class DivergingCoverageTransition(nn.Module):
@@ -214,8 +226,24 @@ def test_member_trajectory_rollouts_accumulate_parameter_uncertainty_over_depth(
     assert deep.terminal_coverage_std > 1.8 * shallow.terminal_coverage_std
 
 
-def test_evaluate_batch_matches_single_policy_evaluation(belief: GaussianBelief) -> None:
-    cfg = PainterConfig()
+@pytest.mark.parametrize(
+    "beliefs_enabled,normalization_enabled",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_evaluate_batch_matches_single_policy_evaluation(
+    belief: GaussianBelief,
+    beliefs_enabled: bool,
+    normalization_enabled: bool,
+) -> None:
+    # Guards the de-duplication of the precision block and total assembly: the
+    # batched and single evaluators must agree under every combination of the
+    # declared precision-belief and normalization flags, otherwise five of six
+    # copies were updated and the sixth drifted silently.
+    cfg = PainterConfig(
+        precision_beliefs_enabled=beliefs_enabled,
+        modality_precision_beliefs_enabled=beliefs_enabled,
+        modality_normalization_enabled=normalization_enabled,
+    )
     efe = make_efe(cfg, ensemble_with_uncertainty(uncertainty_scale=0.05))
     stroke = StrokeAction(0.8, 0.2, 0.9, 0.8, 0.08, 0.05, 1.0)
     policies = [

@@ -173,6 +173,34 @@ class PainterConfig:
     passage_plan_spacing: float = 0.20
     passage_plan_center_jitter: float = 0.08
     passage_plan_turn_jitter: float = 0.45
+    # --- Feature D: amortized candidate-policy proposal q_proposal(pi|belief) ---
+    # This is a PROPOSAL distribution, not a policy prior: it changes which
+    # hypotheses the posterior sees and enters no EFE term, no preference, and no
+    # normalized p(pi) factor. Zero reproduces the hand-written sampler exactly
+    # (no extra RNG draws), so the hand-written proposal stays a permanent
+    # measurable baseline mixed in at (1 - mix) in the SAME planning round.
+    # Training is independent of this weight: the proposal learns from the
+    # hand-written support first, and the mix is ramped only once
+    # diagnostics()['policyProposal'] shows the learned proposal assigning higher
+    # likelihood to selected policies. Never set it to 1.0 -- at that point the
+    # proposal would be trained on the posterior over candidates it alone
+    # supplied, and the paired hand-written control would be gone. An extreme
+    # config (mix 1.0 with both passage mixes 0.0 and planning_horizon 1) also
+    # degenerates to depth-1 candidates only.
+    learned_proposal_mix: float = 0.0
+    # Spatial planner only: the summary planner has no canvas or relational
+    # posterior to condition on, so it keeps the hand-written proposal.
+    learned_proposal_enabled: bool = True
+    learned_proposal_hidden_dim: int = 96
+    learned_proposal_lr: float = 1e-3
+    learned_proposal_train_steps: int = 1
+    # Monte-Carlo sample count for the declared divergence diagnostic
+    # D_KL(learned proposal || hand-written proposal), in nats per latent.
+    learned_proposal_divergence_samples: int = 32
+    # Floor on the learned factored proposal's per-parameter log scale, so a
+    # collapsed factor cannot make log q unbounded above. A numerical support
+    # bound on a proposal density, NOT a precision belief over any outcome.
+    learned_proposal_min_log_scale: float = -4.0
     passage_local_candidate_policies: int = 6
     passage_continuation_probability: float = 0.92
     passage_belief_center_std: float = 0.08
@@ -182,9 +210,18 @@ class PainterConfig:
     passage_belief_observation_std: float = 0.035
     # Declared structural prior over terminal canvases (spatial mode):
     # p*(s_T) ~ exp(precision * compression_gap(s_T)), where the gap is the
-    # hierarchical code's explanatory advantage over a context-free flat code.
+    # hierarchical code's explanatory advantage over the BEST member of a
+    # declared, hand-written, parameter-free context-free baseline family.
     # Zero disables the composition hierarchy entirely.
     composition_gap_precision: float = 1.0
+    # Membership of the context-free baseline family the compression gap is
+    # measured against. True adds a parameter-free 3x3 hollow-neighbourhood
+    # local Markov code beside the iid-cell Gaussian and scores against the
+    # better of the two, so the gap cannot be earned by local smoothness
+    # alone. False restores the iid-only baseline exactly. Both members are
+    # hand-supplied codes, never fit to outcomes; this selects a reference
+    # code, it does not learn a preference.
+    composition_local_baseline_enabled: bool = True
     composition_latent_dim: int = 16
     composition_hidden_channels: int = 24
     composition_lr: float = 1e-3
@@ -238,6 +275,13 @@ class PainterConfig:
     motor_roll_sweep_degrees: float = 32.0
     motor_proprioceptive_risk_precision: float = 0.35
     motor_proprioceptive_ambiguity_precision: float = 0.25
+    # Declared precision on the reliability PARAMETER-novelty term. Split out of
+    # motor_proprioceptive_ambiguity_precision because that one now scales only
+    # the state/observation mutual information; parameter novelty over the
+    # learned inverse-gamma reliability belief is a different quantity and must
+    # be separately attributable. Default matches the old shared value so the
+    # split is numerically inert.
+    motor_reliability_novelty_precision: float = 0.25
     # Learned per-motion-family execution reliability: an inverse-gamma
     # precision belief over how much jitterier real execution is than the
     # body-model forecast (the squared ratio of realized to predicted tracking
@@ -283,6 +327,126 @@ class PainterConfig:
     inference_steps: int = 24
     inference_lr: float = 0.08
 
+    # Modality-level multiplier on the motor proprioceptive EFE contribution.
+    # The three precisions above are applied INSIDE motor_efe_terms; this one is
+    # the modality's own declared precision, and it seeds the prior mean of the
+    # motor Gamma precision belief. The identity default makes today's
+    # arithmetic exactly the unobserved-belief case.
+    motor_modality_precision: float = 1.0
+
+    # --- Feature C: Gamma precision beliefs over the EFE modalities -------
+    # The seven declared precisions above become posterior means of Gamma
+    # beliefs updated by the reference Ch.10 rule dF/dgamma =
+    # (alpha/gamma - beta0) + (pi - pi0) . (-G). Each belief's rate is seeded
+    # at beta0 = alpha0 / (declared constant), so an unobserved belief and a
+    # disabled flag both reproduce the constant arithmetic exactly.
+    precision_beliefs_enabled: bool = True
+    # False keeps the seven modality precisions constant while still learning
+    # the policy precision, so the two mechanisms are separately attributable.
+    modality_precision_beliefs_enabled: bool = True
+    # Gamma shape. alpha0 = 1 makes each belief exactly the reference's
+    # single-parameter gamma = 1/beta. Declared, never updated from data.
+    precision_belief_alpha0: float = 1.0
+    precision_belief_kappa: float = 0.25
+    precision_belief_iterations: int = 64
+    # Declared bounded support, as a ratio of each belief's prior mean.
+    # Measured: disagreeing evidence drives gamma to ~1e-3 unbounded, which
+    # would let learned data switch a declared preference off. Also keeps
+    # every diagnostics value finite and JSON-serializable.
+    precision_belief_min_ratio: float = 0.1
+    precision_belief_max_ratio: float = 10.0
+
+    # --- Feature C: modality unit normalization ----------------------------
+    # Reduce every EFE modality to nats per observation channel and record
+    # each normalizer's name in the component dataclass. False keeps the
+    # historical mixed units (scalar Beta / per-cell-channel / per-latent-dim
+    # / raw 27-channel sum) for attribution.
+    modality_normalization_enabled: bool = True
+    # Restrict the moment-matched terminal coverage forecast to the interior
+    # unimodal Beta family: both concentrations >= this floor, mean preserved
+    # by a common rescale. Measured: removes a digamma(alpha -> 0) singularity
+    # worth 53248 nats on a near-blank forecast, capping it at 892, and leaves
+    # every well-conditioned forecast bit-unchanged. 0 disables.
+    terminal_forecast_concentration_floor: float = 1.0
+    # Structural enable flag for the composition hierarchy, kept separate from
+    # composition_gap_precision so a learned precision can never construct or
+    # destroy the model, and so the checkpoint architecture key stays a
+    # declared constant rather than a learned quantity.
+    composition_enabled: bool = True
+
+    # --- Feature C: gap-progress stop policy prior -------------------------
+    # Gaussian random-walk belief over the compression-gap increment per
+    # completed mark. Its standardized posterior mean is a SECOND factor on
+    # the stop policy prior: log p(stop) = logsigmoid(coverage term) +
+    # logsigmoid(-gap_progress_stop_sharpness * mean/sqrt(var)). Both factors
+    # are <= 0, so neither can manufacture value. Delta-gap never enters
+    # expected free energy and the terminal coverage preference is untouched.
+    gap_progress_stop_enabled: bool = True
+    gap_increment_prior_mean: float = 0.05
+    gap_increment_prior_std: float = 0.10
+    gap_increment_process_std: float = 0.02
+    gap_increment_observation_std: float = 0.05
+    gap_progress_stop_sharpness: float = 2.0
+
     replay_capacity: int = 50_000
     batch_size: int = 128
     model_lr: float = 2e-3
+
+    # --- Feature A: motion-manifold bootstrap of the composition hierarchy ---
+    # Bootstrap mark source. 'motion_manifold' seeds the transition and
+    # canvas/relational likelihoods on the body's own reachable-motion manifold
+    # (joint-space sweeps projected by FK); 'random_stroke' retains the previous
+    # iid PolicySampler._stroke source so hand-supplied structure stays
+    # separately attributable. Generative-process exploration below the
+    # painting-policy boundary: it supplies no preference and selects no policy.
+    bootstrap_generator: str = "motion_manifold"
+    # The sweep sampler's own RNG seed. Deliberately NOT agent.policy_sampler.rng:
+    # sharing it would make switching generators also change the live planner's
+    # candidate stream and confound the attribution comparison.
+    bootstrap_manifold_seed: int = 4242
+    # Marks per bootstrap episode. The canvas is cleared ONLY at episode
+    # boundaries, so one episode accumulates a complete organized canvas for the
+    # canvas/relational likelihood to encode. 24 preserves the previous clear
+    # cadence exactly.
+    bootstrap_episode_marks: int = 24
+    # Joint-space arclength (summed degrees) of one sweep.
+    bootstrap_manifold_amplitude_degrees: tuple[float, float] = (45.0, 130.0)
+    # Sweep integration step. This is the exploration discretization, not a
+    # commanded mark speed: emitted marks are re-timed by
+    # stroke_execution.adaptive_stroke_timing, so a sweep's velocity profile
+    # never reaches the canvas.
+    bootstrap_manifold_step_degrees: tuple[float, float] = (0.25, 0.80)
+    # A single-joint sweep cannot paint: from the canvas-centre IK pose the tip
+    # holds the near-contact band for only a few degrees, a sub-0.1-normalized
+    # dab. A family therefore only UP-WEIGHTS its joint inside a coordinated
+    # sweep.
+    bootstrap_manifold_families: tuple[str, ...] = (
+        "yaw_dominant",
+        "pitch_dominant",
+        "roll_dominant",
+        "elbow_dominant",
+        "coordinated",
+    )
+    # Relative joint-velocity weight of the non-dominant joints within a family.
+    bootstrap_manifold_dominance_ratio: float = 0.22
+    # Chain each sweep from the pose the previous one ended at, so an episode
+    # lays down a connected region instead of a scatter of independent arcs.
+    bootstrap_manifold_chain_sweeps: bool = True
+    # Per-joint perturbation applied to the chained start pose.
+    bootstrap_manifold_chain_jitter_degrees: float = 3.0
+    # Minimum emitted mark length, matching PolicySampler._stroke's floor.
+    # Sweeps shorter than this are rejected; a sweep long enough for only one
+    # mark is emitted without a passage latent, because a polyline PassageLatent
+    # needs at least two marks (Policy.__post_init__).
+    bootstrap_manifold_min_mark_length: float = 0.20
+    # Canvas/relational gradient steps at each bootstrap episode boundary.
+    # Measured: the compression gap does not discriminate structure at all below
+    # a few hundred steps, while the online composition_train_steps budget
+    # supplies only ~50 across a whole bootstrap. 0 keeps today's cost exactly;
+    # the attribution A/B sets it explicitly. A gradient budget, not an
+    # objective term.
+    bootstrap_composition_train_steps: int = 0
+    # Emit fitted polyline latents into the passage likelihood replays. Off by
+    # default because it would open the kind-specific transition-EFE gates on
+    # bootstrap-only evidence before any real painting.
+    bootstrap_feeds_passage_likelihood: bool = False

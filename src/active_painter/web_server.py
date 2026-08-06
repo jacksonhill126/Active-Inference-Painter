@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .arm_agent_driver import (
+    BOOTSTRAP_GENERATORS,
     ORACLE_OBSERVATION_ACCESS_MODE,
     SENSOR_OBSERVATION_ACCESS_MODE,
 )
@@ -191,6 +192,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--telemetry-sample-hz", type=float, default=15.0)
     parser.add_argument("--driver-bootstrap-transitions", type=int, default=None)
     parser.add_argument("--driver-bootstrap-train-steps", type=int, default=None)
+    parser.add_argument(
+        "--driver-bootstrap-generator",
+        choices=BOOTSTRAP_GENERATORS,
+        default="motion_manifold",
+        help=(
+            "bootstrap mark source; motion_manifold seeds the likelihoods on the "
+            "body's own reachable-motion manifold, random_stroke retains the "
+            "previous iid source for attribution"
+        ),
+    )
+    parser.add_argument(
+        "--driver-bootstrap-composition-train-steps",
+        type=int,
+        default=0,
+        help=(
+            "canvas/relational gradient steps at each bootstrap episode boundary; "
+            "a gradient budget, not an objective term. Measured: the compression "
+            "gap does not discriminate structure below a few hundred steps"
+        ),
+    )
     parser.add_argument("--checkpoint-path", default=None)
     parser.add_argument("--checkpoint-save-every-transitions", type=int, default=10)
     parser.add_argument("--device", default=None, help="torch device for the planner, e.g. cuda, cuda:0, cpu (default: cuda if available)")
@@ -246,7 +267,9 @@ def main() -> None:
     stroke_tone_prior = {"black": 1.0, "white": 0.0, "random": None}[args.stroke_tone_prior]
     print(
         "Initializing Active-Inference Arm Painter "
-        f"({args.planner_state_kind}, bootstrap={bootstrap_transitions}/{bootstrap_train_steps})...",
+        f"({args.planner_state_kind}, bootstrap={bootstrap_transitions}/{bootstrap_train_steps}, "
+        f"generator={args.driver_bootstrap_generator}, "
+        f"bootstrap-composition-steps={args.driver_bootstrap_composition_train_steps})...",
         flush=True,
     )
     runtime = WebSimRuntime(
@@ -261,6 +284,8 @@ def main() -> None:
         telemetry_sample_period=1.0 / args.telemetry_sample_hz if args.telemetry_sample_hz > 0 else 0.0,
         driver_bootstrap_transitions=bootstrap_transitions,
         driver_bootstrap_train_steps=bootstrap_train_steps,
+        driver_bootstrap_generator=args.driver_bootstrap_generator,
+        driver_bootstrap_composition_train_steps=args.driver_bootstrap_composition_train_steps,
         checkpoint_path=args.checkpoint_path,
         checkpoint_save_every_transitions=args.checkpoint_save_every_transitions,
         device=args.device,

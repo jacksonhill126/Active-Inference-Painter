@@ -9,8 +9,17 @@ import torch
 from torch import nn
 from torch.distributions import Normal
 
-from .composition import LOGVAR_FLOOR, SIGMA_FLOOR
+from .composition import (
+    BASELINE_CEILING_NATS,
+    BASELINE_FAMILY_MEMBERS,
+    IID_BASELINE_MEMBER,
+    LOGVAR_FLOOR,
+    baseline_log_likelihood,
+    flat_log_likelihood,
+    local_smoothness_log_likelihood,
+)
 from .config import PainterConfig
+from .precision_beliefs import ModalityWeights
 from .env import StrokeAction
 from .policies import PassageLatent, Policy
 from .spatial_hierarchy import infer_mark_event_belief
@@ -453,6 +462,26 @@ class HierarchicalCanvasModel(nn.Module):
         mean, logvar = self.relational_decoder(latent).chunk(2, dim=-1)
         return mean, torch.clamp(logvar, LOGVAR_FLOOR, 2.0)
 
+    def _hierarchy_weights(self, weights: ModalityWeights | None) -> tuple[float, float]:
+        """Precision weights for the two hierarchy transition modalities.
+
+        `weights` carries the Gamma precision belief means; `None` reads the
+        declared config constants exactly as before this feature, so the
+        hand-written mechanism stays available for attribution. Both KLs are
+        already averaged over their latent dimension by `_kl_diagonal`, so the
+        declared unit is nats per latent dimension and no further normalizer is
+        applied -- a DIFFERENT denominator from the material modalities'
+        per-cell-channel densities, which is why each modality records its own
+        normalizer name.
+        """
+
+        if weights is None:
+            return (
+                float(self.cfg.canvas_latent_transition_precision),
+                float(self.cfg.relational_transition_precision),
+            )
+        return float(weights.canvas), float(weights.relational)
+
     @staticmethod
     def _kl_standard(mean: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         return 0.5 * (mean.square() + logvar.exp() - 1.0 - logvar).sum(dim=-1)
@@ -485,16 +514,32 @@ class HierarchicalCanvasModel(nn.Module):
 
     @staticmethod
     def flat_log_likelihood(fields: torch.Tensor) -> torch.Tensor:
-        mean = fields.mean(dim=(2, 3), keepdim=True)
-        variance = torch.clamp(
-            fields.var(dim=(2, 3), unbiased=False, keepdim=True),
-            min=SIGMA_FLOOR**2,
+        """Baseline family member 1 (one shared implementation in composition.py)."""
+
+        return flat_log_likelihood(fields)
+
+    @staticmethod
+    def local_smoothness_log_likelihood(fields: torch.Tensor) -> torch.Tensor:
+        """Baseline family member 2 (one shared implementation in composition.py)."""
+
+        return local_smoothness_log_likelihood(fields)
+
+    def baseline_log_likelihood(self, fields: torch.Tensor) -> torch.Tensor:
+        """Best-of-family baseline under the declared config flag."""
+
+        return baseline_log_likelihood(
+            fields, local_enabled=self.cfg.composition_local_baseline_enabled
         )
-        return Normal(mean, torch.sqrt(variance)).log_prob(fields).mean(dim=(1, 2, 3))
 
     @torch.no_grad()
     def compression_gap(self, fields: torch.Tensor) -> torch.Tensor:
-        return self.canvas_elbo(fields) - self.flat_log_likelihood(fields)
+        """gap(s) = canvas ELBO - best-of-family baseline, nats/cell-channel.
+
+        no_grad is load-bearing: the family maximum is non-differentiable at
+        member ties, and a blank canvas sits exactly on one.
+        """
+
+        return self.canvas_elbo(fields) - self.baseline_log_likelihood(fields)
 
     def training_loss(self, fields: torch.Tensor) -> torch.Tensor:
         canvas_vfe = -self.canvas_elbo(fields, sample=True).mean()
@@ -687,6 +732,7 @@ class HierarchicalCanvasModel(nn.Module):
         fields: torch.Tensor,
         policies: Sequence[Policy],
         step_indices: Sequence[int],
+        weights: ModalityWeights | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Per-mark hierarchy likelihoods for low-level predicted fields.
 
@@ -741,13 +787,14 @@ class HierarchicalCanvasModel(nn.Module):
         terminal_relations = self.relational_observations(fields)
         terminal_relation_mean, terminal_relation_logvar = self.encode_relations(terminal_relations)
         valid = torch.tensor(valid_values, device=fields.device, dtype=torch.bool)
-        canvas_risk = self.cfg.canvas_latent_transition_precision * self._kl_diagonal(
+        canvas_weight, relational_weight = self._hierarchy_weights(weights)
+        canvas_risk = canvas_weight * self._kl_diagonal(
             terminal_canvas_mean,
             terminal_canvas_logvar,
             torch.stack(canvas_priors),
             torch.stack(canvas_logvars),
         )
-        relational_risk = self.cfg.relational_transition_precision * self._kl_diagonal(
+        relational_risk = relational_weight * self._kl_diagonal(
             terminal_relation_mean,
             terminal_relation_logvar,
             torch.stack(relation_priors),
@@ -763,6 +810,7 @@ class HierarchicalCanvasModel(nn.Module):
         policies: Sequence[Policy] | None = None,
         samples_per_policy: int = 1,
         include_structured_passages: bool = True,
+        weights: ModalityWeights | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         aggregate_trained = int(self.transition_update_count.item()) > 0
         trajectory_trained = int(self.passage_trajectory_update_count.item()) > 0
@@ -847,13 +895,14 @@ class HierarchicalCanvasModel(nn.Module):
         terminal_canvas_mean, terminal_canvas_logvar = self.encode_canvas(terminal_fields)
         observations = self.relational_observations(terminal_fields)
         terminal_relation_mean, terminal_relation_logvar = self.encode_relations(observations)
-        canvas_risk = self.cfg.canvas_latent_transition_precision * self._kl_diagonal(
+        canvas_weight, relational_weight = self._hierarchy_weights(weights)
+        canvas_risk = canvas_weight * self._kl_diagonal(
             terminal_canvas_mean,
             terminal_canvas_logvar,
             canvas_prior_mean,
             canvas_prior_logvar,
         )
-        relational_risk = self.cfg.relational_transition_precision * self._kl_diagonal(
+        relational_risk = relational_weight * self._kl_diagonal(
             terminal_relation_mean,
             terminal_relation_logvar,
             relation_prior_mean,
@@ -1074,8 +1123,44 @@ class HierarchicalCanvasModel(nn.Module):
                     "KL[q(z_t)||p(z_t|z_0,z_passage,phase_1:t)]"
                 ),
             },
+            # Hand-supplied structure, separately identifiable per the charter:
+            # the compression gap's reference measure is a fixed code family,
+            # not anything learned from outcomes.
+            "compressionGapBaseline": {
+                "family": (
+                    list(BASELINE_FAMILY_MEMBERS)
+                    if self.cfg.composition_local_baseline_enabled
+                    else [IID_BASELINE_MEMBER]
+                ),
+                "localMemberEnabled": bool(self.cfg.composition_local_baseline_enabled),
+                "combination": (
+                    "elementwise per-image maximum over members"
+                    if self.cfg.composition_local_baseline_enabled
+                    else "single member; no maximum taken"
+                ),
+                "channelSet": (
+                    f"all {self.channels} material channels; derived ground_contrast and "
+                    "material_coverage are included, as in the ELBO (approximation register item 3)"
+                ),
+                "sharedCeilingNatsPerCellChannel": BASELINE_CEILING_NATS,
+                "handSupplied": (
+                    "both members are hand-written and parameter-free; neither is fit to outcomes"
+                ),
+                "approximation": (
+                    "best-of-family maximum is an unnormalized code: it omits the log(family size) "
+                    "model-index cost (log 2 spread over channels*grid*grid = 0.00045 nats per "
+                    "cell-channel at 6x16x16). The maximum is also non-differentiable at member "
+                    "ties, which is safe only because compression_gap runs under torch.no_grad."
+                ),
+            },
             "declaredAs": (
                 "aggregate and multistep passage-conditioned Gaussian transition likelihoods over persistent "
-                "canvas and relational latents; policy EFE contributions are precision-weighted KL terms"
+                "canvas and relational latents; policy EFE contributions are belief-weighted KL terms, "
+                "scaled by the posterior mean of a declared Gamma precision belief"
             ),
+            "modalityUnits": {
+                "canvas_latent_transition": "nats_per_canvas_latent_dim",
+                "relational_transition": "nats_per_relational_latent_dim",
+                "compositionGap": "nats_per_cell_channel_all_material_channels",
+            },
         }

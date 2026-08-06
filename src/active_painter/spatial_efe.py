@@ -18,7 +18,14 @@ from .local_spatial import (
     pixel_material_from_state,
 )
 from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
+from .motor_planning import motor_efe_contribution
 from .canvas_hierarchy import policy_descriptor
+from .precision_beliefs import (
+    MODALITY_NAMES,
+    ModalityWeights,
+    PrecisionLedger,
+    constant_modality_weights,
+)
 from .policies import Policy
 from .preferences import TerminalCoveragePreference
 from .spatial_state import (
@@ -111,6 +118,40 @@ class SpatialEFEComponents:
     identity_transition_approximation: str = ""
     hierarchy_transition_mode: str = "unavailable"
     passage_trajectory_steps: int = 0
+    # Telemetry mirrors of the two components of motor_epistemic_value. Read by
+    # the viewer only; no arithmetic anywhere consumes them.
+    motor_mutual_information: float = 0.0
+    motor_reliability_novelty: float = 0.0
+    # --- declared units and per-modality precision weights ----------------
+    # Every modality field above stays POST-weighted (raw term times its
+    # precision times its normalizer), which is what preserves the exact
+    # `total == sum of the ten summands` decomposition. The recorded precision
+    # and normalizer make the RAW term recoverable, so the attribution
+    # assertion `raw * precision * normalizer == stored` is checkable from
+    # telemetry alone.
+    modality_units: str = "nats_per_observation_channel"
+    approximation: str = ""
+    terminal_coverage_precision: float = 0.0
+    terminal_coverage_normalizer: float = 1.0
+    terminal_coverage_normalizer_name: str = ""
+    observation_ambiguity_precision: float = 0.0
+    observation_ambiguity_normalizer: float = 1.0
+    observation_ambiguity_normalizer_name: str = ""
+    transition_precision: float = 0.0
+    transition_normalizer: float = 1.0
+    transition_normalizer_name: str = ""
+    composition_gap_precision: float = 0.0
+    composition_gap_normalizer: float = 1.0
+    composition_gap_normalizer_name: str = ""
+    canvas_latent_transition_precision: float = 0.0
+    canvas_latent_transition_normalizer: float = 1.0
+    canvas_latent_transition_normalizer_name: str = ""
+    relational_transition_precision: float = 0.0
+    relational_transition_normalizer: float = 1.0
+    relational_transition_normalizer_name: str = ""
+    motor_proprioceptive_precision: float = 0.0
+    motor_proprioceptive_normalizer: float = 1.0
+    motor_proprioceptive_normalizer_name: str = ""
 
 
 @dataclass(slots=True)
@@ -159,8 +200,15 @@ class SpatialExpectedFreeEnergy:
     each ensemble member propagates its own material-field particle. Terminal
     coverage variance combines across-member disagreement of the aggregate
     coverage (which carries the spatial correlation induced by strokes) with
-    the mean within-member cell-wise delta-method variance. Logged components
-    are scaled by the declared per-modality precisions in the config.
+    the mean within-member cell-wise delta-method variance.
+
+    Logged components are BELIEF-weighted: each modality contributes
+    `gamma_m * normalizer_m * (raw term)`, where `gamma_m` is the posterior mean
+    of a declared Gamma precision belief (see `precision_beliefs`) and
+    `normalizer_m` reduces the modality to nats per observation channel. With no
+    injected ledger, or with the declared flags off, `gamma_m` is exactly the
+    hand-declared config constant and every `normalizer_m` is exactly 1.0, so
+    the hand-written mechanism stays available and separately attributable.
 
     When a composition hierarchy is provided, terminal preferences include the
     declared structural prior p*(s_T) ~ exp(precision * compression_gap(s_T)):
@@ -174,31 +222,132 @@ class SpatialExpectedFreeEnergy:
         terminal_preference: TerminalCoveragePreference,
         device: torch.device | str = "cpu",
         composition: CompositionModel | None = None,
+        precision_ledger: PrecisionLedger | None = None,
     ) -> None:
         self.cfg = config
         self.dynamics = dynamics
         self.preference = terminal_preference
         self.device = torch.device(device)
         self.composition = composition
+        self.precision_ledger = precision_ledger
 
-    def _composition_terms(self, terminal_fields: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Per-sample compression gap and its risk contribution.
+    def _modality_weights(self) -> ModalityWeights:
+        """Precision-belief means and declared normalizers for one evaluation.
 
-        `terminal_fields` is [N, C, H, W]; returns (gap, risk) with risk
-        already scaled by the declared composition precision.
+        Built once per evaluate call and read-only thereafter, so the four
+        spatial dispatch paths cannot drift apart the way four verbatim copies
+        of the precision block could. Precision beliefs are only ever updated
+        BETWEEN planning rounds, never inside an evaluation, so the weights stay
+        constant across the whole candidate set -- required for the precision
+        gradient over that set to be well defined.
         """
 
-        if self.composition is None or self.cfg.composition_gap_precision <= 0.0:
+        if self.precision_ledger is None:
+            return constant_modality_weights(self.cfg)
+        return self.precision_ledger.weights()
+
+    def _component_units(self, weights: ModalityWeights) -> dict[str, float | str]:
+        """Declared units and per-modality weights for the component dataclass."""
+
+        payload: dict[str, float | str] = {
+            "modality_units": (
+                "nats_per_observation_channel"
+                if weights.normalization_enabled
+                else "declared_mixed_units_pre_normalization"
+            ),
+            "approximation": (
+                "modality contributions are gamma_m * normalizer_m * raw term, with gamma_m the "
+                "posterior mean of a declared Gamma precision belief clamped to its declared "
+                "bounded support; the terminal coverage forecast is a moment-matched Beta "
+                "restricted to the interior-unimodal family (concentration floor "
+                f"{weights.concentration_floor:g}); modality fields are post-weighted so the "
+                "ten-summand total decomposition stays exact"
+            ),
+        }
+        for name in MODALITY_NAMES:
+            payload[f"{name}_precision"] = float(weights.gamma.get(name, 0.0))
+            payload[f"{name}_normalizer"] = float(weights.normalizer.get(name, 1.0))
+            payload[f"{name}_normalizer_name"] = weights.normalizer_name.get(name, "")
+        return payload
+
+    @staticmethod
+    def _assemble_total(
+        *,
+        terminal_risk,
+        ambiguity,
+        transition_risk,
+        transition_ambiguity,
+        composition_risk,
+        canvas_transition_risk,
+        relational_transition_risk,
+        passage_canvas_risk,
+        passage_relational_risk,
+        motor_risk,
+        motor_epistemic_value,
+    ):
+        """Single source of truth for the spatial EFE total.
+
+        `epistemic_value` is deliberately absent: transition_risk +
+        transition_ambiguity already equals -I(theta; s_next), so subtracting it
+        again would double count parameter information gain (spec 9.2). The
+        logged motor ambiguity is absent for the same reason -- the -I(s; o)
+        inside `motor_efe_contribution` already carries the canonical ambiguity.
+        """
+
+        return (
+            terminal_risk
+            + ambiguity
+            + transition_risk
+            + transition_ambiguity
+            + composition_risk
+            + canvas_transition_risk
+            + relational_transition_risk
+            + passage_canvas_risk
+            + passage_relational_risk
+            + motor_efe_contribution(motor_risk, motor_epistemic_value)
+        )
+
+    def _composition_active(self) -> bool:
+        """Structural availability of the composition modality.
+
+        `composition_enabled` is a DECLARED STRUCTURE flag kept separate from
+        `composition_gap_precision` so a learned precision can never construct
+        or destroy the hierarchy, and so the checkpoint architecture key stays a
+        declared constant rather than a learned quantity.
+        """
+
+        return bool(self.cfg.composition_enabled and self.cfg.composition_gap_precision > 0.0)
+
+    def _composition_terms(
+        self,
+        terminal_fields: torch.Tensor,
+        weights: ModalityWeights | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-sample compression gap and its risk contribution.
+
+        `terminal_fields` is [N, C, H, W]; returns (gap, risk) with risk scaled
+        by the composition precision belief's posterior mean and its declared
+        normalizer. `weights=None` reads the declared config constant exactly as
+        before this feature.
+        """
+
+        if self.composition is None or not self._composition_active():
             zeros = torch.zeros(terminal_fields.shape[0], device=terminal_fields.device)
             return zeros, zeros
+        weight = (
+            float(self.cfg.composition_gap_precision)
+            if weights is None
+            else float(weights.composition)
+        )
         gap = self.composition.compression_gap(terminal_fields)
-        return gap, -self.cfg.composition_gap_precision * gap
+        return gap, -weight * gap
 
     def _hierarchy_transition_terms(
         self,
         terminal_fields: torch.Tensor,
         policies: Sequence[Policy],
         samples_per_policy: int,
+        weights: ModalityWeights | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.composition is None or not hasattr(self.composition, "transition_efe_terms"):
             zeros = torch.zeros(terminal_fields.shape[0], device=terminal_fields.device)
@@ -214,6 +363,7 @@ class SpatialExpectedFreeEnergy:
             policies=policies,
             samples_per_policy=max(1, int(samples_per_policy)),
             include_structured_passages=False,
+            weights=weights,
         )
 
     def _passage_trajectory_active(self, policies: Sequence[Policy]) -> bool:
@@ -235,6 +385,7 @@ class SpatialExpectedFreeEnergy:
         policies: Sequence[Policy],
         policy_count: int,
         samples_per_step: int,
+        weights: ModalityWeights | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         zeros = torch.zeros(policy_count, device=self.device)
         if not fields:
@@ -245,6 +396,7 @@ class SpatialExpectedFreeEnergy:
             stacked,
             expanded_policies,
             step_indices,
+            weights=weights,
         )
         indices = torch.tensor(policy_indices, device=stacked.device, dtype=torch.long)
         weight = 1.0 / max(1, int(samples_per_step))
@@ -499,6 +651,8 @@ class SpatialExpectedFreeEnergy:
             raise ValueError("An execution-forecast first transition applies to a single policy.")
         if transition_contexts is not None and len(transition_contexts) != len(policies):
             raise ValueError("Conditioned transition contexts must align with candidate policies.")
+        # One precision-belief/normalizer set for the whole candidate set.
+        weights = self._modality_weights()
         if transition_contexts is None:
             transition_contexts = [
                 _ConditionedSpatialTransition(
@@ -773,15 +927,17 @@ class SpatialExpectedFreeEnergy:
             self.preference,
             coverage_mean,
             coverage_variance,
-            precision=self.cfg.terminal_risk_precision,
+            precision=weights.terminal,
+            concentration_floor=weights.concentration_floor,
         )
-        member_gap, member_composition_risk = self._composition_terms(composition_fields)
+        member_gap, member_composition_risk = self._composition_terms(composition_fields, weights)
         composition_gap = member_gap.reshape(policy_count, member_count).mean(dim=1)
         composition_risk = member_composition_risk.reshape(policy_count, member_count).mean(dim=1)
         member_canvas_risk, member_relational_risk = self._hierarchy_transition_terms(
             composition_fields,
             policies,
             member_count,
+            weights,
         )
         canvas_transition_risk = member_canvas_risk.reshape(policy_count, member_count).mean(dim=1)
         relational_transition_risk = member_relational_risk.reshape(policy_count, member_count).mean(dim=1)
@@ -792,12 +948,17 @@ class SpatialExpectedFreeEnergy:
             policies,
             policy_count,
             member_count,
+            weights,
         )
 
-        ambiguity = self.cfg.ambiguity_precision * ambiguity
-        transition_risk = self.cfg.transition_precision * transition_risk
-        transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
-        epistemic_value = self.cfg.transition_precision * epistemic_value
+        # Belief-weighted modality contributions. `epistemic_value` carries the
+        # SAME transition weight as transition_risk/transition_ambiguity because
+        # R_trans + A_trans == -I(theta; s_next): giving it its own precision
+        # would make that logged identity false, and it is not a summand.
+        ambiguity = weights.ambiguity * ambiguity
+        transition_risk = weights.transition * transition_risk
+        transition_ambiguity = weights.transition * transition_ambiguity
+        epistemic_value = weights.transition * epistemic_value
         motor_risk_t = torch.tensor(
             [
                 context.motor_risk if used and context is not None else 0.0
@@ -822,19 +983,18 @@ class SpatialExpectedFreeEnergy:
             device=device,
             dtype=material.dtype,
         )
-        total = (
-            terminal_risk
-            + ambiguity
-            + transition_risk
-            + transition_ambiguity
-            + composition_risk
-            + canvas_transition_risk
-            + relational_transition_risk
-            + passage_canvas_risk
-            + passage_relational_risk
-            + motor_risk_t
-            + motor_ambiguity_t
-            - motor_epistemic_t
+        total = self._assemble_total(
+            terminal_risk=terminal_risk,
+            ambiguity=ambiguity,
+            transition_risk=transition_risk,
+            transition_ambiguity=transition_ambiguity,
+            composition_risk=composition_risk,
+            canvas_transition_risk=canvas_transition_risk,
+            relational_transition_risk=relational_transition_risk,
+            passage_canvas_risk=passage_canvas_risk,
+            passage_relational_risk=passage_relational_risk,
+            motor_risk=motor_risk_t,
+            motor_epistemic_value=motor_epistemic_t,
         )
         patch_area = touched.float().mean(dim=(1, 2))
 
@@ -896,6 +1056,7 @@ class SpatialExpectedFreeEnergy:
                 identity_transition_approximation=self._local_identity_approximation(local_steps[index]),
                 hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policies[index])[0],
                 passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policies[index])[1],
+                **self._component_units(weights),
             )
             for index in range(policy_count)
         ]
@@ -946,6 +1107,8 @@ class SpatialExpectedFreeEnergy:
         motor_epistemic_value: float = 0.0,
         motor_efe_approximation: str = "",
     ) -> SpatialEFEComponents:
+        # One precision-belief/normalizer set for the whole candidate set.
+        weights = self._modality_weights()
         device = self.device
         mean = torch.tensor(pixel_material_from_state(belief), device=device, dtype=torch.float32).unsqueeze(0)
         variance = torch.tensor(pixel_logvar_from_state(belief, self.cfg), device=device, dtype=torch.float32).exp().unsqueeze(0)
@@ -1036,19 +1199,21 @@ class SpatialExpectedFreeEnergy:
             self.preference,
             coverage_mean,
             coverage_variance,
-            precision=self.cfg.terminal_risk_precision,
+            precision=weights.terminal,
+            concentration_floor=weights.concentration_floor,
         )
         terminal_risk = terminal_risk.mean()
         terminal_entropy = terminal_entropy.mean()
         pragmatic_value = pragmatic_value.mean()
         composition_fields = self._composition_fields_from_terminal(mean)
-        composition_gap, composition_risk = self._composition_terms(composition_fields)
+        composition_gap, composition_risk = self._composition_terms(composition_fields, weights)
         composition_gap = composition_gap.mean()
         composition_risk = composition_risk.mean()
         canvas_transition_risk, relational_transition_risk = self._hierarchy_transition_terms(
             composition_fields,
             [policy],
             1,
+            weights,
         )
         canvas_transition_risk = canvas_transition_risk.mean()
         relational_transition_risk = relational_transition_risk.mean()
@@ -1059,31 +1224,35 @@ class SpatialExpectedFreeEnergy:
             [policy],
             1,
             1,
+            weights,
         )
         passage_canvas_risk = passage_canvas_risk[0]
         passage_relational_risk = passage_relational_risk[0]
         passage_observation_count = passage_observation_count[0]
 
-        ambiguity = self.cfg.ambiguity_precision * ambiguity
-        transition_risk = self.cfg.transition_precision * transition_risk
-        transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
-        epistemic_value = self.cfg.transition_precision * epistemic_value
+        # Belief-weighted modality contributions. `epistemic_value` carries the
+        # SAME transition weight as transition_risk/transition_ambiguity because
+        # R_trans + A_trans == -I(theta; s_next): giving it its own precision
+        # would make that logged identity false, and it is not a summand.
+        ambiguity = weights.ambiguity * ambiguity
+        transition_risk = weights.transition * transition_risk
+        transition_ambiguity = weights.transition * transition_ambiguity
+        epistemic_value = weights.transition * epistemic_value
         motor_risk_value = float(motor_risk if first_transition_used else 0.0)
         motor_ambiguity_value = float(motor_ambiguity if first_transition_used else 0.0)
         motor_epistemic_value_used = float(motor_epistemic_value if first_transition_used else 0.0)
-        total = (
-            terminal_risk
-            + ambiguity
-            + transition_risk
-            + transition_ambiguity
-            + composition_risk
-            + canvas_transition_risk
-            + relational_transition_risk
-            + passage_canvas_risk
-            + passage_relational_risk
-            + motor_risk_value
-            + motor_ambiguity_value
-            - motor_epistemic_value_used
+        total = self._assemble_total(
+            terminal_risk=terminal_risk,
+            ambiguity=ambiguity,
+            transition_risk=transition_risk,
+            transition_ambiguity=transition_ambiguity,
+            composition_risk=composition_risk,
+            canvas_transition_risk=canvas_transition_risk,
+            relational_transition_risk=relational_transition_risk,
+            passage_canvas_risk=passage_canvas_risk,
+            passage_relational_risk=passage_relational_risk,
+            motor_risk=motor_risk_value,
+            motor_epistemic_value=motor_epistemic_value_used,
         )
         return SpatialEFEComponents(
             total=float(total.item()),
@@ -1122,6 +1291,7 @@ class SpatialExpectedFreeEnergy:
             identity_transition_approximation=self._local_identity_approximation(local_steps),
             hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policy)[0],
             passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policy)[1],
+            **self._component_units(weights),
         )
 
     def _transition_to_rollout_grid(
@@ -1212,6 +1382,8 @@ class SpatialExpectedFreeEnergy:
     ) -> list[SpatialEFEComponents]:
         if first_transition is not None and len(policies) != 1:
             raise ValueError("An execution-forecast first transition applies to a single policy.")
+        # One precision-belief/normalizer set for the whole candidate set.
+        weights = self._modality_weights()
         device = self.device
         member_count = len(self.dynamics.members)
         policy_count = len(policies)
@@ -1325,10 +1497,12 @@ class SpatialExpectedFreeEnergy:
             self.preference,
             coverage_mean,
             coverage_variance,
-            precision=self.cfg.terminal_risk_precision,
+            precision=weights.terminal,
+            concentration_floor=weights.concentration_floor,
         )
         member_gap, member_composition_risk = self._composition_terms(
-            member_states.reshape(policy_count * member_count, *field_shape)
+            member_states.reshape(policy_count * member_count, *field_shape),
+            weights,
         )
         composition_gap = member_gap.reshape(policy_count, member_count).mean(dim=1)
         composition_risk = member_composition_risk.reshape(policy_count, member_count).mean(dim=1)
@@ -1336,6 +1510,7 @@ class SpatialExpectedFreeEnergy:
             member_states.reshape(policy_count * member_count, *field_shape),
             policies,
             member_count,
+            weights,
         )
         canvas_transition_risk = member_canvas_risk.reshape(policy_count, member_count).mean(dim=1)
         relational_transition_risk = member_relational_risk.reshape(policy_count, member_count).mean(dim=1)
@@ -1346,12 +1521,17 @@ class SpatialExpectedFreeEnergy:
             policies,
             policy_count,
             member_count,
+            weights,
         )
 
-        ambiguity = self.cfg.ambiguity_precision * ambiguity
-        transition_risk = self.cfg.transition_precision * transition_risk
-        transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
-        epistemic_value = self.cfg.transition_precision * epistemic_value
+        # Belief-weighted modality contributions. `epistemic_value` carries the
+        # SAME transition weight as transition_risk/transition_ambiguity because
+        # R_trans + A_trans == -I(theta; s_next): giving it its own precision
+        # would make that logged identity false, and it is not a summand.
+        ambiguity = weights.ambiguity * ambiguity
+        transition_risk = weights.transition * transition_risk
+        transition_ambiguity = weights.transition * transition_ambiguity
+        epistemic_value = weights.transition * epistemic_value
         motor_risk_t = torch.full((policy_count,), float(motor_risk if first_transition_used else 0.0), device=device)
         motor_ambiguity_t = torch.full(
             (policy_count,), float(motor_ambiguity if first_transition_used else 0.0), device=device
@@ -1359,19 +1539,18 @@ class SpatialExpectedFreeEnergy:
         motor_epistemic_t = torch.full(
             (policy_count,), float(motor_epistemic_value if first_transition_used else 0.0), device=device
         )
-        total = (
-            terminal_risk
-            + ambiguity
-            + transition_risk
-            + transition_ambiguity
-            + composition_risk
-            + canvas_transition_risk
-            + relational_transition_risk
-            + passage_canvas_risk
-            + passage_relational_risk
-            + motor_risk_t
-            + motor_ambiguity_t
-            - motor_epistemic_t
+        total = self._assemble_total(
+            terminal_risk=terminal_risk,
+            ambiguity=ambiguity,
+            transition_risk=transition_risk,
+            transition_ambiguity=transition_ambiguity,
+            composition_risk=composition_risk,
+            canvas_transition_risk=canvas_transition_risk,
+            relational_transition_risk=relational_transition_risk,
+            passage_canvas_risk=passage_canvas_risk,
+            passage_relational_risk=passage_relational_risk,
+            motor_risk=motor_risk_t,
+            motor_epistemic_value=motor_epistemic_t,
         )
 
         return [
@@ -1408,6 +1587,7 @@ class SpatialExpectedFreeEnergy:
                 rollout_grid_size=belief.grid_size,
                 hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policies[index])[0],
                 passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policies[index])[1],
+                **self._component_units(weights),
             )
             for index in range(policy_count)
         ]
@@ -1591,6 +1771,8 @@ class SpatialExpectedFreeEnergy:
     ) -> SpatialEFEComponents:
         """Moment-matched mixture rollout for dynamics exposing only predictive moments."""
 
+        # One precision-belief/normalizer set for the whole candidate set.
+        weights = self._modality_weights()
         mean = torch.tensor(belief.material, device=self.device, dtype=torch.float32).unsqueeze(0)
         variance = torch.tensor(belief.logvar, device=self.device, dtype=torch.float32).exp().unsqueeze(0)
         ambiguity = torch.tensor(0.0, device=self.device)
@@ -1670,18 +1852,20 @@ class SpatialExpectedFreeEnergy:
             self.preference,
             coverage_mean,
             coverage_variance,
-            precision=self.cfg.terminal_risk_precision,
+            precision=weights.terminal,
+            concentration_floor=weights.concentration_floor,
         )
         terminal_risk = terminal_risk.mean()
         terminal_entropy = terminal_entropy.mean()
         pragmatic_value = pragmatic_value.mean()
-        composition_gap, composition_risk = self._composition_terms(mean)
+        composition_gap, composition_risk = self._composition_terms(mean, weights)
         composition_gap = composition_gap.mean()
         composition_risk = composition_risk.mean()
         canvas_transition_risk, relational_transition_risk = self._hierarchy_transition_terms(
             mean,
             [policy],
             1,
+            weights,
         )
         canvas_transition_risk = canvas_transition_risk.mean()
         relational_transition_risk = relational_transition_risk.mean()
@@ -1692,31 +1876,35 @@ class SpatialExpectedFreeEnergy:
             [policy],
             1,
             1,
+            weights,
         )
         passage_canvas_risk = passage_canvas_risk[0]
         passage_relational_risk = passage_relational_risk[0]
         passage_observation_count = passage_observation_count[0]
 
-        ambiguity = self.cfg.ambiguity_precision * ambiguity
-        transition_risk = self.cfg.transition_precision * transition_risk
-        transition_ambiguity = self.cfg.transition_precision * transition_ambiguity
-        epistemic_value = self.cfg.transition_precision * epistemic_value
+        # Belief-weighted modality contributions. `epistemic_value` carries the
+        # SAME transition weight as transition_risk/transition_ambiguity because
+        # R_trans + A_trans == -I(theta; s_next): giving it its own precision
+        # would make that logged identity false, and it is not a summand.
+        ambiguity = weights.ambiguity * ambiguity
+        transition_risk = weights.transition * transition_risk
+        transition_ambiguity = weights.transition * transition_ambiguity
+        epistemic_value = weights.transition * epistemic_value
         motor_risk_value = float(motor_risk if first_transition_used else 0.0)
         motor_ambiguity_value = float(motor_ambiguity if first_transition_used else 0.0)
         motor_epistemic_value_used = float(motor_epistemic_value if first_transition_used else 0.0)
-        total = (
-            terminal_risk
-            + ambiguity
-            + transition_risk
-            + transition_ambiguity
-            + composition_risk
-            + canvas_transition_risk
-            + relational_transition_risk
-            + passage_canvas_risk
-            + passage_relational_risk
-            + motor_risk_value
-            + motor_ambiguity_value
-            - motor_epistemic_value_used
+        total = self._assemble_total(
+            terminal_risk=terminal_risk,
+            ambiguity=ambiguity,
+            transition_risk=transition_risk,
+            transition_ambiguity=transition_ambiguity,
+            composition_risk=composition_risk,
+            canvas_transition_risk=canvas_transition_risk,
+            relational_transition_risk=relational_transition_risk,
+            passage_canvas_risk=passage_canvas_risk,
+            passage_relational_risk=passage_relational_risk,
+            motor_risk=motor_risk_value,
+            motor_epistemic_value=motor_epistemic_value_used,
         )
         return SpatialEFEComponents(
             total=float(total.item()),
@@ -1751,6 +1939,7 @@ class SpatialExpectedFreeEnergy:
             rollout_grid_size=belief.grid_size,
             hierarchy_transition_mode=self._hierarchy_rollout_diagnostics(policy)[0],
             passage_trajectory_steps=self._hierarchy_rollout_diagnostics(policy)[1],
+            **self._component_units(weights),
         )
 
     def _coverage_moments(self, material_mean: torch.Tensor, material_variance: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

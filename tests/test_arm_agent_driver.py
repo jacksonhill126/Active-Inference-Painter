@@ -21,6 +21,7 @@ from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
 from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
+from active_painter.precision_beliefs import LEDGER_KEYS, POLICY_PRECISION_KEY
 from active_painter.spatial_agent import SpatialActiveInferencePainter
 from active_painter.spatial_state import SpatialCanvasState
 from active_painter.stroke_execution import ExecutionForecast, StrokeTiming, adaptive_stroke_timing
@@ -199,6 +200,30 @@ def test_spatial_material_driver_reports_spatial_planner_state() -> None:
     assert diagnostics["efe"]["rollout_grid_size"] == cfg.canvas_size
     assert diagnostics["vfe"]["units"] == "nats_per_independent_cell_channel"
     assert diagnostics["topPolicies"][0]["motorFeasible"] is True
+    # Every ledger entry must be present and JSON-safe after a real planning
+    # round, and the policy precision must be reported as a belief mean beside
+    # the declared constant it was seeded from.
+    beliefs = diagnostics["precisionBeliefs"]
+    assert set(beliefs) == set(LEDGER_KEYS)
+    assert diagnostics["policyPrecisionPrior"] == cfg.policy_precision
+    assert beliefs[POLICY_PRECISION_KEY]["priorGamma"] == cfg.policy_precision
+    assert beliefs[POLICY_PRECISION_KEY]["status"] in {
+        "updated",
+        "clamped",
+        "degenerate_flat_F",
+        "too_few_candidates",
+        "prior",
+    }
+    assert diagnostics["gapProgress"]["observations"] >= 0.0
+    assert diagnostics["efe"]["modality_units"] == "nats_per_observation_channel"
+    assert diagnostics["efe"]["motor_proprioceptive_normalizer"] == pytest.approx(1.0 / 27.0)
+    # Spatial path: the batched rescoring loop must carry the same split motor
+    # information-gain telemetry as the summary path.
+    assert diagnostics["efe"]["motor_mutual_information"] > 0.0
+    assert diagnostics["efe"]["motor_epistemic_value"] == pytest.approx(
+        diagnostics["efe"]["motor_mutual_information"]
+        + diagnostics["efe"]["motor_reliability_novelty"]
+    )
 
 
 def test_driver_reports_motor_primitive_policy_latents_and_efe_terms() -> None:
@@ -227,6 +252,16 @@ def test_driver_reports_motor_primitive_policy_latents_and_efe_terms() -> None:
     assert "motorAmbiguity" in diagnostics["topPolicies"][0]
     assert diagnostics["efe"]["motor_risk"] >= 0.0
     assert diagnostics["efe"]["motor_ambiguity"] >= 0.0
+    # The subtracted motor information gain is reported as its two separately
+    # attributable components, so the viewer can show what G actually used.
+    assert "motorMutualInformation" in diagnostics["topPolicies"][0]
+    assert "motorReliabilityNovelty" in diagnostics["topPolicies"][0]
+    assert diagnostics["efe"]["motor_mutual_information"] > 0.0
+    assert diagnostics["efe"]["motor_reliability_novelty"] >= 0.0
+    assert diagnostics["efe"]["motor_epistemic_value"] == pytest.approx(
+        diagnostics["efe"]["motor_mutual_information"]
+        + diagnostics["efe"]["motor_reliability_novelty"]
+    )
 
 
 def test_summary_driver_replay_stores_selected_motor_realization_condition() -> None:
@@ -281,6 +316,75 @@ def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
         assert len(restored.agent.replay) == 1
         for expected_parameter, restored_parameter in zip(expected, restored.agent.dynamics.parameters()):
             assert torch.allclose(expected_parameter, restored_parameter)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_driver_checkpoint_round_trips_precision_and_gap_beliefs() -> None:
+    """Learned precision state persists; a pre-Feature-C payload still loads.
+
+    Neither belief goes into the architecture metadata, because
+    `_load_checkpoint_if_available` compares that dict with strict inequality --
+    a learned quantity there would discard every trained model on disk the moment
+    it moved.
+    """
+
+    cfg = PainterConfig(batch_size=1, hidden_dim=16, ensemble_size=2)
+    root = Path("runs/test_driver_checkpoint_precision")
+    shutil.rmtree(root, ignore_errors=True)
+    path = root / "precision.pt"
+    driver = oracle_driver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+        checkpoint_path=path,
+    )
+    try:
+        rng = np.random.default_rng(0)
+        base = rng.normal(0.0, 1.0, size=16)
+        G = (base - base.mean()) * 1.7
+        driver.precision_ledger.observe_policy(G, 0.5 * G)
+        driver.precision_ledger.observe("transition", G, 0.5 * G)
+        driver.gap_increment.observe(0.0, 0)
+        driver.gap_increment.observe(0.2, 2)
+        expected = {name: driver.precision_ledger.mean(name) for name in LEDGER_KEYS}
+        expected_gap = driver.gap_increment.posterior_mean()
+        assert expected[POLICY_PRECISION_KEY] != cfg.policy_precision
+        driver.trained_transitions = 1
+        driver._save_checkpoint_if_due(force=True)
+
+        restored = oracle_driver(
+            config=cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+        )
+        assert restored.checkpoint_status == "loaded"
+        for name in LEDGER_KEYS:
+            assert restored.precision_ledger.mean(name) == pytest.approx(
+                expected[name], abs=1e-12
+            ), name
+        assert restored.gap_increment.posterior_mean() == pytest.approx(expected_gap, abs=1e-12)
+        assert restored.gap_increment.has_observations()
+        # The shared beliefs must be the SAME objects the agent scores with.
+        assert restored.agent.precision_ledger is restored.precision_ledger
+        assert restored.agent.gap_increment is restored.gap_increment
+
+        # A payload written before this feature lacks both keys and must still
+        # load cleanly with fresh beliefs.
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        payload.pop("precision_ledger")
+        payload.pop("gap_increment_belief")
+        torch.save(payload, path)
+        legacy = oracle_driver(
+            config=cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+        )
+        assert legacy.checkpoint_status == "loaded"
+        assert legacy.precision_ledger.mean(POLICY_PRECISION_KEY) == cfg.policy_precision
+        assert not legacy.gap_increment.has_observations()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

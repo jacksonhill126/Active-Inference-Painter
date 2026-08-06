@@ -78,7 +78,8 @@ decline within and across marks.
   curves flow like a pulled brush tip rather than a rigid stamp.
 
 The policy sampler also biases proposed strokes toward longer sweeps (a declared
-empirical policy prior), since a round brush over a short span reads as a dab.
+computational proposal bias), since a round brush over a short span reads as a
+dab. This changes finite candidate support and is not a normalized policy prior.
 
 The model maintains a compact `q(load, black_fraction)` for each dedicated
 color brush. Before a selected mark it infers `preserve` versus instantaneous
@@ -134,18 +135,63 @@ single declared structural preference over terminal canvases is
 
 ```
 p*(s_T) ~ exp(composition_gap_precision * gap(s_T))
-gap(s)  = ELBO_hierarchical(s) - log p_flat(s)      [nats per cell-channel]
+gap(s)  = ELBO_hierarchical(s) - max_m log p_m(s)   [nats per cell-channel]
 ```
 
-where the flat baseline is the best context-free iid-cell Gaussian for that
-specific image, and both codes share one quantization floor. The hierarchy
-pays for its latent through the KL term, so a blank canvas scores ~0, iid
-noise scores <= 0, and only canvases whose parts mutually predict each other
-score positive. No content term (balance, contrast, subject) appears anywhere:
+where the baseline is the best member of a declared, hand-written,
+parameter-free family of two context-free codes (`composition.py`): the
+per-image per-channel iid-cell Gaussian, and a 3x3 hollow-neighbourhood local
+Markov code that predicts each cell from the mean of its eight neighbours
+excluding itself. Scoring against the better member means the gap cannot be
+earned by local smoothness alone. All three codes share one quantization floor.
+The hierarchy pays for its latent through the KL term, so a blank canvas scores
+<= 0, iid noise scores <= 0, a locally smooth but globally unstructured canvas
+(a soft blob, low-pass noise) scores <= 0, and only canvases whose distant parts
+mutually predict each other score positive. `composition_local_baseline_enabled`
+is the declared flag that restores the previous iid-only baseline exactly, so
+the difference the family makes is separately measurable. No content term
+(balance, contrast, subject) appears anywhere:
 the preference references only the hierarchical model's explanatory advantage.
 The hierarchy trains online alongside the dynamics ensemble; the per-policy
 `composition_gap`/`composition_risk` components and the current belief gap are
-logged in diagnostics. Because the gap is evaluated on every candidate
+logged in diagnostics.
+
+The hierarchy's FIRST evidence now comes from the body. `config.bootstrap_generator`
+selects the bootstrap mark source: `motion_manifold` (default) draws joint-space
+sweeps of the arm's own reachable-motion manifold and projects them to canvas
+geometry by forward kinematics (`motion_manifold.py`), while `random_stroke`
+retains the previous iid source so the difference is measurable. Bootstrap runs
+in episodes of `bootstrap_episode_marks` marks and clears the canvas only at an
+episode boundary, so each finished canvas reaches the canvas/relational
+likelihood whole through `spatial_agent.add_composition_canvas` rather than being
+wiped mid-episode. `bootstrap_composition_train_steps` declares an explicit
+gradient budget at each boundary; it is a gradient hyperparameter, not an
+objective term, and defaults to 0 because the measured gap is flat below a few
+hundred steps and the cost is real.
+
+`diagnostics()["compositionBootstrap"]` reports that measurement: the gap on the
+bootstrapped canvases, on a blank canvas, on a marginal-preserving cell shuffle
+of the bootstrapped canvases, and on iid scatter, plus the generator that
+actually ran, the painted path length, and the mean episode coverage. It is
+EVIDENCE and NOT a decision quantity: no EFE term, VFE term, preference,
+precision belief, or policy prior reads it, and the block carries a `declaredAs`
+string saying so. The honest acceptance metric is
+`gap(bootstrapped) - max(gap(blank), gap(shuffled))`, because the cell shuffle
+preserves every per-channel marginal exactly and therefore isolates the
+hierarchical code; the raw probe range is reported too but grows with model
+confidence about an out-of-distribution probe rather than with discriminative
+validity.
+
+Measured at 900 gradient steps per episode boundary (96 marks, 4 episodes):
+`motion_manifold` reaches a margin of +1.634 against `random_stroke`'s +1.088, a
+1.50x win obtained while laying 41% less painted path (22.75 vs 38.62) and half
+the coverage (0.169 vs 0.334), so the confound runs against the winning arm. Both
+arms score a positive gap on their own bootstrapped canvases (+1.58 / +1.01),
+which neither did before. At the default budget of 0 extra steps NEITHER arm
+discriminates (margins -0.125 and -0.200): the generator change is not measurable
+without a declared gradient budget. Full numbers, including the finding that the
+binding null model is blank rather than the shuffle once the model is trained,
+are in `docs/DEVELOPMENT_AUDIT.md`. Because the gap is evaluated on every candidate
 terminal state including immediate stop, continue-vs-stop comparisons already
 express compression progress: painting continues while strokes are expected to
 increase the hierarchy's explanatory advantage near the coverage band.
@@ -208,8 +254,9 @@ EFE, not composition rewards.
   inadmissible, and demotions are logged as diagnostics.
 - **Coverage-seeking stroke proposals.** In spatial mode, a declared fraction
   (`proposal_low_coverage_mix`) of candidate strokes start in low-coverage
-  regions of the current belief. This is an empirical policy prior over the
-  candidate set; scoring remains pure expected free energy.
+  regions of the current belief. This is a computational proposal distribution:
+  it changes which finite candidates exist but is not a normalized policy prior
+  and is not added to expected free energy or the policy posterior.
 - **Hierarchical passage proposals.** A declared fraction
   (`passage_proposal_mix`) of continuation candidates are generated from a
   slower `PassageLatent` transition prior over several related marks. Current
@@ -220,14 +267,32 @@ EFE, not composition rewards.
   still a regular learned mark, with lift and local receding-horizon inference
   before the next segment; connected geometry does not imply uninterrupted
   brush contact. Every passage terminates in `stop`, and expected free energy
-  scores the predicted consequences. This is a policy prior over multi-mark
-  latent trajectories, not fine-tuning and not an aesthetic reward.
+  scores the predicted consequences. The global mixture that samples passage
+  candidates is a computational proposal. During local continuation inference,
+  the persistent `PassageBelief.transition_log_prior` is the explicit
+  transition prior over the multi-mark latent trajectory. Neither is an
+  aesthetic reward.
 - **Passage-plan proposals.** When the planning horizon is deep enough, a
   declared fraction (`passage_plan_proposal_mix`) of candidates are generated
   from a slower `PassagePlanLatent` over multiple passage latents. The plan
   carries a slowly evolving center, direction, turn, tone, and material amount;
   its child passages generate the actual marks. The plan is still only a
-  policy prior, and every candidate still terminates in immediate `stop`.
+  computational proposal in the current global candidate set, and every
+  candidate still terminates in immediate `stop`.
+- **Amortized learned proposal (in progress).** Spatial mode can construct a
+  factorized `PolicyProposalNetwork` conditioned on the current canvas and
+  relational posterior means. It is trained after planning by
+  self-normalized, posterior-weighted maximum likelihood toward the existing
+  base-EFE painting-policy posterior. It proposes mark and passage latents only;
+  immediate stop and passage-plan compounds remain outside its learned scope.
+  `learned_proposal_mix=0.0` is the default, so the emitted candidate stream is
+  the hand-written baseline unless an experiment explicitly raises the mix.
+  The network is a proposal, not a policy prior: its log density is never added
+  to EFE, VFE, a preference, or the normalized painting-policy posterior. It
+  also does not correct finite-candidate bias. Sampling, training, checkpoint,
+  and diagnostic paths exist, but the dedicated proposal test suite and the
+  candidate-count/horizon/seed/mixture convergence evidence required by
+  `AI-111` are not complete.
 - **Receding-horizon passage inference.** A global plan predicts several
   passages but execution commits only to the first. Within that passage, each
   observed mark updates a slow diagonal-Gaussian posterior over center,
@@ -273,12 +338,39 @@ EFE, not composition rewards.
   motions that amplify body-parameter uncertainty forecast wider even before
   reliability evidence arrives. This is the sim-to-real seam: on hardware the
   same residuals calibrate the body model instead of a copied simulator.
-- **Per-modality precisions.** `terminal_risk_precision`,
-  `ambiguity_precision`, `transition_precision`,
-  `motor_proprioceptive_risk_precision`, and
-  `motor_proprioceptive_ambiguity_precision` weight the outcome modalities of
-  expected free energy explicitly. Logged EFE components are
-  precision-weighted contributions.
+- **Per-modality precision BELIEFS.** The seven modality precisions
+  (`terminal_risk_precision`, `ambiguity_precision`, `transition_precision`,
+  `composition_gap_precision`, `canvas_latent_transition_precision`,
+  `relational_transition_precision`, and the modality-level
+  `motor_modality_precision`) plus `policy_precision` are the posterior means of
+  Gamma beliefs (`precision_beliefs.py`), updated by the reference textbook's
+  Chapter 10 rule `dF/dgamma = (alpha/gamma - beta0) + (pi - pi0).(-G)` from the
+  realized `(G, F)` candidate pair after each planning round. `F` is the
+  brush-preparation negative log marginal evidence, which is free of the painting
+  policy precision, so no learned gamma appears on both sides of its own update.
+  Each belief's prior mean is exactly the previous declared constant and an
+  unobserved belief returns it bit-identically, so
+  `precision_beliefs_enabled=False` reproduces the old arithmetic exactly. The
+  posterior mean is clamped to a declared `[0.1x, 10x]` support: measured
+  unbounded, disagreeing evidence attenuates a modality 15x, which for terminal
+  coverage would let outcome data switch a declared preference off. Measured
+  outcome: the gammas drift only slightly (0.88 to 1.01 over six real planning
+  rounds) and precision ordering does NOT track discriminativeness -- see spec
+  register item 26 for the numbers and the reason.
+- **Per-observation-channel modality units.** Every EFE modality is reduced to
+  nats per observation channel and records the declared name of its normalizer in
+  the component dataclass, so `raw * precision * normalizer == stored` is
+  checkable from telemetry. Six modalities were already per-channel densities;
+  the motor modality's raw 27-channel sum is the only new divisor, and that is a
+  27x reweighting rather than a tidy-up. `modality_normalization_enabled=False`
+  restores the historical mixed units.
+- **Gap-progress stopping as a policy prior.** `log p(stop-first)` is a product
+  of the coverage sigmoid and `logsigmoid(-s * E[dGap]/sd[dGap])` over a Gaussian
+  random-walk belief on the per-mark compression-gap increment. Both factors are
+  <= 0 and the progress factor is exactly 0 for continuations and for an
+  unobserved belief, so it can only make stopping less unlikely and never
+  manufactures value. The increment never enters expected free energy, and the
+  terminal coverage preference itself remains declared and un-learned.
 - **Bootstrap ensemble training.** Each ensemble member trains on its own
   Bernoulli-masked subset of every batch (`ensemble_bootstrap_probability`),
   keeping member disagreement usable as an approximate parameter posterior;
@@ -298,6 +390,10 @@ python -m active_painter.web_server --planner-state-kind spatial_material
 Spatial mode performs an initial dynamics bootstrap before the URL is printed.
 For a quick no-bootstrap smoke test, add
 `--driver-bootstrap-transitions 0 --driver-bootstrap-train-steps 0`.
+`--driver-bootstrap-generator {motion_manifold,random_stroke}` selects the
+bootstrap mark source and `--driver-bootstrap-composition-train-steps` declares
+the episode-boundary canvas/relational gradient budget; both are named in the
+startup line so an attribution A/B run is self-documenting.
 The planner runs on CUDA automatically when available; pass `--device cpu`
 (or `cuda:1`, etc.) to override. The resolved device is printed at startup.
 The web renderer displays the canvas on a neutral gray ground so both white and
@@ -484,7 +580,10 @@ and accepted intrinsics have not replaced the nominal XML geometry.
 The default `sensor_equivalent` observation mode currently fails closed:
 the viewer and scripted execution remain available, but policy inference,
 learning, oracle bootstrap, and process-derived planner-state construction are
-disabled.
+disabled. That includes the motion-manifold bootstrap: the oracle gate is the
+first statement of `bootstrap_dynamics`, so no bootstrap simulator is built and
+no sweep sampler is constructed in sensor mode, and
+`diagnostics()["compositionBootstrap"]` is `None` there.
 
 The first compact sensor-conditioned bodily inference component now exists in
 `active_painter.body_inference`. `BodyStateEstimator` constructs a diagonal

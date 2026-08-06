@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from active_painter.arm_sim import ArmPainterSim
@@ -260,3 +261,77 @@ def test_gaussian_vfe_coordinate_scaling_changes_only_the_nll_density_constant()
 
     assert math.isclose(original_kl, scaled_kl, rel_tol=1e-12, abs_tol=1e-12)
     assert math.isclose(scaled_nll - original_nll, math.log(scale), rel_tol=1e-12, abs_tol=1e-12)
+
+
+def test_terminal_coverage_risk_is_invariant_to_tiling_the_coverage_field() -> None:
+    """Terminal coverage is a MEAN over cells, so its declared unit is genuinely
+    per-aggregate-channel: tiling the field 2x2 must leave the risk unchanged.
+
+    This is the tiling-invariance analogue of
+    `test_spatial_vfe_and_entropy_normalization_are_invariant_to_repeated_cells`,
+    applied to the modality Feature C had to restrict to the interior-unimodal
+    Beta family before its precision could mean anything.
+    """
+
+    cfg = PainterConfig()
+    evaluator = _efe(cfg)
+    mean = torch.rand(1, cfg.spatial_material_channels, 4, 4)
+    mean[:, 5] = torch.rand(1, 4, 4)
+    variance = torch.full_like(mean, 1e-5)
+    tiled_mean = mean.repeat(1, 1, 2, 2)
+    tiled_variance = variance.repeat(1, 1, 2, 2)
+
+    coverage_mean, _ = evaluator._coverage_moments(mean, variance)
+    tiled_coverage_mean, _ = evaluator._coverage_moments(tiled_mean, tiled_variance)
+    assert float(coverage_mean) == pytest.approx(float(tiled_coverage_mean), abs=1e-6)
+
+
+def test_composition_normalizer_divides_by_the_declared_channel_count() -> None:
+    """The compression gap averages over channels * grid * grid, so its declared
+    unit names ALL SIX material channels -- including the two deterministic ones.
+
+    That is a pre-existing deviation from `independent_material_channel_count`
+    (the gap is earned mainly on channels 3-5, so restricting it would gut the
+    signal features A/B/C are built on). Feature C makes the deviation VISIBLE in
+    the recorded normalizer name rather than fixing it silently.
+    """
+
+    from active_painter.canvas_hierarchy import HierarchicalCanvasModel
+    from active_painter.precision_beliefs import NORMALIZER_NAMES
+
+    cfg = PainterConfig(
+        spatial_grid_size=8,
+        composition_hidden_channels=8,
+        composition_latent_dim=8,
+    )
+    model = HierarchicalCanvasModel(cfg)
+    assert model.channels == cfg.spatial_material_channels
+    units = model.diagnostics()["modalityUnits"]
+    assert units["compositionGap"] == NORMALIZER_NAMES["composition_gap"]
+    assert "all_material_channels" in NORMALIZER_NAMES["composition_gap"]
+    assert units["canvas_latent_transition"] == NORMALIZER_NAMES["canvas_latent_transition"]
+    assert units["relational_transition"] == NORMALIZER_NAMES["relational_transition"]
+
+
+def test_ambiguity_and_transition_modalities_still_ignore_derived_channels() -> None:
+    """Re-assert, after unit normalization, that channels 4-5 carry no
+    independent likelihood evidence in the two per-cell-channel modalities."""
+
+    cfg = PainterConfig()
+    evaluator = _efe(cfg)
+    mean = torch.rand(2, cfg.spatial_material_channels, 5, 7)
+    variance = torch.full_like(mean, 2e-4)
+    changed_mean = mean.clone()
+    changed_variance = variance.clone()
+    assert DERIVED_MATERIAL_CHANNELS == ("ground_contrast", "material_coverage")
+    changed_mean[:, 4:] = 500.0
+    changed_variance[:, 4:] = 500.0
+
+    assert torch.equal(
+        evaluator._observation_ambiguity_scaled(mean, 35.0),
+        evaluator._observation_ambiguity_scaled(changed_mean, 35.0),
+    )
+    assert torch.equal(
+        evaluator._scaled_normal_entropy(variance, 35.0),
+        evaluator._scaled_normal_entropy(changed_variance, 35.0),
+    )

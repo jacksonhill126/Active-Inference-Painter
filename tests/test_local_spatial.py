@@ -17,6 +17,7 @@ from active_painter.local_spatial import (
 )
 from active_painter.models import LocalSpatialDynamicsEnsemble
 from active_painter.policies import Policy
+from active_painter.precision_beliefs import PrecisionLedger
 from active_painter.preferences import TerminalCoveragePreference
 from active_painter.spatial_efe import SpatialExpectedFreeEnergy
 from active_painter.spatial_state import rasterize_stroke_action, spatial_canvas_state
@@ -481,7 +482,39 @@ def test_local_composition_risk_uses_coarse_grained_terminal_fields() -> None:
 
     assert composition.shape is not None
     assert composition.shape[-2:] == (cfg.spatial_grid_size, cfg.spatial_grid_size)
-    assert np.isclose(components.composition_risk, -cfg.composition_gap_precision)
+    # Expressed against the ledger's posterior mean times the declared
+    # normalizer, not against the raw config constant, so this cannot keep
+    # passing for the wrong reason once a precision belief starts moving. The
+    # unobserved belief's mean IS the constant, bit for bit.
+    ledger = PrecisionLedger(cfg)
+    weight = ledger.mean("composition_gap") * ledger.weights().normalizer["composition_gap"]
+    assert weight == cfg.composition_gap_precision
+    assert np.isclose(components.composition_risk, -weight)
+
+
+def test_zero_declared_precision_creates_no_belief_and_isolates_the_modality() -> None:
+    """Pins the rule every precision=0.0 isolation config in this file relies on.
+
+    A declared constant of exactly 0.0 is a STRUCTURAL off switch: the ledger
+    creates no belief and returns exactly 0.0, so a learned precision can never
+    resurrect an isolated modality.
+    """
+
+    cfg = PainterConfig(
+        transition_precision=0.0,
+        ambiguity_precision=0.0,
+        composition_gap_precision=0.0,
+    )
+    ledger = PrecisionLedger(cfg)
+    for name in ("transition", "observation_ambiguity", "composition_gap"):
+        assert name not in ledger.beliefs
+        assert ledger.mean(name) == 0.0
+        assert ledger.observe(name, [1.0, 2.0], [0.0, 1.0]).status == "structurally_off"
+        assert ledger.mean(name) == 0.0
+    weights = ledger.weights()
+    assert weights.transition == 0.0
+    assert weights.ambiguity == 0.0
+    assert weights.composition == 0.0
 
 
 def test_conditioned_motor_transition_remains_sparse_and_keeps_efe_terms_separate() -> None:
@@ -532,6 +565,10 @@ def test_conditioned_motor_transition_remains_sparse_and_keeps_efe_terms_separat
         motor_efe_approximation="test motor likelihood",
     )
 
+    # motor_ambiguity is deliberately absent from this reconstruction: the motor
+    # modality contributes pragmatic - information gain, and -I(s;o) already
+    # carries the canonical ambiguity contribution. The term is still logged and
+    # is asserted verbatim below.
     expected_total = (
         components.terminal_risk
         + components.ambiguity
@@ -539,7 +576,6 @@ def test_conditioned_motor_transition_remains_sparse_and_keeps_efe_terms_separat
         + components.transition_ambiguity
         + components.composition_risk
         + components.motor_risk
-        + components.motor_ambiguity
         - components.motor_epistemic_value
     )
     assert components.execution_forecast_used

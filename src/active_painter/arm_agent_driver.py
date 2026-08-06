@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 import threading
@@ -33,12 +34,24 @@ from .efe import EFEComponents
 from .env import StrokeAction
 from .models import GaussianBelief
 from .motor_planning import (
+    motor_efe_contribution,
     motor_efe_terms,
     motor_policy_log_prior,
     motor_realization_log_evidence,
     motor_realization_policy_alternatives,
 )
+from .motion_manifold import (
+    MotionManifoldSampler,
+    blank_probe_fields,
+    iid_scatter_probe_fields,
+    shuffled_probe_fields,
+)
 from .motor_reliability import MotionReliabilityLedger, execution_error_ratio_sq
+from .precision_beliefs import (
+    POLICY_PRECISION_KEY,
+    GapIncrementBelief,
+    PrecisionLedger,
+)
 from .policies import (
     BrushPreparationPolicy,
     MotorPrimitiveLatent,
@@ -48,6 +61,16 @@ from .policies import (
     policy_stop_log_prior,
 )
 from .passage_inference import PassageBelief, infer_passage_observation
+from .proposal import (
+    BASE_TARGET_NAME,
+    BELIEF_SOURCE_SUMMARY,
+    FALLBACK_BELIEF_SOURCES,
+    POLICY_PROPOSAL_VERSION,
+    ProposalRecord,
+    ProposalTrainingBatch,
+    base_efe_policy_posterior,
+    hand_written_log_density,
+)
 from .spatial_agent import SpatialActiveInferencePainter
 from .spatial_efe import SpatialEFEComponents
 from .spatial_hierarchy import infer_mark_event_belief
@@ -80,6 +103,17 @@ OBSERVATION_ACCESS_MODE = SENSOR_OBSERVATION_ACCESS_MODE
 
 class PrivilegedStateAccessError(RuntimeError):
     """Raised when a sensor-only planner path attempts to read process truth."""
+
+
+# Bootstrap mark sources. 'random_stroke' is the previous iid source, retained so
+# the hand-supplied contribution of the motion-manifold generator stays
+# separately measurable, as the charter's attribution clause requires.
+BOOTSTRAP_GENERATORS: tuple[str, ...] = ("motion_manifold", "random_stroke")
+
+# Bootstrapped canvases retained for the post-bootstrap compression-gap probe.
+# 6 x 16 x 16 float32 is ~6 KB each and the list is dropped as soon as the
+# evidence block is built, so the cap only bounds a transient.
+MAX_RETAINED_BOOTSTRAP_CANVASES = 16
 
 
 @dataclass(slots=True)
@@ -198,7 +232,33 @@ class ArmActiveInferenceDriver:
     _contact_release_count: int = field(default=0, init=False)
     _cached_belief_gap: float | None = field(default=None, init=False)
     _cached_passage_trajectory: dict[str, object] | None = field(default=None, init=False)
+    # Amortized-proposal state (Feature D). The batch is built on the planner
+    # thread during policy inference and consumed by the post-publish gradient
+    # step, so proposal training keeps the pinned "training happens AFTER the plan
+    # is published" ordering. The selected-record ring buffer is session-local
+    # evidence for the H4 headline number and is deliberately NOT derived from
+    # `last_ranked`, which tests hand-build with bare EFE components.
+    _pending_proposal_batch: ProposalTrainingBatch | None = field(default=None, init=False)
+    _pending_proposal_record: ProposalRecord | None = field(default=None, init=False)
+    _pending_proposal_masses: tuple[float, float] = field(default=(0.0, 0.0), init=False)
+    _pending_refined_cross_entropy: float | None = field(default=None, init=False)
+    _selected_proposal_records: deque = field(
+        default_factory=lambda: deque(maxlen=64), init=False
+    )
+    _cached_policy_proposal: dict[str, object] | None = field(default=None, init=False)
+    # Evidence block for the motion-manifold bootstrap. Written ONCE at the end
+    # of bootstrap_dynamics and never recomputed: __post_init__'s
+    # reset_hierarchy_beliefs and web_runtime's driver reset both re-initialize
+    # the persistent hierarchy beliefs from the live blank canvas, so the probe
+    # is unrecoverable afterwards.
+    _bootstrap_composition: dict[str, object] | None = field(default=None, init=False)
+    _bootstrap_episode_canvases: list[np.ndarray] = field(default_factory=list, init=False)
+    _bootstrap_episode_coverage: list[float] = field(default_factory=list, init=False)
+    _bootstrap_painted_path_length: float = field(default=0.0, init=False)
+    _bootstrap_manifold_fallback_marks: int = field(default=0, init=False)
     motion_reliability: MotionReliabilityLedger = field(init=False)
+    precision_ledger: PrecisionLedger = field(init=False)
+    gap_increment: GapIncrementBelief = field(init=False)
     brush_loading_model: BrushLoadingModel = field(init=False)
     brush_load_beliefs: dict[str, BrushLoadBelief] = field(init=False)
     last_brush_preparation: BrushPreparationInference | None = field(default=None, init=False)
@@ -236,10 +296,27 @@ class ArmActiveInferenceDriver:
             # motor forecasts; neither bootstrap nor live planning may obtain
             # an ArmPainterSim-derived material/body state in the meantime.
             self.enabled = False
+        # Learned precision beliefs and the gap-increment belief are owned by the
+        # driver and INJECTED into the agent, so the planner and the checkpoint
+        # see one shared set of beliefs rather than two divergent copies.
+        self.precision_ledger = PrecisionLedger(self.config)
+        self.gap_increment = GapIncrementBelief.from_config(self.config)
         if self._uses_spatial_planner():
-            self.agent = SpatialActiveInferencePainter(self.config, seed=17, device=self.device)
+            self.agent = SpatialActiveInferencePainter(
+                self.config,
+                seed=17,
+                device=self.device,
+                precision_ledger=self.precision_ledger,
+                gap_increment=self.gap_increment,
+            )
         else:
-            self.agent = ActiveInferencePainter(self.config, seed=17, device=self.device)
+            self.agent = ActiveInferencePainter(
+                self.config,
+                seed=17,
+                device=self.device,
+                precision_ledger=self.precision_ledger,
+                gap_increment=self.gap_increment,
+            )
         self.motion_reliability = MotionReliabilityLedger(self.config)
         self.brush_loading_model = BrushLoadingModel(self.config)
         self.brush_load_beliefs = {
@@ -260,28 +337,309 @@ class ArmActiveInferenceDriver:
             self.agent.reset_hierarchy_beliefs(self.agent.belief)
 
     def bootstrap_dynamics(self) -> None:
+        """Seed the likelihoods from a declared bootstrap mark source.
+
+        Two structural changes over the previous iid bootstrap, both required for
+        the composition hierarchy to have anything to learn:
+
+        1. The mark source is `config.bootstrap_generator`. 'motion_manifold'
+           draws body-feasible joint-space sweeps (see `motion_manifold`), which
+           carry correlated curvature, direction, and length that iid sampling
+           cannot produce. 'random_stroke' keeps the previous
+           `PolicySampler._stroke` source for attribution.
+        2. The canvas is cleared ONLY at episode boundaries. The previous code
+           cleared it whenever coverage exceeded 0.94 or on every 24th
+           transition regardless of position in the episode, which destroyed each
+           canvas before the hierarchy had ever encoded a complete organized one.
+
+        The dynamics ensemble still trains on per-mark local patches exactly as
+        before; what changes is that the COMPOSITION replay also receives whole
+        finished canvases at each boundary.
+        """
+
         self._require_oracle_diagnostic_mode("bootstrap dynamics")
+        generator = str(self.config.bootstrap_generator)
+        if generator not in BOOTSTRAP_GENERATORS:
+            raise ValueError(
+                f"bootstrap_generator must be one of {BOOTSTRAP_GENERATORS}; got {generator!r}."
+            )
         sim = ArmPainterSim(replace(self.config))
+        sampler = (
+            MotionManifoldSampler(
+                self.config,
+                seed=self.config.bootstrap_manifold_seed,
+                kinematics=sim.kinematics,
+                canvas=sim.canvas,
+            )
+            if generator == "motion_manifold"
+            else None
+        )
+        # Bootstrap evidence describes ONE bootstrap run, so the accumulators are
+        # reset here rather than at construction: a second call must not report a
+        # painted path or fallback count that mixes two runs.
+        self._bootstrap_episode_canvases = []
+        self._bootstrap_episode_coverage = []
+        self._bootstrap_painted_path_length = 0.0
+        self._bootstrap_manifold_fallback_marks = 0
+        episode_marks = max(1, int(self.config.bootstrap_episode_marks))
+        pending: list[tuple[PassageLatent | None, StrokeAction, int]] = []
+        episode_start = self._planner_state(sim)
+        episode_actions: list[StrokeAction] = []
         for i in range(self.bootstrap_transitions):
-            current_state = self._planner_state(sim)
-            if self._state_coverage(current_state) > 0.94 or i % 24 == 23:
+            if i > 0 and i % episode_marks == 0:
+                self._close_bootstrap_episode(sim, episode_start, episode_actions)
+                # An episode boundary invalidates the pending queue: its marks
+                # were proposed against the canvas and pose that are about to be
+                # discarded.
+                pending.clear()
+                if sampler is not None:
+                    sampler.reset_chain()
                 sim.reset_pose()
                 sim.canvas.clear()
-            action = self.agent.policy_sampler._stroke()
+                episode_actions = []
+                episode_start = self._planner_state(sim)
+            passage, action, step_index = self._next_bootstrap_mark(sampler, pending)
             state = self._planner_state(sim)
             execute_stroke_action(sim, action, dt=1.0 / 90.0)
             next_state = self._planner_state(sim)
             self._add_transition_to_agent(state, action, next_state)
+            episode_actions.append(action)
+            self._bootstrap_painted_path_length += float(
+                np.hypot(action.x1 - action.x0, action.y1 - action.y0)
+            )
+            if (
+                passage is not None
+                and self.config.bootstrap_feeds_passage_likelihood
+                and isinstance(self.agent, SpatialActiveInferencePainter)
+                and isinstance(state, SpatialCanvasState)
+                and isinstance(next_state, SpatialCanvasState)
+            ):
+                self.agent.add_passage_step_transition(state, passage, step_index, next_state)
             self.trained_transitions += 1
             if len(self.agent.replay) >= self.config.batch_size and i % 4 == 0:
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
+        self._close_bootstrap_episode(sim, episode_start, episode_actions)
         if len(self.agent.replay) >= self.config.batch_size:
             self.last_training_loss = self.agent.train_dynamics(gradient_steps=self.bootstrap_train_steps)
+        self._record_bootstrap_composition_evidence(generator, sampler)
+
+    def _next_bootstrap_mark(
+        self,
+        sampler: MotionManifoldSampler | None,
+        pending: list[tuple[PassageLatent | None, StrokeAction, int]],
+    ) -> tuple[PassageLatent | None, StrokeAction, int]:
+        """Next bootstrap mark from the declared generator.
+
+        The iid source stays genuinely reachable, not merely declared: with
+        `bootstrap_generator='random_stroke'` this is exactly the previous call.
+        """
+
+        if sampler is None:
+            return None, self.agent.policy_sampler._stroke(), 0
+        if not pending:
+            sampled = sampler.sample_marks()
+            if sampled is not None:
+                latent, actions = sampled
+                pending.extend(
+                    (latent, action, step_index)
+                    for step_index, action in enumerate(actions)
+                )
+        if pending:
+            return pending.pop(0)
+        # The sweep sampler could not find a legal path from the current chain
+        # pose. Fall back to the iid source so bootstrap never stalls, and count
+        # it, so a run whose "manifold" evidence is really iid is visible.
+        self._bootstrap_manifold_fallback_marks += 1
+        return None, self.agent.policy_sampler._stroke(), 0
+
+    def _close_bootstrap_episode(
+        self,
+        sim: ArmPainterSim,
+        episode_start: np.ndarray | SpatialCanvasState,
+        episode_actions: list[StrokeAction],
+    ) -> None:
+        """Hand one COMPLETED bootstrap canvas to the canvas/relational likelihood."""
+
+        if (
+            not isinstance(self.agent, SpatialActiveInferencePainter)
+            or self.agent.composition is None
+        ):
+            return
+        final = self._planner_state(sim)
+        if not isinstance(final, SpatialCanvasState):
+            return
+        self.agent.add_composition_canvas(final)
+        if len(self._bootstrap_episode_canvases) < MAX_RETAINED_BOOTSTRAP_CANVASES:
+            self._bootstrap_episode_canvases.append(final.material.copy())
+        # `_state_coverage` is retained here now that the coverage-triggered
+        # mid-episode clear is gone: it records how far each episode filled the
+        # canvas, which is what makes the A/B's paint budget auditable.
+        self._bootstrap_episode_coverage.append(self._state_coverage(final))
+        if (
+            self.config.bootstrap_feeds_passage_likelihood
+            and episode_actions
+            and isinstance(episode_start, SpatialCanvasState)
+        ):
+            self.agent.add_passage_transition(episode_start, tuple(episode_actions), final)
+        budget = int(self.config.bootstrap_composition_train_steps)
+        if budget > 0:
+            self.agent.train_composition(gradient_steps=budget)
+
+    def _record_bootstrap_composition_evidence(
+        self,
+        generator: str,
+        sampler: MotionManifoldSampler | None = None,
+    ) -> None:
+        """Measure the bootstrapped canvas/relational likelihood, once.
+
+        EVIDENCE ONLY. No expected-free-energy term, variational free-energy
+        term, preference, precision belief, policy prior, or policy posterior
+        reads any value in this block; it is consumed only by the web UI and by a
+        human reading an attribution A/B. Everything stored is a plain
+        float/int/str/bool/None so the whole diagnostics dict stays JSON
+        serializable, and the probe canvases themselves are never embedded.
+        """
+
+        canvases = self._bootstrap_episode_canvases
+        self._bootstrap_episode_canvases = []
+        if (
+            not isinstance(self.agent, SpatialActiveInferencePainter)
+            or self.agent.composition is None
+        ):
+            return
+        coverage = list(self._bootstrap_episode_coverage)
+        rng = np.random.default_rng(int(self.config.bootstrap_manifold_seed) + 1)
+        gaps: dict[str, float | None] = {
+            "bootstrapped": None,
+            "blank": None,
+            "shuffledBootstrapped": None,
+            "iidScatter": None,
+        }
+        if canvases:
+            bootstrapped = np.stack(canvases).astype(np.float32)
+            gaps["bootstrapped"] = self.agent.composition_gap_for_fields(bootstrapped)
+            gaps["shuffledBootstrapped"] = self.agent.composition_gap_for_fields(
+                shuffled_probe_fields(bootstrapped, rng)
+            )
+        gaps["blank"] = self.agent.composition_gap_for_fields(
+            blank_probe_fields(self.config)
+        )
+        gaps["iidScatter"] = self.agent.composition_gap_for_fields(
+            iid_scatter_probe_fields(self.config, rng)
+        )
+        observed = [value for value in gaps.values() if value is not None]
+        null_models = [
+            gaps[key] for key in ("blank", "shuffledBootstrapped") if gaps[key] is not None
+        ]
+        margin: float | None = None
+        if gaps["bootstrapped"] is not None and null_models:
+            margin = float(gaps["bootstrapped"] - max(null_models))
+        # Sweep geometry summary. Present only for the manifold arm, so a
+        # random_stroke run cannot be mistaken for one that produced sweeps.
+        sweep_statistics: dict[str, object] = {
+            "manifoldSweepCount": None,
+            "manifoldRejectedSweeps": None,
+            "meanSweepTurnRadians": None,
+            "meanSweepPathChordRatio": None,
+            "meanSweepNormalizedPathLength": None,
+        }
+        if sampler is not None:
+            statistics = sampler.statistics()
+            sweep_statistics = {
+                "manifoldSweepCount": int(statistics["sweepCount"]),
+                "manifoldRejectedSweeps": int(statistics["rejectedSweeps"]),
+                "meanSweepTurnRadians": float(statistics["meanSweepTurnRadians"]),
+                "meanSweepPathChordRatio": float(statistics["meanSweepPathChordRatio"]),
+                "meanSweepNormalizedPathLength": float(
+                    statistics["meanSweepNormalizedPathLength"]
+                ),
+            }
+        block: dict[str, object] = {
+            "configuredGenerator": str(self.config.bootstrap_generator),
+            "executedGenerator": generator,
+            "episodes": len(coverage),
+            "markCount": int(self.bootstrap_transitions),
+            "episodeMarks": int(self.config.bootstrap_episode_marks),
+            "canvasSize": int(self.config.canvas_size),
+            "episodeCoverageMean": (
+                float(np.mean(coverage)) if coverage else None
+            ),
+            "paintedPathLength": float(self._bootstrap_painted_path_length),
+            "compositionTrainSteps": int(self.config.bootstrap_composition_train_steps),
+            "passageLikelihoodFed": bool(self.config.bootstrap_feeds_passage_likelihood),
+            "manifoldFallbackMarks": int(self._bootstrap_manifold_fallback_marks),
+            "gap": gaps,
+            # The DECLARED acceptance criterion, bounded by the TIGHTER of the two
+            # null models. The cell shuffle preserves every per-channel marginal
+            # exactly, so the flat baseline member is identical between a canvas
+            # and its shuffle and the difference isolates the hierarchical code.
+            # MEASURED: once the model is well trained the shuffle becomes
+            # strongly out-of-distribution (-74 nats at 2700 gradient steps) and
+            # blank (-0.05) is the tighter null, so the max() is load-bearing --
+            # a shuffle-only criterion would report a much larger margin earned
+            # by overconfidence rather than by discrimination.
+            "discriminativeMargin": margin,
+            # The raw probe spread, reported because it was the originally
+            # requested metric. It is NOT the criterion: it grows when the model
+            # becomes more confidently negative about an out-of-distribution
+            # probe, i.e. with confidence rather than with validity.
+            "probeRange": (
+                float(max(observed) - min(observed)) if len(observed) > 1 else None
+            ),
+            "declaredAs": (
+                "evidence only: a measurement of the canvas/relational likelihood after "
+                "embodiment-driven bootstrap. NOT a decision quantity - no EFE term, VFE "
+                "term, preference, precision belief, or policy prior reads it."
+            ),
+            "approximation": (
+                "gap probed at bootstrap canvas_size="
+                f"{int(self.config.canvas_size)} on "
+                f"{int(self.config.spatial_material_channels)}x"
+                f"{int(self.config.spatial_grid_size)}x"
+                f"{int(self.config.spatial_grid_size)} fields; the live sim paints at a "
+                "different resolution, so mark-to-cell scale differs. Earnable only on "
+                "channels 3-5 (SIGMA_FLOOR 0.02 saturates the flat code on thickness-like "
+                "channels), and channels 4-5 are deterministic functions of 0-3."
+            ),
+        }
+        block.update(sweep_statistics)
+        self._bootstrap_composition = block
+
+    def _learned_proposal_architecture(self) -> dict[str, object]:
+        """Shape metadata of the amortized proposal, for the architecture dict.
+
+        `learned_proposal_mix` is DELIBERATELY absent. It is a runtime budget
+        split, not a shape: putting it in a dict compared with exact equality
+        would reject every checkpoint on disk the moment the mix was ramped, which
+        is precisely the experiment the mixture weight exists to allow.
+        """
+
+        cfg = self.config
+        enabled = bool(
+            self._uses_spatial_planner()
+            and cfg.learned_proposal_enabled
+            and cfg.composition_enabled
+            and cfg.composition_gap_precision > 0.0
+        )
+        latent_grid = max(1, cfg.spatial_grid_size // 4)
+        input_dim = int(cfg.canvas_latent_channels * latent_grid * latent_grid) + int(
+            cfg.relational_latent_dim
+        )
+        proposal = getattr(self.agent, "policy_proposal", None)
+        return {
+            "learned_proposal_enabled": enabled,
+            "learned_proposal_version": POLICY_PROPOSAL_VERSION,
+            "learned_proposal_hidden_dim": int(cfg.learned_proposal_hidden_dim),
+            "learned_proposal_input_dim": input_dim,
+            "learned_proposal_output_dim": (
+                int(proposal.output_dim) if proposal is not None else 0
+            ),
+        }
 
     def _checkpoint_architecture_metadata(self) -> dict[str, object]:
         cfg = self.config
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "agent_kind": "spatial_material" if self._uses_spatial_planner() else "summary",
             "observation_access_mode": self.observation_access_mode,
             "state_dim": cfg.state_dim,
@@ -297,8 +655,14 @@ class ArmActiveInferenceDriver:
             "spatial_ensemble_size": cfg.spatial_ensemble_size,
             "ensemble_size": cfg.ensemble_size,
             "hidden_dim": cfg.hidden_dim,
+            # DECLARED STRUCTURE only. `composition_enabled` is a constant and
+            # `composition_gap_precision` is read as a declared constant here, never
+            # as the learned belief mean -- a learned quantity in this dict would
+            # invalidate every checkpoint on disk the moment it moved.
             "composition_enabled": bool(
-                self._uses_spatial_planner() and cfg.composition_gap_precision > 0.0
+                self._uses_spatial_planner()
+                and cfg.composition_enabled
+                and cfg.composition_gap_precision > 0.0
             ),
             "composition_latent_dim": cfg.composition_latent_dim,
             "composition_hidden_channels": cfg.composition_hidden_channels,
@@ -313,6 +677,7 @@ class ArmActiveInferenceDriver:
             "paint_presence_threshold": cfg.paint_presence_threshold,
             "canvas_ground_tone": cfg.canvas_ground_tone,
             "camera_spatial_likelihood_version": CAMERA_SPATIAL_LIKELIHOOD_VERSION,
+            **self._learned_proposal_architecture(),
         }
 
     def _checkpoint_file(self) -> Path | None:
@@ -362,6 +727,22 @@ class ArmActiveInferenceDriver:
                 self.agent.last_passage_trajectory_evaluation = payload.get(
                     "last_passage_trajectory_evaluation"
                 )
+            if (
+                isinstance(self.agent, SpatialActiveInferencePainter)
+                and self.agent.policy_proposal is not None
+                and payload.get("proposal_state") is not None
+            ):
+                # `proposal_update_count` is a registered buffer, so it rides
+                # inside `state_dict` and round-trips without a separate key.
+                self.agent.policy_proposal.load_state_dict(payload["proposal_state"])
+                if (
+                    self.agent.policy_proposal_optimizer is not None
+                    and payload.get("proposal_optimizer_state") is not None
+                ):
+                    self.agent.policy_proposal_optimizer.load_state_dict(
+                        payload["proposal_optimizer_state"]
+                    )
+                self.agent.last_proposal_loss = payload.get("last_proposal_loss")
             if isinstance(self.agent, SpatialActiveInferencePainter):
                 self._restore_replay(self.agent.composition_replay, payload.get("composition_replay"))
                 self._restore_replay(self.agent.passage_replay, payload.get("passage_replay"))
@@ -377,6 +758,11 @@ class ArmActiveInferenceDriver:
             self.trained_transitions = int(payload.get("trained_transitions", 0))
             self.last_training_loss = payload.get("last_training_loss")
             self.motion_reliability.restore(payload.get("motion_reliability"))
+            # Learned state, restored best effort: a pre-Feature-C checkpoint
+            # lacks both keys and must still load with status 'loaded' and
+            # fresh beliefs, so these are NOT architecture metadata.
+            self.precision_ledger.restore(payload.get("precision_ledger"))
+            self.gap_increment.restore(payload.get("gap_increment_belief"))
             self.checkpoint_loaded = True
             self.checkpoint_status = "loaded"
             self.checkpoint_last_error = None
@@ -398,7 +784,7 @@ class ArmActiveInferenceDriver:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload: dict[str, object] = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "architecture": self._checkpoint_architecture_metadata(),
                 "config": asdict(self.config),
                 "trained_transitions": self.trained_transitions,
@@ -407,6 +793,8 @@ class ArmActiveInferenceDriver:
                 "optimizer_state": self.agent.optimizer.state_dict(),
                 "replay": self._replay_snapshot(self.agent.replay),
                 "motion_reliability": self.motion_reliability.snapshot(),
+                "precision_ledger": self.precision_ledger.snapshot(),
+                "gap_increment_belief": self.gap_increment.snapshot(),
             }
             if isinstance(self.agent, SpatialActiveInferencePainter):
                 payload["composition_replay"] = self._replay_snapshot(self.agent.composition_replay)
@@ -425,6 +813,16 @@ class ArmActiveInferenceDriver:
                     )
                 if self.agent.composition_optimizer is not None:
                     payload["composition_optimizer_state"] = self.agent.composition_optimizer.state_dict()
+                if self.agent.policy_proposal is not None:
+                    payload["proposal_state"] = self.agent.policy_proposal.state_dict()
+                    payload["last_proposal_loss"] = self.agent.last_proposal_loss
+                    # Reporting only, never compared: see
+                    # `_learned_proposal_architecture`.
+                    payload["learned_proposal_mix"] = float(self.config.learned_proposal_mix)
+                if self.agent.policy_proposal_optimizer is not None:
+                    payload["proposal_optimizer_state"] = (
+                        self.agent.policy_proposal_optimizer.state_dict()
+                    )
             temp_path = path.with_name(f"{path.name}.tmp")
             torch.save(payload, temp_path)
             temp_path.replace(path)
@@ -470,7 +868,13 @@ class ArmActiveInferenceDriver:
         details = changed + extra
         if not details:
             return "architecture metadata differs"
-        return "; ".join(details[:6])
+        # Raised from 6 so the newer architecture keys cannot crowd an older
+        # mismatch line out of the message a reader (or a test) greps for.
+        shown = details[:12]
+        summary = "; ".join(shown)
+        if len(details) > len(shown):
+            summary = f"{summary}; (+{len(details) - len(shown)} more)"
+        return summary
 
     def reset(self, sim: ArmPainterSim) -> None:
         with self._planner_lock:
@@ -1094,6 +1498,8 @@ class ArmActiveInferenceDriver:
             "selectedForecastSeconds": 0.0,
             "selectedForecastCacheHits": 0,
             "trailingTrainingSeconds": 0.0,
+            "proposalTrainingSeconds": 0.0,
+            "proposalTargetSupportFraction": 0.0,
             "publishSeconds": 0.0,
             "policyCount": 0,
             "motorForecastCount": 0,
@@ -1209,11 +1615,26 @@ class ArmActiveInferenceDriver:
                 train_started = time.perf_counter()
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
                 self.last_training_seconds = time.perf_counter() - train_started
+                # One amortization step toward the base-EFE posterior this round
+                # produced. Inside the same post-publish block, so the pinned
+                # "training happens AFTER the plan is published" ordering holds for
+                # the proposal too and the step overlaps stroke execution.
+                proposal_started = time.perf_counter()
+                proposal_support = 0.0
+                if isinstance(self.agent, SpatialActiveInferencePainter):
+                    batch = self._pending_proposal_batch
+                    self.agent.train_policy_proposal(batch)
+                    if batch is not None:
+                        proposal_support = float(batch.target_support_fraction)
+                self._pending_proposal_batch = None
+                proposal_seconds = time.perf_counter() - proposal_started
                 self._save_checkpoint_if_due()
                 with self._planner_lock:
                     self.last_planning_profile = {
                         **self.last_planning_profile,
                         "trailingTrainingSeconds": self.last_training_seconds,
+                        "proposalTrainingSeconds": proposal_seconds,
+                        "proposalTargetSupportFraction": proposal_support,
                         "trainingAfterPublish": True,
                     }
             except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
@@ -1301,11 +1722,121 @@ class ArmActiveInferenceDriver:
         # background training.
         if isinstance(self.agent, SpatialActiveInferencePainter) and self.agent.composition is not None:
             self._cached_belief_gap = self.agent.belief_composition_gap()
+            # Feed the Delta-gap belief here, at planner cadence, rather than at
+            # mark completion: `belief_composition_gap` runs a model forward and
+            # mark completion is on the polling thread. `observe` divides by the
+            # exact number of marks elapsed since the previous reading, so the
+            # per-mark denominator is exact even though the sampling is coarse.
+            # Named approximation: per-mark gap increment amortized over the
+            # marks between planning-cadence gap readings.
+            self.gap_increment.observe(self._cached_belief_gap, self.stroke_count)
             self._cached_passage_trajectory = (
                 self.agent.composition.passage_trajectory_diagnostics(policy)
                 if policy is not None
                 else None
             )
+        # Also cached, and for the same reason: the divergence estimator runs the
+        # proposal network forward, and diagnostics() is polled from the web
+        # thread. Never runs there.
+        self._refresh_policy_proposal_diagnostics()
+
+    def _refresh_policy_proposal_diagnostics(self) -> None:
+        """Measure the declared H4 numbers on the planner thread, once per plan.
+
+        Everything here is EVIDENCE. No expected-free-energy term, variational
+        free-energy term, preference, precision belief, policy prior, policy
+        posterior, or control-flow branch reads any value in this block.
+        """
+
+        if not isinstance(self.agent, SpatialActiveInferencePainter):
+            self._cached_policy_proposal = None
+            return
+        agent = self.agent
+        if agent.policy_proposal is None:
+            self._cached_policy_proposal = None
+            return
+        try:
+            features, source = agent.proposal_belief_features()
+            if features is None:
+                self._cached_policy_proposal = None
+                return
+            coverage_field = (
+                self.belief.coverage(self.config.paint_presence_threshold)
+                if isinstance(self.belief, SpatialCanvasState)
+                else None
+            )
+            block: dict[str, object] = {"beliefFeatureSource": str(source)}
+            passage_divergence = agent.policy_proposal.divergence_against_hand_written(
+                features, coverage_field, self.config, family="passage"
+            )
+            mark_divergence = agent.policy_proposal.divergence_against_hand_written(
+                features, coverage_field, self.config, family="mark"
+            )
+            block["divergenceNats"] = float(passage_divergence.divergence_nats)
+            block["markDivergenceNats"] = float(mark_divergence.divergence_nats)
+            block["divergenceSamples"] = int(
+                passage_divergence.sample_count + mark_divergence.sample_count
+            )
+            block["outOfHandSupportFraction"] = float(
+                0.5
+                * (
+                    passage_divergence.out_of_support_fraction
+                    + mark_divergence.out_of_support_fraction
+                )
+            )
+            block["divergenceApproximation"] = str(passage_divergence.approximation)
+
+            heads = agent.policy_proposal.distribution(features)
+            selected = [record for record in list(self._selected_proposal_records) if record is not None]
+            if selected:
+                learned_values = [
+                    agent.policy_proposal.log_density(
+                        record, features, self.config, heads=heads
+                    ).total
+                    / max(1, len(record.latents))
+                    for record in selected
+                ]
+                hand_values = [
+                    hand_written_log_density(record, coverage_field, self.config).total
+                    / max(1, len(record.latents))
+                    for record in selected
+                ]
+                learned_mean = float(sum(learned_values) / len(learned_values))
+                hand_mean = float(sum(hand_values) / len(hand_values))
+                block["selectedMeanLogLikelihoodLearned"] = learned_mean
+                block["selectedMeanLogLikelihoodHandWritten"] = hand_mean
+                block["selectedLogLikelihoodAdvantage"] = learned_mean - hand_mean
+                block["selectedSampleCount"] = len(selected)
+            else:
+                block["selectedMeanLogLikelihoodLearned"] = None
+                block["selectedMeanLogLikelihoodHandWritten"] = None
+                block["selectedLogLikelihoodAdvantage"] = None
+                block["selectedSampleCount"] = 0
+
+            batch = self._pending_proposal_batch
+            cross_entropy: float | None = None
+            if batch is not None and batch.refined_weights:
+                total = 0.0
+                mass = 0.0
+                for index, weight in enumerate(batch.refined_weights):
+                    if weight <= 0.0 or index >= len(batch.records):
+                        continue
+                    record = batch.records[index]
+                    if record is None:
+                        continue
+                    log_density = agent.policy_proposal.log_density(
+                        record, features, self.config, heads=heads
+                    ).total
+                    total -= float(weight) * float(log_density)
+                    mass += float(weight)
+                cross_entropy = float(total / mass) if mass > 0.0 else None
+            block["refinedTargetCrossEntropy"] = cross_entropy
+            self._cached_policy_proposal = block
+        except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
+            self._cached_policy_proposal = {
+                "status": "diagnostic_failed",
+                "lastError": repr(exc),
+            }
 
     def _current_planning_seconds(self) -> float:
         if not self.planning or self._planning_started_at is None:
@@ -1344,6 +1875,12 @@ class ArmActiveInferenceDriver:
             self._pending_plan_scope = "global"
         if pending_ranked is not None:
             self.last_ranked = pending_ranked
+            # Session-local evidence for the H4 headline. Taken from the published
+            # plan's own record rather than by walking `last_ranked`, which tests
+            # hand-build from bare EFE components with no proposal provenance.
+            if self._pending_proposal_record is not None:
+                self._selected_proposal_records.append(self._pending_proposal_record)
+                self._pending_proposal_record = None
         if pending_components is not None:
             self.last_components = pending_components
         self.last_stop_blocked = stop_blocked
@@ -1645,6 +2182,114 @@ class ArmActiveInferenceDriver:
             raise RuntimeError("Motor forecast batch did not resolve every realization.")
         return [forecast for forecast in resolved if forecast is not None]
 
+    def _modality_contribution_vectors(
+        self,
+        components,
+        indices: list[int],
+    ) -> dict[str, list[float]]:
+        """Per-candidate, post-normalization, PRE-gamma modality contributions.
+
+        The component dataclass stores POST-weighted terms, so each modality's
+        own precision is divided back out here. That is what makes the update a
+        function of the modality's own contribution vector rather than of its
+        current weight -- the belief must not be estimated from a quantity that
+        already contains it.
+
+        Structurally-off modalities (a declared constant of exactly 0.0, or a
+        term that is identically zero without an execution forecast) are omitted
+        rather than fed a degenerate all-zero vector.
+        """
+
+        if not indices:
+            return {}
+        first = components[indices[0]]
+        raw: dict[str, list[float]] = {}
+        raw["terminal_coverage"] = [float(components[i].terminal_risk) for i in indices]
+        raw["observation_ambiguity"] = [float(components[i].ambiguity) for i in indices]
+        raw["transition"] = [
+            float(components[i].transition_risk + components[i].transition_ambiguity)
+            for i in indices
+        ]
+        raw["motor_proprioceptive"] = [
+            float(
+                motor_efe_contribution(
+                    components[i].motor_risk, components[i].motor_epistemic_value
+                )
+            )
+            for i in indices
+        ]
+        if hasattr(first, "composition_risk"):
+            raw["composition_gap"] = [float(components[i].composition_risk) for i in indices]
+            raw["canvas_latent_transition"] = [
+                float(
+                    components[i].canvas_transition_risk
+                    + components[i].passage_canvas_trajectory_risk
+                )
+                for i in indices
+            ]
+            raw["relational_transition"] = [
+                float(
+                    components[i].relational_transition_risk
+                    + components[i].passage_relational_trajectory_risk
+                )
+                for i in indices
+            ]
+        vectors: dict[str, list[float]] = {}
+        for name, values in raw.items():
+            gamma = self.precision_ledger.mean(name)
+            if gamma == 0.0:
+                continue
+            unweighted = [value / gamma for value in values]
+            if max(unweighted) - min(unweighted) <= 0.0 and max(abs(v) for v in unweighted) == 0.0:
+                # Identically zero: no contribution, hence nothing to weight.
+                continue
+            vectors[name] = unweighted
+        return vectors
+
+    def _observe_precision_beliefs(
+        self,
+        components,
+        brush_inferences: dict[int, BrushPreparationInference],
+        policy_log_priors: list[float],
+        non_stop_indices: list[int],
+    ) -> None:
+        """Update every precision belief from the realized (G, F) candidate pair.
+
+        F_i = -brush_preparation_log_evidence_i. That quantity is the negative
+        log marginal evidence of realizing candidate i's intended mark amount and
+        pigment under the current brush-load posterior, with the preserve/reload
+        preparation policy EXACTLY marginalized over its declared prior -- hence a
+        variational free energy at its optimal variational posterior, not a score.
+        Three properties make it admissible as the driving F:
+
+        1. It is built from `brush_policy_precision`, NOT `policy_precision`, so
+           it contains no painting policy precision and cannot bootstrap the
+           gamma it is used to update.
+        2. It is computed for EVERY non-stop candidate before the forecast-budget
+           sort, so it is defined on the full candidate set and does not depend
+           on any gamma-dependent pruning.
+        3. It enters only the precision gradient. It is never added to any
+           candidate's G or logit.
+
+        STOP candidates are excluded: they realize no mark, so they have no
+        realization free energy. That also keeps this mechanism disentangled
+        from the gap-progress stop prior.
+        """
+
+        if not self.config.precision_beliefs_enabled:
+            return
+        indices = [index for index in non_stop_indices if index in brush_inferences]
+        if not indices:
+            return
+        g_total = [float(components[index].total) for index in indices]
+        free_energy = [-float(brush_inferences[index].log_evidence) for index in indices]
+        log_prior = [float(policy_log_priors[index]) for index in indices]
+        self.precision_ledger.observe_policy(g_total, free_energy, log_prior=log_prior)
+        if not self.config.modality_precision_beliefs_enabled:
+            return
+        for name, vector in self._modality_contribution_vectors(components, indices).items():
+            self.precision_ledger.observe(name, vector, free_energy, log_prior=log_prior)
+
     def _infer_policy_with_execution_forecasts(
         self,
         body_snapshot: ArmPainterSim,
@@ -1676,6 +2321,11 @@ class ArmActiveInferenceDriver:
                 policies[index],
                 brush_preparation=inference.selected,
             )
+        # FROZEN on the declared config constant, never the learned belief mean.
+        # This is only the forecast-budget ordering, a declared fixed heuristic
+        # BELOW the painting-policy boundary; a learned precision must not choose
+        # which candidates get an expensive execution forecast, or gamma would
+        # select the evidence set from which gamma is itself estimated.
         non_stop_indices = sorted(
             non_stop_indices,
             key=lambda i: (
@@ -1689,9 +2339,12 @@ class ArmActiveInferenceDriver:
         motor_primitive_candidates = 0
         forecasted_indices: set[int] = set()
         active_indices: list[int] = list(stop_indices)
+        policy_gamma = self.precision_ledger.mean(POLICY_PRECISION_KEY)
+        # The modality weights are read ONCE per planning round, so every
+        # candidate's motor EFE is scaled by the same belief mean and normalizer.
+        modality_weights = self.precision_ledger.weights()
         painting_log_evidence = {
-            index: -self.config.policy_precision * base_components[index].total
-            for index in stop_indices
+            index: -policy_gamma * base_components[index].total for index in stop_indices
         }
         forecast_cache: dict[tuple[object, ...], ExecutionForecast] = {}
 
@@ -1722,6 +2375,7 @@ class ArmActiveInferenceDriver:
                     self.config,
                     reliability_inflation=self.motion_reliability.expected_inflation(kind),
                     reliability_epistemic_nats=self.motion_reliability.epistemic_nats(kind),
+                    weights=modality_weights,
                 )
                 mean = torch.tensor(forecast.next_state_mean, device=agent.device)
                 variance = torch.tensor(forecast.next_state_variance, device=agent.device)
@@ -1740,6 +2394,16 @@ class ArmActiveInferenceDriver:
                     motor_efe_approximation=motor_terms.approximation,
                 )
                 self._profile_add_seconds("motorEFERescoreSeconds", time.perf_counter() - rescore_started)
+                if comp.execution_forecast_used:
+                    # Telemetry only: expose the two components of the single
+                    # subtracted motor information gain. Gated on the forecast
+                    # actually being used so a stop-first policy keeps logging
+                    # zero motor terms.
+                    comp = replace(
+                        comp,
+                        motor_mutual_information=motor_terms.mutual_information,
+                        motor_reliability_novelty=motor_terms.reliability_novelty,
+                    )
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
@@ -1749,7 +2413,7 @@ class ArmActiveInferenceDriver:
             log_evidence, motor_posterior = motor_realization_log_evidence(
                 [entry[1].total for entry in eligible],
                 [motor_policy_log_prior(entry[0], self.config) for entry in eligible],
-                self.config.policy_precision,
+                policy_gamma,
             )
             selected = int(np.argmax(motor_posterior))
             best_policy, best_component, best_feasible = eligible[selected]
@@ -1794,7 +2458,9 @@ class ArmActiveInferenceDriver:
         phase_started = time.perf_counter()
         active_logits = torch.tensor(
             [
-                policy_stop_log_prior(policies[i], believed_coverage, self.config)
+                policy_stop_log_prior(
+                    policies[i], believed_coverage, self.config, self.gap_increment
+                )
                 + painting_log_evidence[i]
                 + policy_log_priors[i]
                 for i in active_indices
@@ -1802,6 +2468,12 @@ class ArmActiveInferenceDriver:
             device=agent.device,
         )
         active_posterior = torch.softmax(active_logits - active_logits.max(), dim=0)
+        self._observe_precision_beliefs(
+            components,
+            brush_inferences,
+            policy_log_priors,
+            [i for i, policy in enumerate(policies) if not policy.actions[0].stop],
+        )
         self._profile_set("motorRealizationMarginalization", "logsumexp over declared motor policy prior")
         self._profile_set(
             "brushPreparationMarginalization",
@@ -1829,11 +2501,26 @@ class ArmActiveInferenceDriver:
         agent = self.agent
         belief = self.belief
         phase_started = time.perf_counter()
+        proposal_features, proposal_belief_source = agent.proposal_belief_features()
+        supplied_policies = policies is not None
         policies = (
-            agent.policy_sampler.sample(belief.coverage(self.config.paint_presence_threshold))
+            agent.policy_sampler.sample(
+                belief.coverage(self.config.paint_presence_threshold),
+                belief_features=proposal_features,
+            )
             if policies is None
             else list(policies)
         )
+        # Receding-horizon local-passage candidates come from `PassageBelief`, a
+        # transition prior with its own declared density, so they are outside the
+        # amortized proposal's scope and carry no records.
+        proposal_records: tuple[ProposalRecord | None, ...] = (
+            tuple(agent.policy_sampler.last_proposal_records)
+            if not supplied_policies
+            else tuple(None for _ in policies)
+        )
+        if len(proposal_records) != len(policies):
+            proposal_records = tuple(None for _ in policies)
         policy_log_priors = [0.0] * len(policies) if policy_log_priors is None else list(policy_log_priors)
         if len(policy_log_priors) != len(policies):
             raise ValueError("Policy log priors must align with candidate policies.")
@@ -1843,6 +2530,36 @@ class ArmActiveInferenceDriver:
         base_components = agent.efe.evaluate_batch(belief, policies)
         self._profile_add_seconds("baseEFESeconds", time.perf_counter() - phase_started)
         believed_coverage = belief.material_coverage_mean(self.config.paint_presence_threshold)
+        # AMORTIZATION TARGET: the DECLARED base painting-policy posterior of spec
+        # §10.5, `softmax(log p_stop - gamma G_base)`, over the full sampled
+        # candidate set. Deliberately not the embodied-refined posterior below: that
+        # one is hard-zeroed outside `active_indices` (stop plus at most
+        # `motor_forecast_candidates` forecast continuations), so it has support on
+        # a handful of candidates and would collapse the proposal onto the motor
+        # budget rather than onto the agent's beliefs. Its cross-entropy is carried
+        # for measurement so the gap is reported, not assumed.
+        base_target = base_efe_policy_posterior(
+            [component.total for component in base_components],
+            [
+                policy_stop_log_prior(policy, believed_coverage, self.config, self.gap_increment)
+                for policy in policies
+            ],
+            self.config.policy_precision,
+        )
+        self._pending_proposal_batch = ProposalTrainingBatch(
+            features=proposal_features,
+            records=proposal_records,
+            weights=tuple(float(value) for value in base_target),
+            target_support_fraction=0.0,
+            belief_feature_source=(
+                proposal_belief_source
+                if self._uses_spatial_planner()
+                else BELIEF_SOURCE_SUMMARY
+            ),
+        )
+        self._pending_proposal_batch.target_support_fraction = (
+            self._pending_proposal_batch.modelled_mass()
+        )
         stop_indices = [i for i, policy in enumerate(policies) if policy.actions[0].stop]
         non_stop_indices = [i for i, policy in enumerate(policies) if not policy.actions[0].stop]
         brush_inferences: dict[int, BrushPreparationInference] = {}
@@ -1853,6 +2570,11 @@ class ArmActiveInferenceDriver:
                 policies[index],
                 brush_preparation=inference.selected,
             )
+        # FROZEN on the declared config constant, never the learned belief mean.
+        # This is only the forecast-budget ordering, a declared fixed heuristic
+        # BELOW the painting-policy boundary; a learned precision must not choose
+        # which candidates get an expensive execution forecast, or gamma would
+        # select the evidence set from which gamma is itself estimated.
         non_stop_indices = sorted(
             non_stop_indices,
             key=lambda i: (
@@ -1866,9 +2588,12 @@ class ArmActiveInferenceDriver:
         motor_primitive_candidates = 0
         forecasted_indices: set[int] = set()
         active_indices: list[int] = list(stop_indices)
+        policy_gamma = self.precision_ledger.mean(POLICY_PRECISION_KEY)
+        # The modality weights are read ONCE per planning round, so every
+        # candidate's motor EFE is scaled by the same belief mean and normalizer.
+        modality_weights = self.precision_ledger.weights()
         painting_log_evidence = {
-            index: -self.config.policy_precision * base_components[index].total
-            for index in stop_indices
+            index: -policy_gamma * base_components[index].total for index in stop_indices
         }
         forecast_cache: dict[tuple[object, ...], ExecutionForecast] = {}
         rollout_grid_size = (
@@ -1933,6 +2658,7 @@ class ArmActiveInferenceDriver:
                     self.config,
                     reliability_inflation=self.motion_reliability.expected_inflation(kind),
                     reliability_epistemic_nats=self.motion_reliability.epistemic_nats(kind),
+                    weights=modality_weights,
                 )
                 first_transitions.append((mean, variance, material_delta))
                 motor_terms_by_policy.append(motor_terms)
@@ -1951,7 +2677,16 @@ class ArmActiveInferenceDriver:
                 motor_efe_approximations=[terms.approximation for terms in motor_terms_by_policy],
             )
             self._profile_add_seconds("motorEFERescoreSeconds", time.perf_counter() - rescore_started)
-            for motor_policy, forecast, comp in zip(motor_policies, forecasts, rescored):
+            for motor_policy, forecast, motor_terms, comp in zip(
+                motor_policies, forecasts, motor_terms_by_policy, rescored
+            ):
+                if comp.execution_forecast_used:
+                    # Telemetry only: see the summary path above.
+                    comp = replace(
+                        comp,
+                        motor_mutual_information=motor_terms.mutual_information,
+                        motor_reliability_novelty=motor_terms.reliability_novelty,
+                    )
                 if not forecast.feasible:
                     rejections += 1
                     comp = replace(comp, motor_feasible=False)
@@ -1961,7 +2696,7 @@ class ArmActiveInferenceDriver:
             log_evidence, motor_posterior = motor_realization_log_evidence(
                 [entry[1].total for entry in eligible],
                 [motor_policy_log_prior(entry[0], self.config) for entry in eligible],
-                self.config.policy_precision,
+                policy_gamma,
             )
             selected = int(np.argmax(motor_posterior))
             best_policy, best_component, best_feasible = eligible[selected]
@@ -2006,7 +2741,9 @@ class ArmActiveInferenceDriver:
         phase_started = time.perf_counter()
         active_logits = torch.tensor(
             [
-                policy_stop_log_prior(policies[i], believed_coverage, self.config)
+                policy_stop_log_prior(
+                    policies[i], believed_coverage, self.config, self.gap_increment
+                )
                 + painting_log_evidence[i]
                 + policy_log_priors[i]
                 for i in active_indices
@@ -2014,6 +2751,12 @@ class ArmActiveInferenceDriver:
             device=agent.device,
         )
         active_posterior = torch.softmax(active_logits - active_logits.max(), dim=0)
+        self._observe_precision_beliefs(
+            components,
+            brush_inferences,
+            policy_log_priors,
+            [i for i, policy in enumerate(policies) if not policy.actions[0].stop],
+        )
         self._profile_set("motorRealizationMarginalization", "logsumexp over declared motor policy prior")
         self._profile_set(
             "brushPreparationMarginalization",
@@ -2022,6 +2765,33 @@ class ArmActiveInferenceDriver:
         posterior_values = [0.0 for _ in policies]
         for index, prob in zip(active_indices, active_posterior.detach().cpu().tolist()):
             posterior_values[index] = prob
+        # PAIRED SAME-ROUND ATTRIBUTION. Both proposals generated candidates under
+        # the same belief and were scored by the same expected free energy, so these
+        # two masses read out which branch's candidates the posterior actually
+        # selects. `policies[index] = best_policy` above replaces the object but
+        # preserves its POSITION, so the index is a valid key into the records.
+        learned_mass = 0.0
+        hand_mass = 0.0
+        for index, record in enumerate(proposal_records):
+            if record is None:
+                continue
+            if record.source == "learned":
+                learned_mass += float(posterior_values[index])
+            elif record.source == "hand":
+                hand_mass += float(posterior_values[index])
+        self._pending_proposal_masses = (learned_mass, hand_mass)
+        if self._pending_proposal_batch is not None:
+            self._pending_proposal_batch.refined_weights = tuple(
+                float(value) for value in posterior_values
+            )
+        selected_index = (
+            int(active_indices[int(torch.argmax(active_posterior).item())])
+            if active_indices
+            else 0
+        )
+        self._pending_proposal_record = (
+            proposal_records[selected_index] if selected_index < len(proposal_records) else None
+        )
         ranked = sorted(
             zip(policies, components, posterior_values),
             key=lambda item: item[2],
@@ -2118,7 +2888,10 @@ class ArmActiveInferenceDriver:
         if isinstance(self.agent, SpatialActiveInferencePainter) and self.agent.composition is not None:
             composition = {
                 "currentBeliefGap": self._cached_belief_gap,
-                "gapPrecision": self.config.composition_gap_precision,
+                "gapPrecision": self.precision_ledger.mean("composition_gap"),
+                "gapPrecisionPrior": self.config.composition_gap_precision,
+                "gapProgress": self.gap_increment.summary(),
+                "localBaselineEnabled": self.config.composition_local_baseline_enabled,
                 "lastTrainingLoss": self.agent.last_composition_loss,
                 "lastTransitionTrainingLoss": self.agent.last_hierarchy_transition_loss,
                 "lastPassageTrajectoryLoss": self.agent.last_passage_trajectory_loss,
@@ -2128,8 +2901,10 @@ class ArmActiveInferenceDriver:
                 "topPolicyPassageTrajectory": self._cached_passage_trajectory,
                 "hierarchy": self.agent.composition.diagnostics(),
                 "declaredAs": (
-                    "structural prior p*(s_T) ~ exp(precision * compression_gap); "
-                    "gap = hierarchical ELBO minus context-free flat code, nats/cell-channel"
+                    "structural prior p*(s_T) ~ exp(precision * compression_gap); gap = "
+                    "hierarchical ELBO minus the best member of a declared parameter-free "
+                    "context-free baseline family (iid-cell Gaussian; 3x3 hollow-neighbourhood "
+                    "local Markov), nats/cell-channel over all material channels"
                 ),
             }
         oracle_mode = self.observation_access_mode == ORACLE_OBSERVATION_ACCESS_MODE
@@ -2273,7 +3048,12 @@ class ArmActiveInferenceDriver:
                 if isinstance(self.belief, SpatialCanvasState)
                 else None
             ),
-            "policyPrecision": self.config.policy_precision,
+            # The posterior mean of the policy precision BELIEF; the declared
+            # constant it was seeded from is reported beside it.
+            "policyPrecision": self.precision_ledger.mean(POLICY_PRECISION_KEY),
+            "policyPrecisionPrior": self.config.policy_precision,
+            "precisionBeliefs": self.precision_ledger.summary(),
+            "gapProgress": self.gap_increment.summary(),
             "posteriorEntropy": posterior_entropy,
             "passageCandidateCount": len(passage_values),
             "passagePosteriorMass": passage_posterior_mass,
@@ -2285,6 +3065,13 @@ class ArmActiveInferenceDriver:
             "spatialBelief": spatial_belief,
             "markEvents": mark_events,
             "composition": composition,
+            "policyProposal": self._policy_proposal_diagnostics(),
+            # Nothing is computed here. The block was measured once during
+            # bootstrap; diagnostics() is polled from the web thread while
+            # background training runs, so a compression_gap call here would
+            # contend with it. Stays None in summary mode, in sensor mode, and on
+            # checkpoint resume (where bootstrap never ran).
+            "compositionBootstrap": self._bootstrap_composition,
             "strokeCount": self.stroke_count,
             "executing": action,
             "executingMotorPrimitive": (
@@ -2329,6 +3116,8 @@ class ArmActiveInferenceDriver:
                     "motorRisk": comp.motor_risk,
                     "motorAmbiguity": comp.motor_ambiguity,
                     "motorEpistemicValue": comp.motor_epistemic_value,
+                    "motorMutualInformation": comp.motor_mutual_information,
+                    "motorReliabilityNovelty": comp.motor_reliability_novelty,
                     "motorEFEApproximation": comp.motor_efe_approximation,
                     "compositionGap": getattr(comp, "composition_gap", 0.0),
                     "compositionRisk": getattr(comp, "composition_risk", 0.0),
@@ -2358,6 +3147,133 @@ class ArmActiveInferenceDriver:
                 for policy, comp, prob in self.last_ranked[:5]
             ],
         }
+
+    def _policy_proposal_diagnostics(self) -> dict[str, Any]:
+        """The falsifiable Feature-D payload, addressing RESEARCH_CHARTER H4.
+
+        Wire format, not a debug dump: every value is a plain
+        float/int/str/bool/None so `web_server`'s bare `json.dumps` cannot fail,
+        and a diagnostic failure degrades to a status string rather than taking
+        down the state poll. Read-only throughout -- nothing in the generative
+        model, the EFE, or the policy posterior consumes any of it.
+        """
+
+        declared = (
+            "amortized proposal q_proposal(z_pi | q(z_canvas), q(z_relational)) trained by "
+            "self-normalized importance-weighted maximum likelihood toward the declared base "
+            "painting-policy posterior softmax(log p_stop - gamma G_base); the continuous, "
+            "belief-conditioned generalization of the reference habit prior "
+            "E = softmax(gamma log(counts + 1)) "
+            "(active_inference.core.pomdp_extensions.habit_prior_from_counts). A PROPOSAL, not a "
+            "prior: never summed into the policy posterior, never in any EFE or VFE term, never a "
+            "preference. The hand-written proposal is permanently mixed in at (1 - mix) in the same "
+            "planning round as a paired control."
+        )
+        block: dict[str, Any] = {
+            "status": "disabled",
+            "declaredAs": declared,
+            "researchHypothesis": "RESEARCH_CHARTER H4",
+            "mixtureWeight": float(self.config.learned_proposal_mix),
+            "effectiveMixtureWeight": 0.0,
+            "updateCount": 0,
+            "lastTrainingLoss": None,
+            "lastTargetName": BASE_TARGET_NAME,
+            "lastTargetSupportFraction": None,
+            "refinedTargetCrossEntropy": None,
+            "divergenceNats": None,
+            "markDivergenceNats": None,
+            "divergenceSamples": 0,
+            "outOfHandSupportFraction": None,
+            "selectedMeanLogLikelihoodLearned": None,
+            "selectedMeanLogLikelihoodHandWritten": None,
+            "selectedLogLikelihoodAdvantage": None,
+            "selectedSampleCount": 0,
+            "learnedPosteriorMass": 0.0,
+            "handWrittenPosteriorMass": 0.0,
+            "learnedCandidateCount": 0,
+            "beliefFeatureSource": BELIEF_SOURCE_SUMMARY,
+            "skippedNoBeliefUpdates": 0,
+            "skippedDegenerateTargetUpdates": 0,
+            "inputDimensions": 0,
+            "approximation": (
+                "target is the base-EFE posterior over the SAMPLED candidate support only; "
+                "direction density truncated to three wraps; the hand-written density's "
+                "coverage-cell boundary atoms evaluated pre-clip; plan-family compounds and "
+                "the planning-depth categorical stay hand-written and cancel"
+            ),
+        }
+        try:
+            if not self._uses_spatial_planner():
+                block["status"] = "unavailable_summary_planner"
+                return block
+            agent = self.agent
+            if not isinstance(agent, SpatialActiveInferencePainter) or agent.policy_proposal is None:
+                return block
+            cached = self._cached_policy_proposal
+            if isinstance(cached, dict) and cached.get("status") == "diagnostic_failed":
+                block["status"] = "diagnostic_failed"
+                block["lastError"] = str(cached.get("lastError"))
+                return block
+            update_count = agent.policy_proposal.update_count
+            block["status"] = "learned" if update_count > 0 else "untrained"
+            block["updateCount"] = int(update_count)
+            block["lastTrainingLoss"] = (
+                float(agent.last_proposal_loss) if agent.last_proposal_loss is not None else None
+            )
+            block["lastTargetSupportFraction"] = (
+                float(agent.last_proposal_target_support_fraction)
+                if agent.last_proposal_target_support_fraction is not None
+                else None
+            )
+            block["skippedNoBeliefUpdates"] = int(agent.proposal_no_belief_skips)
+            block["skippedDegenerateTargetUpdates"] = int(agent.proposal_degenerate_target_skips)
+            block["inputDimensions"] = int(agent.policy_proposal.input_dim)
+            block["beliefFeatureSource"] = str(agent.last_proposal_belief_source)
+            block["learnedCandidateCount"] = int(
+                agent.policy_sampler.last_learned_candidate_count
+            )
+            learned_mass, hand_mass = self._pending_proposal_masses
+            block["learnedPosteriorMass"] = float(learned_mass)
+            block["handWrittenPosteriorMass"] = float(hand_mass)
+            # Effective, not declared: a nonzero mix with a fallback belief source
+            # or a still-untrained network is not an emitting learned proposal.
+            block["effectiveMixtureWeight"] = (
+                float(self.config.learned_proposal_mix)
+                if block["status"] == "learned"
+                else 0.0
+            )
+            if isinstance(cached, dict):
+                for key in (
+                    "divergenceNats",
+                    "markDivergenceNats",
+                    "divergenceSamples",
+                    "outOfHandSupportFraction",
+                    "selectedMeanLogLikelihoodLearned",
+                    "selectedMeanLogLikelihoodHandWritten",
+                    "selectedLogLikelihoodAdvantage",
+                    "selectedSampleCount",
+                    "refinedTargetCrossEntropy",
+                    "beliefFeatureSource",
+                ):
+                    if key not in cached:
+                        continue
+                    value = cached[key]
+                    if value is None:
+                        block[key] = None
+                    elif key in {"divergenceSamples", "selectedSampleCount"}:
+                        block[key] = int(value)
+                    elif key == "beliefFeatureSource":
+                        block[key] = str(value)
+                    else:
+                        block[key] = float(value)
+            return block
+        except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
+            return {
+                "status": "diagnostic_failed",
+                "declaredAs": declared,
+                "researchHypothesis": "RESEARCH_CHARTER H4",
+                "lastError": repr(exc),
+            }
 
     def _belief_diagnostics(self) -> dict[str, object]:
         if isinstance(self.belief, SpatialCanvasState):

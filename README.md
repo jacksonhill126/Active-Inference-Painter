@@ -10,11 +10,12 @@ extended spatial organization through perception, prediction, action, and
 belief revision without reference images, aesthetic rewards, demonstrated
 painting policies, or fine-tuning on a painting corpus.
 
-> **Status:** early research prototype. Paint material remains in the custom
+> **Status:** M1 formal-baseline research prototype. Paint material remains in the custom
 > Python process; realized arm dynamics and contact can use either the native
 > reference plant or the hardware-oriented MuJoCo model. It is not validated
-> for physical hardware, and its present visual output should not be treated as
-> evidence of learned composition.
+> for physical hardware, its default sensor path remains fail-closed, and its
+> present visual output should not be treated as evidence of learned
+> composition.
 
 ## Quick Start
 
@@ -60,9 +61,15 @@ Run the deterministic smoke suite:
 python -m pytest -q \
   tests/test_action_encoding.py \
   tests/test_canvas.py \
+  tests/test_motion_manifold.py \
   tests/test_motor_reliability.py \
+  tests/test_modality_units.py \
   tests/test_native_contract.py \
+  tests/test_observation_factorization.py \
+  tests/test_plant_interface.py \
+  tests/test_precision_beliefs.py \
   tests/test_preferences.py \
+  tests/test_reference_oracle.py \
   tests/test_sensor_access_contract.py \
   tests/test_spatial_state.py \
   tests/test_stop_policy.py \
@@ -70,9 +77,9 @@ python -m pytest -q \
 ```
 
 PowerShell accepts the same file list on one line. The complete suite is
-`python -m pytest -q`; it currently includes expensive integration tests and a
-known planning-timeout failure documented in
-[`docs/PROGRESS.md`](docs/PROGRESS.md).
+`python -m pytest -q`; it currently includes expensive and timing-sensitive
+integration tests. The latest observed results and environmental caveats are
+recorded in [`docs/PROGRESS.md`](docs/PROGRESS.md).
 
 ## System Overview
 
@@ -107,6 +114,13 @@ policy below that boundary.
 - EFE-based policy inference with an immediate-stop policy and terminal
   material-coverage preference.
 - Hierarchical mark, polyline, passage, and passage-plan proposals.
+- An in-progress amortized mark/passage proposal network conditioned on canvas
+  and relational beliefs. Its emission mixture defaults to zero, dedicated
+  validation is incomplete, and it is not a policy prior or a correction for
+  finite-candidate bias.
+- Registered global/requested-foveal camera observations, a provisional camera
+  likelihood, and isolated compact body/brush posterior components. These are
+  not yet connected into a complete sensor-only painting loop.
 - Motor-realization forecasts over Cartesian, joint-space, elbow-pivot, and
   upper-arm-roll alternatives.
 - Checkpointing, replay, telemetry export, and a Python-backed Three.js viewer
@@ -120,8 +134,9 @@ policy below that boundary.
 - Broad deterministic and integration test coverage across material,
   inference, hierarchy, arm, execution, and runtime behavior.
 
-Several higher-level elements remain provisional. The current observation path
-uses simulator information unavailable to a physical robot, global and
+Several higher-level elements remain provisional. The sensor-equivalent path
+fails closed before painting policy inference; the explicit oracle comparator
+uses simulator information unavailable to a physical robot. Global and
 relational latents are not yet validated as predictively necessary, policy
 inference is proposal-limited, and the custom mechanical model has not been
 calibrated against hardware.

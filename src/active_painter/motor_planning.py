@@ -1,26 +1,76 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeVar
 
 import numpy as np
 
 from .config import PainterConfig
 from .policies import MotorPrimitiveLatent, Policy
+from .precision_beliefs import ModalityWeights
 
 
 # Execution-fidelity outcome channels: the ones the learned per-kind
 # reliability belief is fitted on (and therefore the ones it inflates).
 _FIDELITY_CHANNEL_PREFIXES = ("path_error", "pressure_error", "target_error_", "contact_loss")
 
+# Scalar or batched-tensor EFE term, so the same identity serves the per-policy
+# and batched evaluators without importing torch into this module.
+_EFETerm = TypeVar("_EFETerm")
+
 
 @dataclass(frozen=True, slots=True)
 class MotorEFETerms:
-    """Precision-weighted EFE terms for proprioceptive outcome modalities."""
+    """Precision-weighted EFE terms for proprioceptive outcome modalities.
+
+    The first four fields keep their order because they are serialized by
+    ``dataclasses.asdict`` into the driver telemetry payload. ``risk`` is the
+    pragmatic term, ``ambiguity`` is logged for telemetry only, and
+    ``epistemic_value`` is the logged sum of the two quantities that are
+    actually subtracted from expected free energy.
+    """
 
     risk: float
     ambiguity: float
     epistemic_value: float
     approximation: str
+    # Precision-weighted I(s; o) for the proprioceptive channel. Subtracted from
+    # G exactly ONCE, via `epistemic_value`; because -I(s;o) already equals
+    # E_q(s)[H[p(o|s)]] - H[q(o)], it carries the canonical ambiguity
+    # contribution and `ambiguity` must not be added on top of it.
+    mutual_information: float = 0.0
+    # Precision-weighted PARAMETER novelty over the learned inverse-gamma
+    # motion-reliability belief: the analogue of Dirichlet novelty in the
+    # reference implementation, and a genuinely separate information gain.
+    reliability_novelty: float = 0.0
+    # Unscaled H[q(o)] in nats. Not a summand anywhere; logged so that the
+    # canonical KL risk (= pragmatic - H[q(o)]) is derivable from telemetry
+    # without re-deriving it from the forecast.
+    forecast_outcome_entropy: float = 0.0
+    # Declared unit normalization applied to the three summed terms above, so
+    # the modality is commensurable with the material modalities. Recorded here
+    # rather than inferred, so `raw * precision * normalizer == stored` is
+    # checkable from telemetry alone.
+    normalizer: float = 1.0
+    normalizer_name: str = ""
+    modality_precision: float = 1.0
+
+
+def motor_efe_contribution(
+    motor_risk: _EFETerm,
+    motor_epistemic_value: _EFETerm,
+) -> _EFETerm:
+    """Motor modality contribution to G: pragmatic - I(s;o) - N_reliability.
+
+    Deliberately omits the logged ``MotorEFETerms.ambiguity``: likelihood
+    entropy in excess of the preference scale is a fourth, incommensurate
+    quantity, and adding it alongside ``- mutual_information`` would double
+    count ambiguity (see :func:`motor_efe_terms`). Single source of truth for
+    every EFE total site, and accepts floats or tensors so the batched and
+    scalar evaluators can share it.
+    """
+
+    return motor_risk - motor_epistemic_value
 
 
 def motor_realization_policy_alternatives(policy: Policy, config: PainterConfig) -> list[Policy]:
@@ -89,14 +139,30 @@ def motor_efe_terms(
     config: PainterConfig,
     reliability_inflation: float = 1.0,
     reliability_epistemic_nats: float = 0.0,
+    weights: ModalityWeights | None = None,
 ) -> MotorEFETerms:
     """EFE over a diagonal proprioceptive predictive density, in nats.
 
-    Risk is expected negative log probability under declared zero-centered
+    ``risk`` is the PRAGMATIC term E_q[-log p*(o)] under declared zero-centered
     homeostatic outcome preferences, with policy-independent Gaussian
-    normalizers omitted. Ambiguity is likelihood entropy in excess of each
-    preference scale. Epistemic value is the diagonal Gaussian mutual
-    information between process uncertainty and proprioceptive observations.
+    normalizers omitted. It is deliberately *not* a KL: the -H[q(o)] term is
+    absent. The motor contribution to expected free energy is therefore
+
+        G_motor = risk - epistemic_value
+                = pragmatic - I(s; o) - N_reliability
+
+    and because -I(s; o) = E_q(s)[H[p(o|s)]] - H[q(o)], that expression is
+    algebraically identical to the canonical `KL risk + ambiguity - novelty`.
+    Subtracting the mutual information once therefore already accounts for the
+    canonical ambiguity contribution.
+
+    ``ambiguity`` is a different quantity: likelihood entropy in excess of each
+    preference scale, measured against the preference variance rather than in
+    absolute nats. It is logged for telemetry so the modality stays auditable,
+    and it is never a summand in G -- adding it alongside -I(s; o) double counts
+    ambiguity. ``forecast_outcome_entropy`` is logged for the same reason, so a
+    reader can reconstruct the canonical KL risk as
+    ``risk - forecast_outcome_entropy`` at unit risk precision.
 
     ``reliability_inflation`` is the learned per-motion-kind precision belief:
     the posterior mean of the squared realized-vs-forecast execution error
@@ -106,8 +172,17 @@ def motor_efe_terms(
     pressure, target tracking, contact loss -- the same quantities the belief
     is fitted on. Effort channels (current, torque, velocity, acceleration,
     limit proximity) are not inflated. ``reliability_epistemic_nats`` is the
-    belief's resolvable uncertainty, credited as information gain for executing
-    (and thereby measuring) the kind.
+    belief's resolvable uncertainty, credited as parameter novelty for executing
+    (and thereby measuring) the kind, under its own declared precision.
+
+    ``weights`` carries the modality-level Gamma precision belief mean and the
+    declared unit normalizer. The three summed terms are raw sums over all
+    proprioceptive channels, so without normalization this modality is stated in
+    a different unit from every material modality (measured: a raw 27-channel
+    sum against per-cell-channel densities). When normalization is enabled the
+    sums are divided by the ACTUAL channel count, reducing the modality to nats
+    per proprioceptive channel. ``weights=None`` reproduces the historical
+    arithmetic exactly.
     """
 
     labels = tuple(forecast.proprioceptive_labels)
@@ -137,11 +212,55 @@ def motor_efe_terms(
     mutual_information = 0.5 * np.sum(
         np.log1p(predictive_variance / likelihood_variance)
     )
-    risk = float(config.motor_proprioceptive_risk_precision * expected_negative_log_preference)
-    ambiguity = float(config.motor_proprioceptive_ambiguity_precision * likelihood_excess_entropy)
-    epistemic_value = float(
-        config.motor_proprioceptive_ambiguity_precision
-        * (mutual_information + max(0.0, float(reliability_epistemic_nats)))
+    # H[q(o)] in absolute nats. Logged only: it is the bridge between the
+    # pragmatic term actually used and the canonical KL form of risk.
+    outcome_entropy = 0.5 * np.sum(
+        np.log(2.0 * np.pi * np.e * np.maximum(outcome_variance, 1e-12))
+    )
+    # Modality-level weight: gamma_motor (a Gamma precision belief mean, or the
+    # declared constant when no ledger is injected) times the declared
+    # per-proprioceptive-channel normalizer. Applied on top of, never instead
+    # of, the three declared per-term precisions below, so both remain
+    # separately attributable.
+    channel_count = len(labels)
+    if weights is None:
+        modality_weight = 1.0
+        normalizer = 1.0
+        normalizer_name = ""
+    else:
+        modality_weight = weights.motor_weight(channel_count)
+        normalizer = 1.0 / channel_count if weights.normalization_enabled else 1.0
+        normalizer_name = weights.normalizer_name.get("motor_proprioceptive", "")
+    risk = float(
+        modality_weight
+        * config.motor_proprioceptive_risk_precision
+        * expected_negative_log_preference
+    )
+    ambiguity = float(
+        modality_weight
+        * config.motor_proprioceptive_ambiguity_precision
+        * likelihood_excess_entropy
+    )
+    # The two subtracted terms carry separate declared precisions so they stay
+    # separately attributable: state/observation information gain is not the
+    # same quantity as parameter novelty over a learned belief.
+    mutual_information_term = float(
+        modality_weight * config.motor_proprioceptive_ambiguity_precision * mutual_information
+    )
+    reliability_novelty_term = float(
+        modality_weight
+        * config.motor_reliability_novelty_precision
+        * max(0.0, float(reliability_epistemic_nats))
+    )
+    epistemic_value = mutual_information_term + reliability_novelty_term
+    normalization_clause = (
+        ""
+        if weights is None
+        else (
+            "; terms reduced to nats per proprioceptive channel over "
+            f"{channel_count} channels (normalizer {normalizer:.6g}, modality precision "
+            f"{modality_weight * channel_count if weights.normalization_enabled else modality_weight:.4f})"
+        )
     )
     return MotorEFETerms(
         risk=risk,
@@ -149,9 +268,27 @@ def motor_efe_terms(
         epistemic_value=epistemic_value,
         approximation=(
             f"diagonal Gaussian motor EFE over {len(labels)} named normalized proprioceptive outcomes; "
-            "risk omits policy-independent preference normalizers; likelihood entropy and process-observation "
-            "mutual information are analytic in nats; expected squared error of execution-fidelity channels "
-            f"scaled by the learned per-kind reliability inflation {inflation:.3f}; hard safety limits remain external"
+            "risk is the pragmatic term E_q[-log p*(o)] with policy-independent Gaussian preference "
+            "normalizers omitted, so the motor contribution to G is "
+            "pragmatic - mutual_information - reliability_novelty; since "
+            "-I(s;o) = E[H[p(o|s)]] - H[q(o)], that equals the canonical KL risk plus ambiguity, and "
+            "likelihood excess entropy is therefore logged but never added again; likelihood excess "
+            "entropy, forecast outcome entropy and process-observation mutual information are analytic "
+            "in nats; reliability_novelty is parameter novelty over the learned inverse-gamma "
+            "motion-reliability belief, the analogue of Dirichlet novelty in the reference; expected "
+            "squared error of execution-fidelity channels scaled by the learned per-kind reliability "
+            f"inflation {inflation:.3f}; hard safety limits remain external"
+            f"{normalization_clause}"
+        ),
+        mutual_information=mutual_information_term,
+        reliability_novelty=reliability_novelty_term,
+        forecast_outcome_entropy=float(outcome_entropy),
+        normalizer=float(normalizer),
+        normalizer_name=normalizer_name,
+        modality_precision=float(
+            modality_weight * channel_count
+            if weights is not None and weights.normalization_enabled
+            else modality_weight
         ),
     )
 

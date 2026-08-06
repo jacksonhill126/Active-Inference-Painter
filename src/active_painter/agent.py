@@ -11,14 +11,36 @@ from .efe import EFEComponents, ExpectedFreeEnergy
 from .env import PaintCanvasEnv, StrokeAction
 from .inference import VariationalStateEstimator
 from .models import DynamicsEnsemble, GaussianBelief, ObservationModel
-from .policies import MotorPrimitiveLatent, Policy, PolicySampler, policy_stop_log_prior
+from .policies import (
+    MotorPrimitiveLatent,
+    Policy,
+    PolicySampler,
+    policy_posterior_from_efe,
+    policy_stop_log_prior,
+)
+from .precision_beliefs import (
+    POLICY_PRECISION_KEY,
+    GapIncrementBelief,
+    PrecisionLedger,
+)
 from .preferences import TerminalCoveragePreference
 from .replay import ReplayBuffer
 
 
 class ActiveInferencePainter:
-    def __init__(self, config: PainterConfig, seed: int = 0, device: str | None = None) -> None:
+    def __init__(
+        self,
+        config: PainterConfig,
+        seed: int = 0,
+        device: str | None = None,
+        precision_ledger: PrecisionLedger | None = None,
+        gap_increment: GapIncrementBelief | None = None,
+    ) -> None:
         self.cfg = config
+        self.precision_ledger = precision_ledger if precision_ledger is not None else PrecisionLedger(config)
+        self.gap_increment = (
+            gap_increment if gap_increment is not None else GapIncrementBelief.from_config(config)
+        )
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -27,7 +49,18 @@ class ActiveInferencePainter:
         self.observation_model = ObservationModel(config).to(self.device)
         self.estimator = VariationalStateEstimator(config, self.observation_model)
         self.preference = TerminalCoveragePreference(config)
-        self.efe = ExpectedFreeEnergy(config, self.dynamics, self.observation_model, self.preference)
+        self.efe = ExpectedFreeEnergy(
+            config,
+            self.dynamics,
+            self.observation_model,
+            self.preference,
+            precision_ledger=self.precision_ledger,
+        )
+        # No learned proposal here, by declared config rather than by omission:
+        # the summary planner has no canvas or relational posterior to condition
+        # `q_proposal(z_pi | belief)` on, so it keeps the hand-written proposal and
+        # the driver reports `policyProposal.status = "unavailable_summary_planner"`.
+        # `config.learned_proposal_enabled` is gated on the spatial planner.
         self.policy_sampler = PolicySampler(config, seed=seed)
         self.replay = ReplayBuffer(config.replay_capacity, seed=seed)
         self.optimizer = torch.optim.Adam(self.dynamics.parameters(), lr=config.model_lr)
@@ -59,15 +92,36 @@ class ActiveInferencePainter:
         self.belief = self.estimator.infer(prior, o)
 
     def infer_policy(self) -> tuple[Policy, EFEComponents, list[tuple[Policy, EFEComponents, float]]]:
+        """Sample candidates, score them, and draw from Q(pi).
+
+        The policy precision is the posterior mean of the ledger's Gamma belief.
+        Its prior mean is exactly `config.policy_precision`, and this bare-agent
+        path deliberately does NOT call `observe_policy`: there is no
+        policy-dependent variational free energy here (`last_vfe` is a
+        state-inference VFE for the single realized observation, not a
+        per-candidate vector). Measured on the reference implementation, a flat
+        or absent F makes dF/dgamma exactly 0.0 while reporting
+        converged=True -- a degenerate no-op dressed as a fixed point. So this
+        path stays bit-identically at the declared prior mean and says so,
+        rather than passing F=0 and calling the result learning.
+        """
+
         policies = self.policy_sampler.sample()
         components = self.efe.evaluate_batch(self.belief, policies)
         g = torch.tensor([c.total for c in components], device=self.device)
         believed_coverage = float(self.belief.mean[0].item())
         log_prior = torch.tensor(
-            [policy_stop_log_prior(policy, believed_coverage, self.cfg) for policy in policies],
+            [
+                policy_stop_log_prior(policy, believed_coverage, self.cfg, self.gap_increment)
+                for policy in policies
+            ],
             device=self.device,
         )
-        posterior = torch.softmax(-self.cfg.policy_precision * (g - g.min()) + log_prior, dim=0)
+        posterior = policy_posterior_from_efe(
+            g,
+            log_prior,
+            self.precision_ledger.mean(POLICY_PRECISION_KEY),
+        )
         index = int(torch.multinomial(posterior, 1).item())
         ranked = sorted(
             zip(policies, components, posterior.detach().cpu().tolist()),

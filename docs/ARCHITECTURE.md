@@ -633,7 +633,9 @@ between ensemble particles.
 
 The active high-level model is `HierarchicalCanvasModel`. The older standalone
 `CompositionHierarchy` class remains in the repository and tests, but the live
-spatial agent uses the unified canvas/relational model.
+spatial agent uses the unified canvas/relational model. Both classes now share
+one baseline implementation, defined in `composition.py`, so the compression gap
+cannot diverge between them.
 
 The unified hierarchy has 248,782 trainable parameters. Together with local
 dynamics, the active spatial neural system has:
@@ -649,25 +651,46 @@ The observation model itself has no learned parameters.
 ### 11.1 Compression-gap preference
 
 The hierarchy encodes the 16 x 16 material field and asks whether it can explain
-the field better than a context-free Gaussian code.
+the field better than any member of a declared family of hand-written codes.
 
 The structural preference is:
 
 ```text
 p*(s_T) proportional to exp(kappa * gap(s_T))
 
-gap(s) = ELBO_hierarchy(s) - log p_flat(s)
+gap(s) = ELBO_hierarchy(s) - max_m log p_m(s)
 ```
 
-The flat code gets the best per-image, per-channel mean and variance but cannot
-represent spatial relationships. The hierarchy must pay a KL cost for its
-latent code. Both use the same variance floor.
+The baseline family has two parameter-free members, and the gap is scored
+against the better of the two, so it only credits structure that neither can
+explain:
+
+- the iid member gets the best per-image, per-channel mean and variance but
+  cannot represent any spatial relationship at all;
+- the local member predicts each cell from the mean of its eight 3x3 neighbours
+  excluding itself (replicate padding, per-image per-channel residual
+  variance), so it captures local smoothness but nothing long-range.
+
+The hierarchy must pay a KL cost for its latent code, and all three codes use
+the same variance floor. Because the local member has a fixed 3x3 spatial
+scale, gap magnitudes depend on the grid size.
 
 Interpretation:
 
-- blank or spatially trivial fields should have a gap near zero;
-- unstructured noise should not be helped by the hierarchy;
-- repeated or mutually predictive spatial structure can produce positive gap.
+- blank or spatially trivial fields cannot produce a positive gap: both members
+  saturate exactly on the shared variance floor (measured 2.9931 nats per
+  cell-channel for a blank field and for a constant-0.5 field alike), so the
+  baseline is already perfect and the hierarchy can only pay its latent KL;
+- unstructured noise should not be helped by the hierarchy; the iid member wins
+  the family maximum there;
+- a locally smooth but globally unstructured field (a soft blob, low-pass
+  noise) cannot produce a positive gap either: the local member explains it, so
+  the hierarchy earns no credit for mere smoothness;
+- only repeated or mutually predictive long-range spatial structure can produce
+  a positive gap.
+
+`composition_local_baseline_enabled` selects family membership; setting it false
+restores the iid-only baseline exactly, so the two are separately measurable.
 
 The EFE contribution is:
 
@@ -787,8 +810,9 @@ marks. The proposal distribution favors:
 - log-uniform widths, producing many fine marks and fewer broad ones;
 - both white and black tone alternatives.
 
-These are empirical proposal priors. They control what the finite candidate set
-contains. They are not learned aesthetic rewards.
+These are computational proposal biases. They control what the finite
+candidate set contains, but they are not normalized policy priors and are not
+learned aesthetic rewards.
 
 ### 13.2 Passage latent
 
@@ -1003,7 +1027,8 @@ It does not add that canvas epistemic value a second time.
 ### 17.3 Composition risk
 
 Composition risk is negative compression gap. A terminal canvas that is easier
-for the hierarchy to explain than for a flat code is preferred.
+for the hierarchy to explain than for the best member of the declared
+context-free baseline family is preferred.
 
 ### 17.4 Hierarchical transition risks
 
@@ -1297,9 +1322,42 @@ formal anti-forgetting mechanism.
 
 ## 25. Bootstrap and checkpointing
 
-Without a compatible checkpoint, the command-line web server normally
-generates 96 random simulated strokes. Spatial mode then performs 24 bootstrap
-training steps.
+Without a compatible checkpoint, the command-line web server normally generates
+96 simulated marks. Spatial mode then performs 24 bootstrap training steps.
+
+The mark source is declared by `config.bootstrap_generator`
+(`--driver-bootstrap-generator`):
+
+- `motion_manifold` (default) draws joint-space sweeps of the arm's own
+  reachable-motion manifold and projects them to canvas geometry with forward
+  kinematics (`motion_manifold.py`). A revolute arm sweeps arcs, so the marks
+  carry correlated curvature, direction, and length that iid sampling cannot
+  produce. This is generative-process exploration BELOW the painting-policy
+  boundary: it supplies no aesthetic content, no demonstrated painting policy,
+  and no preference.
+- `random_stroke` retains the previous iid `PolicySampler._stroke` source, so the
+  hand-supplied contribution of the manifold generator stays separately
+  measurable.
+
+Bootstrap runs in EPISODES of `bootstrap_episode_marks` marks (default 24,
+matching the previous clear cadence). The canvas is cleared ONLY at an episode
+boundary. The previous code cleared it whenever coverage exceeded 0.94 or on
+every 24th transition regardless of position in the episode, which destroyed
+each canvas before the hierarchy had ever encoded a complete organized one. At
+each boundary the finished canvas is handed to the canvas/relational likelihood
+as a whole through `spatial_agent.add_composition_canvas`, and
+`bootstrap_composition_train_steps` (default 0) declares an explicit
+canvas/relational gradient budget there. That budget is a gradient
+hyperparameter, not an objective term. It defaults to 0 because it is expensive;
+it must be set explicitly for the compression gap to discriminate structure at
+all, since the measured gap is flat below a few hundred gradient steps.
+
+The resulting measurement is reported as `diagnostics()["compositionBootstrap"]`
+with the generator that ACTUALLY ran (`executedGenerator`, `None` on checkpoint
+resume, in summary mode, and in sensor mode) alongside the configured one. It is
+evidence, never a decision quantity. Note that this measurement is taken at the
+bootstrap simulator's `canvas_size=64` while the live sim paints at 256; see the
+pre-existing bootstrap/live pixel-scale note later in this document.
 
 Checkpoints store:
 
@@ -1431,6 +1489,8 @@ For clarity, the following are currently designed by the programmer:
 - the terminal coverage preference;
 - the structural compression-gap preference form;
 - proposal mixtures for marks, passages, and plans;
+- the learned-proposal mixture budget, network architecture, factorization, and
+  latent support;
 - stroke length, width, and amount proposal ranges;
 - band, chain, and polyline decoders;
 - passage-plan geometry;
@@ -1554,8 +1614,12 @@ loop in which early representational accidents become preferred regularities.
 
 ### 31.6 Proposal-limited inference
 
-Policy inference is only as broad as the 32 sampled candidates. There is no
-gradient-based optimization of stroke geometry or amortized proposal network.
+Policy inference is only as broad as the 32 sampled candidates. The working
+tree contains a provisional amortized mark/passage proposal network conditioned
+on canvas and relational beliefs, but its emission mixture defaults to zero and
+its dedicated validation is incomplete. It has no compound passage-plan
+density and does not correct finite-candidate posterior bias. There is still no
+gradient-based optimization of stroke geometry.
 
 ### 31.7 Polyline turn inference
 
@@ -1621,10 +1685,13 @@ rollout for every candidate.
 
 ### Fourth: learned policy proposals
 
-The candidate generator could become an amortized policy prior trained to
-propose marks and passages likely under the posterior, while keeping final
-selection as EFE inference. That would attack the proposal bottleneck without
-introducing an external reward.
+Finish and validate the provisional amortized proposal as a computational
+proposal, not a policy prior. Required evidence includes normalized support and
+density tests, zero-mixture parity, checkpoint/diagnostic tests, and
+candidate-count, horizon, seed, mixture, posterior-mass, and top-action
+convergence. Final selection remains EFE inference; the learned proposal must
+not be added to the policy posterior merely because it was trained toward that
+posterior.
 
 ### Fifth: deeper passage memory
 
@@ -1652,6 +1719,9 @@ only a per-kind scalar reliability inflation.
 | `models.py` | Summary and spatial transition ensembles |
 | `spatial_inference.py` | Pixel Gaussian posterior/VFE update |
 | `policies.py` | Mark, passage, polyline, passage-plan, and stop-policy definitions |
+| `policy_ranges.py` | Shared representational bounds and hand-written/learned proposal support |
+| `proposal.py` | Provisional amortized mark/passage proposal density and training objective |
+| `precision_beliefs.py` | Gamma modality/policy precision beliefs and gap-increment belief |
 | `passage_inference.py` | Slow passage posterior and mark observations |
 | `canvas_hierarchy.py` | Compression gap, canvas latent, relational latent, passage transitions |
 | `spatial_hierarchy.py` | Interpretable mark-event component summaries |
@@ -1688,7 +1758,8 @@ level now sees native pixels. The main gaps are:
 
 - local dynamics have limited contextual range;
 - global structure is compressed at 16 x 16;
-- candidate geometry is still largely hand-proposed;
+- candidate geometry is still largely hand-proposed; the provisional learned
+  proposal is disabled for emission by default and not yet validated;
 - the hierarchy has no semantic visual training signal;
 - embodied forecasts are computationally expensive;
 - the mechanical and paint processes are plausible simulations rather than

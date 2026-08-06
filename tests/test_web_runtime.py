@@ -1,5 +1,6 @@
 import errno
 import io
+import json
 import numpy as np
 from pathlib import Path
 import shutil
@@ -278,6 +279,26 @@ def test_web_runtime_can_enable_spatial_material_planner() -> None:
     assert hierarchy["passageTrajectory"]["descriptorDimensions"] == 14
     assert state["agent"]["composition"]["passageReplaySize"] == 0
     assert state["agent"]["composition"]["passageStepReplaySize"] == 0
+    # Precision beliefs must survive json.dumps even with a clamped belief:
+    # unbounded, a disagreeing F drives gamma to ~1e-3 and 1/eps to ~1e300,
+    # both of which break the JSON contract the viewer depends on.
+    ledger = runtime.agent_driver.precision_ledger
+    rng = np.random.default_rng(0)
+    base = rng.normal(0.0, 1.0, size=24)
+    G = (base - base.mean()) * 8.0
+    for _ in range(6):
+        ledger.observe_policy(G, -0.5 * G)
+        ledger.observe("terminal_coverage", G, -0.5 * G)
+    assert ledger.last_updates["terminal_coverage"].status == "clamped"
+    runtime.agent_driver.gap_increment.observe(0.0, 0)
+    runtime.agent_driver.gap_increment.observe(0.4, 2)
+    refreshed = runtime.state()
+    json.dumps(refreshed)
+    beliefs = refreshed["agent"]["precisionBeliefs"]
+    assert beliefs["policy"]["priorGamma"] == 0.35
+    for entry in beliefs.values():
+        assert np.isfinite(float(entry["gamma"]))
+    assert refreshed["agent"]["gapProgress"]["hasObservations"] == 1.0
 
 
 def test_web_runtime_uses_bounded_passage_planning_budget() -> None:

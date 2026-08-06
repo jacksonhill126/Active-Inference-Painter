@@ -6,15 +6,45 @@ from torch.distributions import Beta
 from .preferences import TerminalCoveragePreference
 
 
-def coverage_beta_approximation(mean: torch.Tensor, variance: torch.Tensor) -> Beta:
+def coverage_beta_approximation(
+    mean: torch.Tensor,
+    variance: torch.Tensor,
+    concentration_floor: float = 0.0,
+) -> Beta:
     # Approximation: the terminal forecast q(C_T | policy) is moment-matched
     # to a Beta distribution on material coverage C_T in [0, 1].
+    #
+    # Approximation (declared forecast-family restriction, not a clamp on risk):
+    # `concentration_floor` restricts the moment match to the INTERIOR-UNIMODAL
+    # Beta family, both concentrations >= the floor. A concentration below 1
+    # puts a boundary spike in the forecast, and the resulting
+    # digamma(alpha -> 0) makes the exact Beta-Beta KL diverge: measured 53248
+    # nats on a near-blank low-variance forecast (mean 1e-4, std 2.3e-3), which
+    # is a numerical artefact of the moment match rather than a belief the model
+    # holds. The rescale is a COMMON factor on both concentrations, so the
+    # forecast mean alpha/(alpha+beta) is preserved exactly and the term stays a
+    # genuine KL between two Betas. Measured inert on every well-conditioned
+    # forecast (mean 0.05 var 1e-4: 246.6508 -> 246.6508; 0.5/1e-6:
+    # 37.2720 -> 37.2720; 0.87/1e-8: 4.4849 -> 4.4849; 0.87/1e-4:
+    # 0.7181 -> 0.7181), and it bites only where alpha < floor or beta < floor.
+    # Floor 0.0 restores the historical unrestricted family exactly.
     mean = torch.clamp(mean, 1e-4, 1.0 - 1e-4)
     max_variance = torch.clamp(mean * (1.0 - mean) - 1e-8, min=1e-8)
     variance = torch.minimum(torch.clamp(variance, min=1e-8), max_variance)
     concentration = torch.clamp(mean * (1.0 - mean) / variance - 1.0, min=2.0, max=1e6)
     alpha = torch.clamp(mean * concentration, min=1e-4)
     beta = torch.clamp((1.0 - mean) * concentration, min=1e-4)
+    floor = float(concentration_floor)
+    if floor > 0.0:
+        scale = torch.clamp(
+            torch.maximum(
+                floor / torch.clamp(alpha, min=1e-12),
+                floor / torch.clamp(beta, min=1e-12),
+            ),
+            min=1.0,
+        )
+        alpha = alpha * scale
+        beta = beta * scale
     return Beta(alpha, beta)
 
 
@@ -23,16 +53,27 @@ def terminal_preference_terms(
     coverage_mean: torch.Tensor,
     coverage_variance: torch.Tensor,
     precision: float = 1.0,
+    concentration_floor: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Per-policy terminal risk, entropy, and pragmatic value.
 
     Element-wise over a batch of terminal coverage forecasts, so both the
     single-policy and batched evaluators share one implementation. All three
-    returned tensors are scaled by the declared terminal-risk precision so the
-    identity `risk = -entropy - pragmatic_value` holds at any precision.
+    returned tensors are scaled by the SAME declared terminal-risk precision, so
+    the identity `risk = -entropy - pragmatic_value` holds at any precision --
+    including the posterior mean of a Gamma precision belief, and including a
+    clamped boundary mean.
+
+    `precision` is a plain float on purpose: it may be a hand-declared constant
+    or a belief's posterior mean, and this function must not be able to tell the
+    difference. The PREFERENCE itself (`preference`) is never touched here.
     """
 
-    forecast = coverage_beta_approximation(coverage_mean, coverage_variance)
+    forecast = coverage_beta_approximation(
+        coverage_mean,
+        coverage_variance,
+        concentration_floor=concentration_floor,
+    )
     target = preference.distribution(coverage_mean.device)
     terminal_entropy = forecast.entropy()
 

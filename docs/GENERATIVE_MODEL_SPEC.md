@@ -546,13 +546,31 @@ paint on white ground contributes to coverage through thickness.
 When enabled:
 
 ```math
-gap(s)=ELBO_hierarchy(s)-log p_flat(s)
+gap(s)=ELBO_hierarchy(s)-max_m log p_m(s)
 p^*_{comp}(s) proportional to exp(lambda_comp * gap(s))
 R_comp(pi)=-lambda_comp E_q[gap(s_T)].
 ```
 
-The flat code is fit to the evaluated field, and the hierarchy pays a latent
-KL. This is an unnormalized energy-based preference. Because the hierarchy is
+The opponent is a two-member hand-written baseline family, and the gap is
+measured against the best member, so it only credits structure that no member
+can explain:
+
+- `p_iid`: the best per-image per-channel iid-cell Gaussian;
+- `p_local`: a parameter-free 3x3 hollow-neighbourhood local Markov code. Each
+  cell is predicted by the mean of its eight neighbours excluding itself, with
+  replicate padding and a per-image per-channel residual variance.
+
+The family is fixed and is never fit to outcomes; only the residual variance
+depends on the evaluated field, which is the same licence the iid member has
+always had. All three codes (both members and the hierarchical decoder) share
+one quantization floor `SIGMA_FLOOR`, so none earns free nats from
+continuous-density resolution, and the hierarchy pays a latent KL. Because
+`p_local` has a fixed 3x3 spatial scale, gap magnitudes are grid-size
+dependent and are not comparable across different `spatial_grid_size` values.
+The member selection is declared by `composition_local_baseline_enabled`;
+setting it false restores the iid-only baseline exactly.
+
+This is an unnormalized energy-based preference. Because the hierarchy is
 trained online on the same stream it evaluates, this creates a self-referential
 closed loop. It is not accepted as a principled fixed preference until
 `AI-110` approves frozen, cross-fitted, or alternative semantics. Current
@@ -565,10 +583,28 @@ acceleration, target-error, limit-proximity, contact-loss, pressure-error, and
 path-error outcomes. Zero-centered diagonal Gaussian preference scales are
 declared in `PainterConfig`.
 
-Motor risk is expected negative log preference with policy-independent
-Gaussian normalizers omitted. Likelihood ambiguity and process-observation
-mutual information are analytic under a diagonal-Gaussian approximation.
-Hard current, force, joint, and workspace limits remain external.
+Motor risk is the PRAGMATIC term `E_q[-log p*(o)]` with policy-independent
+Gaussian normalizers omitted. It is not a KL: the `-H[q(o)]` term is absent.
+The motor contribution to expected free energy is therefore
+
+```math
+G_motor = pragmatic - I(s;o) - N_reliability.
+```
+
+Because `-I(s;o) = E_{q(s)} H[p(o|s)] - H[q(o)]`, that expression is
+algebraically identical to the canonical `KL risk + ambiguity - novelty`.
+Subtracting the mutual information once therefore already accounts for the
+canonical ambiguity contribution, and the separately logged
+`MotorEFETerms.ambiguity` — likelihood entropy measured in excess of the
+*preference* scale rather than in absolute nats — must never be added on top of
+it. `MotorEFETerms.forecast_outcome_entropy` records `H[q(o)]` so the canonical
+KL form of risk stays derivable from telemetry.
+
+`N_reliability` is parameter novelty over the learned per-kind inverse-gamma
+motion-reliability belief, the direct analogue of the reference implementation's
+Dirichlet novelty term. Likelihood ambiguity, forecast outcome entropy, and
+process-observation mutual information are analytic under a diagonal-Gaussian
+approximation. Hard current, force, joint, and workspace limits remain external.
 
 ## 9. Expected Free Energy
 
@@ -586,11 +622,25 @@ G(pi) =
   + R_passage_canvas
   + R_passage_relation
   + R_motor
-  + A_motor
-  - I_motor.
+  - I_motor
+  - N_motor.
 ```
 
+`R_motor` is the motor *pragmatic* term only. `A_motor` (motor ambiguity in
+excess of the preference scale) is recorded in `MotorEFETerms` and mirrored into
+the components dataclasses, but it is not a summand: `- I_motor` already carries
+the canonical ambiguity contribution (see §8.3).
+
 All active terms are recorded separately in `SpatialEFEComponents`.
+
+Every modality contributes `gamma_m * normalizer_m * (raw term)`. `gamma_m` is
+the posterior mean of a declared Gamma precision belief
+(`precision_beliefs.GammaPrecisionBelief`), not a hand-tuned constant, and
+`normalizer_m` reduces the modality to nats per observation channel (§9.5).
+`SpatialEFEComponents` and `EFEComponents` record both alongside the declared
+normalizer name, so the raw term is recoverable from telemetry
+(`raw * gamma_m * normalizer_m == stored`). Modality fields stay POST-weighted,
+which is what keeps `total` an exact sum of its summands.
 
 ### 9.1 Observation ambiguity
 
@@ -620,42 +670,169 @@ information gain.
 
 ### 9.3 Higher-level transition risk
 
-The canvas, relational, and passage trajectory terms are precision-weighted
-KL divergences between encoded terminal/step posteriors and learned transition
-priors. They remain zero until the relevant likelihood has received training
-updates. Immediate stop uses an identity prior.
+The canvas, relational, and passage trajectory terms are BELIEF-weighted KL
+divergences between encoded terminal/step posteriors and learned transition
+priors: each is scaled by the posterior mean of a Gamma precision belief whose
+prior mean is the declared config constant
+(`canvas_latent_transition_precision`, `relational_transition_precision`). The
+canvas and passage-canvas terms share one belief; the relational and
+passage-relational terms share another. They remain zero until the relevant
+likelihood has received training updates, and a structurally-absent term stays
+exactly `0.0` rather than becoming a NaN. Immediate stop uses an identity prior.
+
+Because the KLs are already averaged over their latent dimension by
+`_kl_diagonal`, their declared unit is nats per latent dimension
+(`nats_per_canvas_latent_dim`, `nats_per_relational_latent_dim`) and no further
+normalizer is applied. That denominator differs in kind from the material
+modalities' per-cell-channel densities, which is why every modality records its
+own normalizer name rather than a single global unit claim.
 
 ### 9.4 Motor EFE
 
-Motor risk and ambiguity are added, and motor epistemic value is subtracted.
-The learned per-kind inverse-gamma reliability belief inflates expected
-squared execution error and likelihood variance for fidelity channels.
+Motor pragmatic value is added. State/observation mutual information and the
+learned-reliability parameter novelty are each subtracted exactly once, under
+separately declared precisions (`motor_proprioceptive_ambiguity_precision` and
+`motor_reliability_novelty_precision`); `MotorEFETerms.epistemic_value` is the
+logged sum of the two. Motor ambiguity in excess of the preference scale is
+recorded for telemetry and is not a summand. The learned per-kind inverse-gamma
+reliability belief inflates expected squared execution error and likelihood
+variance for fidelity channels.
+
+All three motor terms are additionally scaled by a MODALITY-level weight
+`gamma_motor * (1 / channel_count)`. `gamma_motor` is the posterior mean of a
+Gamma precision belief seeded at the declared identity constant
+`motor_modality_precision = 1.0`, so an unobserved belief reproduces the previous
+arithmetic exactly. The divisor is the only genuinely new normalizer in the
+model: the three summed terms are raw sums over all 27 named proprioceptive
+outcomes, so before it the modality was stated in a different unit from every
+material modality. Dividing by 27 is a >order-of-magnitude reweighting relative
+to the material modalities, gated by `modality_normalization_enabled`, and it
+changes motor realization selection. It is not a tidy-up.
+
+MEASURED. On one representative stroke across the five declared realization
+kinds, `G_motor` goes from `-4.4085, 1.4664, 1.0571, -4.4085, -4.4085` to
+exactly one twenty-seventh of each, so the modality's cross-kind SPREAD falls
+from 5.875 nats to 0.2176 nats -- comparable to the material modalities' measured
+per-candidate spreads of 0.19 to 0.33 nats rather than 20x larger. Inside
+`motor_realization_log_evidence` at the web runtime's 0.35 policy precision, the
+modal realization is UNCHANGED but the conditional motor posterior flattens from
+`[0.305, 0.039, 0.045, 0.305, 0.305]` (entropy 1.353 nats) to
+`[0.206, 0.191, 0.192, 0.206, 0.206]` (entropy 1.609 nats, against a uniform
+maximum of `log 5 = 1.609`). Per-channel normalization therefore makes motor
+realization selection nearly indiscriminate at that precision. That is a genuine
+cost of the unit convention, not a defect in it, and it must NOT be papered over
+by raising `motor_modality_precision` to taste: doing so would be exactly the
+hand-tuning this feature exists to remove. The clean response is either a
+declared, separately measured motor modality precision or a per-channel
+proprioceptive preference set, both out of scope here.
+
+`MotorEFETerms` records the normalizer, its declared name, and the modality
+precision it applied. `motor_realization_log_evidence` keeps a plain-float
+policy-precision argument; the driver passes the belief posterior mean there.
+The no-candidate-count-bonus property of that logsumexp is a normalization
+property and is gamma-independent, re-pinned under a swept precision in
+`tests/test_stroke_execution.py`.
+
+`tests/test_reference_oracle.py` pins this arithmetic at all six EFE total sites
+(`efe._evaluate_mixture`, `efe._evaluate_ensemble_batch`, and the four spatial
+evaluators), so a site that keeps the old `+ A_motor` term fails.
 
 ### 9.5 Omitted constants and units
 
 The implementation omits several policy-independent differential-entropy and
 preference normalizers. Sparse local terms are area-scaled. Summary VFE is
 reported in nats; spatial VFE is reported in mean nats per independent
-cell-channel; EFE mixes full-policy scalar modality terms after declared
-precision scaling.
+cell-channel.
+
+EFE modalities are reduced to nats PER OBSERVATION CHANNEL, and each modality
+records the name of the normalizer it was reduced by. All normalizers are
+MULTIPLICATIVE, never additive: an additive offset would be an unowned constant
+inside `G` and would break the standing guarantee that a zero-amount extra
+stroke costs exactly zero.
+
+| modality | normalizer | declared name |
+| --- | --- | --- |
+| `terminal_coverage` | 1 (a scalar Beta on one aggregate coverage channel; bounded by the forecast-family restriction below, not by a divisor) | `nats_per_aggregate_coverage_channel` |
+| `observation_ambiguity` | 1 (already divided by `independent_material_channel_count * full_area`) | `nats_per_independent_cell_channel` |
+| `transition` | 1 (same helpers) | `nats_per_independent_cell_channel` |
+| `composition_gap` | 1 (already averaged over `channels * grid * grid`) | `nats_per_cell_channel_all_material_channels` |
+| `canvas_latent_transition` | 1 (`_kl_diagonal` already means over the latent dim) | `nats_per_canvas_latent_dim` |
+| `relational_transition` | 1 | `nats_per_relational_latent_dim` |
+| `motor_proprioceptive` | 1/27 | `nats_per_proprioceptive_channel` |
+
+The composition normalizer's name deliberately says `all_material_channels`.
+The compression gap averages over all six material channels, including the two
+deterministic ones (register item 3). That is a PRE-EXISTING deviation from
+`spatial_state.independent_material_channel_count`, and the gap is earned mainly
+on channels 3-5, so restricting it would gut the signal the composition features
+are built on. It is named here so the deviation is visible rather than hidden;
+scoping a `composition_gap_independent_channels_only` flag is a separate change.
+
+The normalizer choice is declared but NOT neutral. Measured, the precision
+learning rule only responds inside a narrow intermediate band of a modality's own
+absolute scale (see register item 26), so the normalizer determines which
+precisions are learnable at all. No choice of normalizer makes all seven
+modalities simultaneously responsive.
+
+Silent domination is guarded by a tripwire in `tests/test_modality_units.py`: on
+a 24-candidate blank-canvas set no modality's mean absolute contribution may
+exceed 50x the median active modality's, and the tail is recorded separately
+(worst single candidate bounded at 400x, measured 329x). The tripwire is not a
+tautology: removing the terminal-forecast concentration floor takes the worst mean
+ratio from 20.8x to 1592x and the worst single candidate from 329x to 3.8e4x.
 
 AI-103 resolved the spatial factorization and normalization decision. AI-104
-and AI-105 must independently verify the remaining VFE/EFE reductions,
-omissions, and signs.
+and AI-105 are addressed in §14.
 
 ## 10. Policy Priors, Proposals, And Posterior
 
 ### 10.1 Painting policy prior
 
 The only painting-policy prior explicitly included in the global policy
-posterior is the immediate-stop prior:
+posterior is the immediate-stop prior. It is now a PRODUCT of two declared
+prior factors, hence a sum of two log-sigmoids:
 
 ```math
 log p_stop(pi) =
     log sigmoid(kappa * (believed_coverage - coverage_midpoint))
+  + log sigmoid(-s * E[dGap] / sd[dGap])
 ```
 
 for immediate stop, and zero log weight for continuation candidates.
+
+The second factor is the gap-progress term. `dGap` is the compression-gap
+increment per completed mark, carried as a Gaussian random-walk belief
+(`precision_beliefs.GapIncrementBelief`) updated by a scalar Kalman step from
+observed gaps; both its posterior mean and its posterior precision enter, through
+the standardized mean. As the believed increment approaches zero -- further marks
+are no longer buying structure -- the factor rises toward zero and stopping
+becomes a priori less unlikely.
+
+Four properties make it a prior rather than a reward, and all four are pinned by
+tests:
+
+1. It is bounded above by zero, so it can only make stopping LESS UNLIKELY and
+   can never manufacture positive value for any candidate.
+2. It is exactly `0.0` for every continuation policy, for an absent belief, for a
+   disabled flag, and before the belief's first observation. The pre-existing
+   `log(0.5)` identity at the coverage midpoint is therefore preserved verbatim,
+   and is additionally re-asserted by decomposition with an observed belief.
+3. `dGap` never enters `G`. Its only consumer is `policy_stop_log_prior`, guarded
+   by a test that asserts every field of every EFE component is bit-identical
+   before and after feeding the belief a large increment.
+4. The terminal coverage PREFERENCE is untouched. `target_coverage = 0.87` and
+   `terminal_concentration = 110.0` remain declared and un-learned; only their
+   PRECISION is a belief, and only the STOP POLICY PRIOR gained a progress term.
+   `tests/test_preferences.py` pins that the Beta concentrations are bit-identical
+   after enough precision updates to move every gamma.
+
+DECLARED SCOPE ASYMMETRY. In the receding-horizon local-passage scope,
+`_local_passage_candidates` already supplies `log1p(-passage_continuation_probability)`
+as the stop candidate's `policy_log_priors[0]`, and that is ADDED to
+`policy_stop_log_prior`. The local-passage stop prior is therefore a product of
+THREE declared factors while the global stop prior is a product of two. This
+overlap pre-dates the gap-progress term; it is recorded here rather than left
+implicit, and consolidating it is a candidate follow-up.
 
 ### 10.2 Candidate proposal distribution
 
@@ -667,13 +844,36 @@ for immediate stop, and zero log weight for continuation candidates.
 - explicit black/white tone alternatives;
 - finite planning-depth sampling.
 
-These are computational proposal distributions. Their log densities are not
-included in the policy posterior and no importance correction is applied.
+The working tree also contains an in-progress amortized proposal
+`q_proposal(z_pi | q(z_canvas), q(z_relational))` implemented by
+`proposal.PolicyProposalNetwork`. It defines normalized categorical,
+logit-normal, log-logit-normal, and wrapped-normal factors over the declared
+mark/passage latent support. After a planning round it is trained by
+self-normalized posterior-weighted maximum likelihood toward the existing base
+painting-policy posterior
+
+```math
+w_i proportional to exp(log p_stop(pi_i) - gamma G_base(pi_i)).
+```
+
+This is amortized inference over candidate latents, not a reward and not a new
+outcome preference. It is mixed with the hand-written proposal only when
+`learned_proposal_mix > 0`; the default is `0.0`. Immediate stop and
+passage-plan compounds are outside its learned support, and the hand-written
+branch remains present as the same-round control whenever the learned branch is
+enabled.
+
+Both the hand-written and learned mechanisms are computational proposal
+distributions. Their log densities are not included in the policy posterior,
+and no importance correction is applied.
 Consequently, proposal frequency affects the finite-budget result. Comments
 that call low-coverage or passage proposal frequency an "empirical policy
 prior" are not mathematically realized as normalized `p(pi)` terms in the
-current posterior. `AI-111` must either define and include the intended policy
-prior or retain these strictly as proposal mechanisms and measure convergence.
+current posterior. The learned proposal may improve which hypotheses enter the
+finite set, but it does not correct that bias. `AI-111` remains active until the
+dedicated proposal tests and candidate-count, horizon, seed, mixture,
+posterior-mass, and top-action convergence evidence exist and an explicit
+correction or proposal-only interpretation is accepted.
 
 ### 10.3 Passage-local prior
 
@@ -719,7 +919,50 @@ exp(log p_stop(pi) + log_evidence_motor(pi)).
 
 The code subtracts the minimum EFE before softmax where convenient; this does
 not change the normalized posterior. The selected policy is sampled from
-`q(pi)`, not chosen by minimum scalar score.
+`q(pi)`, not chosen by minimum scalar score. `policies.policy_posterior_from_efe`
+is the single implementation of that softmax and is called by both bare-agent
+paths and by `tests/test_epistemic_policy_selection.py`, so a test can no longer
+pass while exercising a formula production does not use.
+
+POLICY PRECISION IS A BELIEF. `gamma` is the posterior mean of a Gamma precision
+belief seeded at `config.policy_precision` (3.0 in the library default, 0.35 in
+the web runtime). Those constants are now prior means, not temperatures. The
+driver updates the belief after each planning round from the realized `(G, F)`
+pair over the non-stop candidate set, using the reference's Chapter 10 rule.
+
+`F_i = -brush_preparation_log_evidence_i`, the negative log marginal evidence of
+realizing candidate `i`'s intended mark amount and pigment under the current
+brush-load posterior, with the preserve/reload preparation policy exactly
+marginalized over its declared prior. Because that marginalization is exact,
+`-log Z` is a variational free energy at its optimal variational posterior. Three
+properties make it admissible:
+
+- it is built from `brush_policy_precision`, NOT `policy_precision`, so the
+  learned gamma never appears on both sides of its own update;
+- it is computed for every non-stop candidate BEFORE the forecast-budget sort, so
+  it is defined on the full candidate set and does not depend on gamma-dependent
+  pruning;
+- it enters only the precision gradient, never any candidate's `G` or logit.
+
+`painting_log_evidence`, which folds `-gamma G` in for stop candidates, is
+deliberately NOT used as `F` for this reason.
+
+Stop candidates are excluded from the update: they realize no mark, so they have
+no realization free energy, and excluding them keeps policy-precision learning
+disentangled from the gap-progress stop prior.
+
+FROZEN FORECAST ORDERING. The forecast-budget sort key stays pinned to the
+declared constant `config.policy_precision`, never the belief mean. That ordering
+is a declared fixed heuristic below the painting-policy boundary; a learned
+precision must not choose which candidates receive an expensive execution
+forecast, or it would select the evidence set from which it is itself estimated.
+
+BARE-AGENT MODE CANNOT LEARN. `agent.infer_policy` and
+`spatial_agent.infer_policy` have no per-candidate policy-dependent `F`
+(`last_vfe` is a state-inference VFE for the single realized observation), so they
+do not call `observe_policy` and gamma stays bit-identically at the declared prior
+mean. Passing `F = 0` there would make the reference report `converged=True` with
+gradient exactly `0.0` -- a degenerate no-op dressed as a fixed point.
 
 ## 11. Learning
 
@@ -728,6 +971,8 @@ Online learning currently consists of:
 - Gaussian NLL training of local/summary transition ensembles;
 - variational-autoencoder-style hierarchy training;
 - Gaussian NLL training of aggregate and passage-step latent transitions;
+- posterior-weighted maximum-likelihood training of the provisional amortized
+  mark/passage proposal toward the existing base-EFE policy posterior;
 - inverse-gamma updates for per-motor-kind execution reliability;
 - diagonal Gaussian/beta-Bernoulli passage belief updates.
 
@@ -749,28 +994,34 @@ research claims.
 | GP-MATERIAL | Generative process | wet material and brush transfer | `arm_sim.VerticalCanvas.paint_at`, `Brush` | Hand-designed process |
 | GP-CAMERA | Generative process | native/global/requested-foveal grayscale products | `camera_observation.CameraObservationProcess` | Simulated, uncalibrated |
 | GM-SUM-TRANS | Transition likelihood | `p_theta(s_t+1|s_t,a_t,m_t)` | `models.DynamicsEnsemble` | Obsolete compatibility fixture |
-| GM-PIX-TRANS | Transition likelihood | local `p_theta(s^P_t+1|s^P_t,a^P_t,m_t)` | `models.LocalSpatialDynamicsEnsemble`, `local_spatial.py` | Learned sparse approximation |
+| GM-PIX-TRANS | Transition likelihood | local `p_theta(s^P_t+1|s^P_t,a^P_t,m_t)` | `models.LocalSpatialDynamicsEnsemble`, `local_spatial.py` | Learned sparse approximation; bootstrap evidence from `motion_manifold` (declared flag) or the retained iid source |
 | GM-SUM-OBS | Observation likelihood | `p(o_t|s_t)` | `models.ObservationModel` | Obsolete oracle compatibility fixture |
 | GM-PIX-OBS | Observation likelihood | `p(o^pixel_t|s^pixel_t)` | `spatial_inference.py` | Oracle material, provisional |
 | GM-CAMERA-OBS | Observation likelihood | `p(o^gray_t,z^inlier_t|s^pixel_t)` | `camera_inference.CameraSpatialLikelihood` | Analytic occlusion mixture, uncalibrated |
 | Q-SUM | Posterior | diagonal `q(s_t)` | `inference.VariationalStateEstimator` | Obsolete compatibility fixture |
 | Q-PIX | Posterior | factorized `q(s^pixel_t)` | `spatial_inference.SpatialVariationalStateEstimator` | Analytic diagonal fusion |
-| Q-CANVAS | Posterior/likelihood | `q(z_canvas)`, decoder likelihood | `canvas_hierarchy.HierarchicalCanvasModel` | Online diagonal latent |
-| Q-REL | Posterior/likelihood | `q(z_relation)`, decoder likelihood | `canvas_hierarchy.py` | Deterministic slots plus latent |
+| Q-CANVAS | Posterior/likelihood | `q(z_canvas)`, decoder likelihood | `canvas_hierarchy.HierarchicalCanvasModel` | Online diagonal latent; bootstrap evidence is whole episode canvases via `spatial_agent.add_composition_canvas` |
+| Q-REL | Posterior/likelihood | `q(z_relation)`, decoder likelihood | `canvas_hierarchy.py` | Deterministic slots plus latent; same whole-canvas bootstrap evidence |
 | Q-PASSAGE | Slow posterior | `q(z_passage)` | `passage_inference.PassageBelief` | Mixed pseudo-likelihood |
 | Q-BRUSH | Material posterior | `q(load_t)q(black_fraction_t)` per dedicated brush | `brush_loading.BrushLoadingModel` | Compact bounded Gaussian moments; image-derived mark statistic not wired |
 | TRANS-BRUSH | Transition likelihood | preserve depletion/uncertainty or pure full reload | `brush_loading.py`, `arm_sim.Brush` | Explicit provisional approximation |
 | PREF-COVERAGE | Prior preference | `p*(C_T|stop)` | `preferences.py`, `efe_common.py` | Explicit terminal Beta |
-| PREF-COMP | Prior preference | energy from compression gap | `canvas_hierarchy.py`, `spatial_efe.py` | Unresolved closed loop |
-| PREF-MOTOR | Prior preference | homeostatic outcome densities | `motor_planning.motor_efe_terms` | Explicit diagonal approximation |
+| PREF-COMP | Prior preference | energy from compression gap | `canvas_hierarchy.py`, `composition.py`, `spatial_efe.py` | Closed loop relocated, not removed: the initial stream is now the agent's own embodiment (flag-gated); best-of-family baseline. Definition unchanged |
+| PROP-BOOT | Proposal only (generative process) | body-feasible bootstrap mark proposals | `motion_manifold.MotionManifoldSampler` | Below the painting-policy boundary; declared flag `bootstrap_generator`; supplies no preference and selects no policy |
+| PREF-MOTOR | Prior preference | homeostatic outcome densities | `motor_planning.motor_efe_terms` | Explicit diagonal approximation; read-only, never learned from outcomes |
 | PRIOR-STOP | Policy prior | `p(stop-first|coverage belief)` | `policies.policy_stop_log_prior` | Explicit |
 | PRIOR-PASSAGE | Transition prior | `p(z_passage_r+1|z_passage_r)` | `PassageBelief.transition_log_prior` | Explicit local prior |
 | PRIOR-MOTOR | Policy prior | uniform `p(m|pi)` | `motor_planning.py` | Explicit |
 | PRIOR-BRUSH | Policy prior | `p(preserve/reload)` | `brush_loading.py` | Explicit |
-| PROP-PAINT | Proposal only | finite `q_proposal(pi)` | `policies.PolicySampler` | Uncorrected finite proposal |
+| PROP-PAINT | Proposal only | finite hand-written/learned `q_proposal(z_pi|belief)` | `policies.PolicySampler`, `proposal.PolicyProposalNetwork`, `policy_ranges.py` | Uncorrected finite proposal; learned emission mix defaults to zero and validation is incomplete |
 | EFE-PIX | Expected free energy | risk/ambiguity hierarchy | `spatial_efe.py` | Approximate, decomposed |
-| EFE-MOTOR | Expected free energy | proprioceptive EFE | `motor_planning.py`, driver | Approximate, decomposed |
+| EFE-MOTOR | Expected free energy | proprioceptive EFE: pragmatic `-` `I(s;o)` `-` `N_reliability` | `motor_planning.py`, `efe.py`, `spatial_efe.py`, driver | Approximate, decomposed; three components separately logged, excess-entropy ambiguity logged but not summed |
 | EFE-BRUSH | Expected free energy | conditional material/pigment risk and ambiguity | `brush_loading.py`, driver | Approximate, decomposed |
+| GAMMA-EFE | Precision belief | `q(gamma_m) = Gamma(alpha, beta)` per EFE modality | `precision_beliefs.GammaPrecisionBelief`, `PrecisionLedger` | Reference Ch.10 rule, byte-parity verified; declared bounded support; measured nearly inert (register 26) |
+| GAMMA-POLICY | Precision belief | `q(gamma_pi)` scaling `G` inside `Q(pi)` | `precision_beliefs.PrecisionLedger`, `policies.policy_posterior_from_efe` | Prior mean is the previous constant exactly; learned only on the driver path |
+| VFE-BRUSH-F | VFE term | `F_i = -log p(mark amount, pigment | pi_i)` marginalized over preparation | `brush_loading.infer_preparation`, driver `_observe_precision_beliefs` | The single policy-dependent free energy driving every precision update |
+| UNIT-MODALITY | Unit declaration | per-observation-channel normalizers | `precision_beliefs.NORMALIZER_NAMES`, `ModalityWeights` | Declared, multiplicative only; recorded per component |
+| PRIOR-GAP | Transition prior + policy prior | Gaussian random walk on per-mark `dGap`; `logsigmoid(-s z)` factor on `p(stop)` | `precision_beliefs.GapIncrementBelief`, `policies.policy_stop_log_prior` | Explicit; structurally barred from `G` |
 | SAFE | External constraint | hard feasibility and stop | plant, controller, future hardware safety | Not active inference |
 
 ## 13. Approximation Register
@@ -783,18 +1034,32 @@ details:
    blocked from live control by body-forecast initialization and continuous
    action-conditioned observation scheduling.
 2. Summary and pixel posteriors are diagonal Gaussian.
-3. Derived channels may be double-counted before deterministic projection.
+3. Derived channels may be double-counted before deterministic projection. The
+   compression gap and both baseline members are computed over all six material
+   channels, so `ground_contrast` and `material_coverage` carry independent
+   likelihood evidence there even though they are deterministic functions of
+   channels 0-3; the local member's advantage concentrates on exactly those
+   high-amplitude derived channels (measured per-channel log-likelihood on band
+   canvases: channels 0-2 pinned near the 2.99 ceiling, channels 3/4/5 at
+   2.02/2.26/1.91).
 4. Transition moments are propagated at posterior means.
 5. Ensemble disagreement is only an approximate parameter posterior.
 6. Local sparse rollouts omit outside-support entropy constants.
 7. Pointwise nondecreasing black mass conflicts with wet-paint transport.
 8. Composition preference is trained on the developmental stream it evaluates.
+   The stream's origin is now the agent's own embodiment rather than an arbitrary
+   iid mark source (`motion_manifold`, behind `config.bootstrap_generator`), which
+   RELOCATES the circularity but does not remove it: the structural prior is still
+   evaluated by a code fitted on the agent's own history.
 9. Candidate proposal frequency is not corrected in policy inference.
 10. Hierarchy likelihoods activate after small online sample counts and are not
     yet calibrated.
 11. Passage observations mix executed action geometry with material evidence.
 12. Motor outcome density is diagonal and forecasted by the same broad process
-    family used for execution.
+    family used for execution. `MotorEFETerms.ambiguity` is likelihood entropy
+    measured against the declared preference scale, not in absolute nats, so it
+    is not the reference implementation's ambiguity term and is logged rather
+    than summed into `G`.
 13. Motor refinement covers only a finite subset of base painting candidates.
 14. Neural parameter learning is SGD, not exact variational parameter
     inference.
@@ -807,20 +1072,269 @@ details:
     provisional XML-declared precisions, not a learned occlusion model.
 17. Brush preparation is analytically marginalized, but only its modal policy
     is sent through the expensive motor/material rollout.
+19. Motor risk is declared to be the PRAGMATIC term `E_q[-log p*(o)]` rather
+    than a KL. This is a deliberate choice, not an oversight: the omitted
+    `-H[q(o)]` term is logged separately as
+    `MotorEFETerms.forecast_outcome_entropy`, so the canonical KL form is
+    derivable from telemetry, and `G_motor = pragmatic - I(s;o) - N_reliability`
+    is exactly equivalent to `KL risk + ambiguity - novelty`. The field keeps the
+    name `risk` because it is part of the driver's `asdict` telemetry wire
+    format; a rename would be a separate coordinated change across the
+    dataclasses, driver payload, viewer, and tests.
+20. `brush_loading.py` computes its material EFE with the same non-canonical
+    *shape* (risk as the pragmatic term, ambiguity as `0.5 * sum(log1p(var /
+    preference_var))`) but subtracts no mutual information, so it carries NO
+    double count and is deliberately unchanged. Do not "harmonize" it by
+    symmetry with the motor fix: doing so would introduce a defect where none
+    exists.
+21. The reference-oracle harness (`tests/test_reference_oracle.py`) discretizes
+    continuous Beta densities onto uniform coverage bins by the midpoint rule in
+    order to compare against the discrete-only reference. The reference floors
+    both logs at `1e-16`, so the discretized KL diverges from the continuous KL
+    where the forecast puts mass on numerically-zero preference density, and the
+    error GROWS with bin count. The oracle is therefore only valid for coverage
+    means in `[0.70, 0.90]` (measured: 5.8e-5 at mean 0.87, but 7.7e-2 at 0.60
+    and 4.8e+1 at 0.30). Terminal risk in the low-coverage cold-start regime is
+    NOT certified by that test.
+22. The summary VFE `total` reported by `inference.VariationalStateEstimator`
+    carries irreducible 32-sample Monte Carlo error that does not shrink with
+    more optimizer steps (measured per-seed deviation from fine-grid
+    integration: -0.071 to +0.078 nats on a quantity of magnitude ~0.1). Its
+    `complexity` term is closed form and verified to 1e-16; the total is only
+    verified inside a declared +-0.35 nat band.
+23. The compression-gap baseline is an unnormalized best-of-family maximum over
+    a two-member hand-written code family, not a normalized Bayesian model
+    average. It omits the `log(family size)` model-index cost (`log 2 /
+    (channels*grid*grid)` = 0.00045 nats per cell-channel at 6x16x16) and is
+    non-differentiable at member ties, which is safe only because the gap is
+    evaluated exclusively under `torch.no_grad`. Blank canvases sit exactly on a
+    tie (both members measured at 2.993084 nats per cell-channel). A normalized
+    `logsumexp(log p_iid, log p_local) - log 2` with a declared uniform model
+    prior is the strictly more principled formulation and differs by at most
+    that same 0.00045 nats.
+24. GAMMA-POLICY / GAMMA-TERMINAL / GAMMA-AMBIG / GAMMA-TRANS / GAMMA-COMP /
+    GAMMA-CANVAS / GAMMA-REL / GAMMA-MOTOR. The eight precisions
+    (`policy_precision`, `terminal_risk_precision`, `ambiguity_precision`,
+    `transition_precision`, `composition_gap_precision`,
+    `canvas_latent_transition_precision`, `relational_transition_precision`, and
+    the new identity-valued `motor_modality_precision`) are the posterior means of
+    Gamma(alpha, beta) beliefs updated by the reference Chapter 10 rule
+    `dF/dgamma = (alpha/gamma - beta0) + (pi - pi0).(-G)`, `beta <- max(beta -
+    kappa dF/dgamma, eps)`. `precision_beliefs.precision_gradient` and
+    `learn_precision` are verified byte-parity against
+    `active_inference.core.pomdp` at `alpha = 1` in
+    `tests/test_precision_beliefs.py`. Each belief's rate is seeded at
+    `beta0 = alpha0 / (declared constant)`, and an unobserved belief returns that
+    constant BIT-IDENTICALLY, so `precision_beliefs_enabled=False` and "belief with
+    no observations" are the same arithmetic and attribution is exact rather than
+    approximate. Three orthogonal declared flags keep the hand-written mechanism
+    available: `precision_beliefs_enabled`,
+    `modality_precision_beliefs_enabled`, `modality_normalization_enabled`.
+    Approximations inside the rule: the Gamma SHAPE `alpha` is declared and never
+    updated (so `resolvable_uncertainty()` is a constant and is forbidden from
+    every EFE path by contract and by test); the rate is WARM-STARTED at the
+    current posterior rate rather than re-initialized at the prior rate each
+    round, so evidence accumulates across planning rounds; and the posterior mean
+    is clamped to a DECLARED BOUNDED SUPPORT of `[0.1x, 10x]` the prior mean.
+25. BOUNDED SUPPORT IS A CHARTER REQUIREMENT, NOT A CONVENIENCE. Measured on a
+    24-candidate contribution vector with std 6.9 nats, disagreeing evidence
+    (`F = -0.5 G`) drives the unbounded precision to 0.0679 -- a 15x attenuation.
+    Applied to `terminal_coverage` that is a 15x attenuation of the declared C
+    matrix inside `G`, i.e. outcome data switching a declared preference most of
+    the way off. Unbounded it also breaks the JSON contract the viewer depends on
+    (`1/eps` is ~1e300, `1/0.0` is inf). The clamp is what stops a precision belief
+    becoming a backdoor around "preferences are never learned from outcomes".
+26. MEASURED NEGATIVE RESULT: PRECISION ORDERING DOES NOT TRACK
+    DISCRIMINATIVENESS. The stated hope was that a composition modality whose
+    contributions become discriminative across candidates would gain precision
+    while the arrangement-blind terminal-coverage modality lost it, out of the same
+    rule. It does not happen, and no `beta0` was tuned to manufacture it. Measured
+    over six real planning rounds (spatial driver, 16 candidates, `F` = the
+    brush-preparation VFE): `terminal_coverage` gamma 1.0003 with by far the
+    LARGEST contribution spread (std 196.3); `composition_gap` gamma 0.9859 with
+    nearly the smallest spread (0.190); `transition` gamma 0.8805 (spread 0.331);
+    `observation_ambiguity` gamma 1.0106 (spread 0.0314); `motor_proprioceptive`
+    gamma 0.9973 (spread 0.0301); `policy` gamma 0.3513 against a 0.35 prior.
+    Cause, measured directly: the rule responds to F/G AGREEMENT only inside a
+    narrow intermediate band of the modality's OWN ABSOLUTE SCALE, and saturates to
+    exactly the prior mean outside it. Sweeping one fixed 24-element shape across
+    scale with fixed agreeing `F = 0.5 G`, gamma is 1.0006, 1.0112, 1.0814, 1.4602,
+    1.4823, 1.0880, 1.00000, 1.00000 at contribution std 0.034, 0.144, 0.357,
+    0.721, 1.44, 3.56, 14.4, 144. The response is NON-MONOTONE in scale, peaking
+    near std ~1. A flat or extremely large modality's precision is PINNED at its
+    prior mean, never driven down. Consequence: this item and the unit
+    normalization of §9.5 are in tension -- moving terminal coverage into the
+    responsive band would give it a HIGHER gamma than composition and reverse the
+    hoped-for ordering. A mechanism that genuinely rewarded discriminativeness
+    would be a different inference problem (e.g. a belief over each modality's
+    LIKELIHOOD precision fitted to observed per-modality prediction error), not
+    Chapter 10's policy-precision rule, and should be scoped as its own feature.
+    The honest deliverable here is the mechanism plus this measurement.
+27. THE RULE IS PROVABLY INERT ON A FLAT `F`. `precision_gradient(G, 0, 1.0,
+    beta0=1.0)` is exactly `0.0`, and `learn_precision(G, 0, beta0=b0)` returns
+    `gamma = 1/b0` with `converged=True` -- a degenerate no-op that LOOKS like a
+    learned fixed point. `PrecisionLedger` therefore reports such rounds with
+    status `degenerate_flat_F`, never `updated`, and the bare-agent
+    `infer_policy` paths (which have no per-candidate `F`) do not call
+    `observe_policy` at all rather than passing `F = 0`.
+28. F = -BRUSH-PREPARATION LOG EVIDENCE. The policy-dependent free energy driving
+    every precision update is
+    `F_i = -brush_inference[i].log_evidence`. It is an exact marginalization over
+    the two-element preserve/reload preparation prior, hence a VFE at its optimal
+    variational posterior. It is built from `brush_policy_precision`, not
+    `policy_precision`, and is computed for every non-stop candidate BEFORE the
+    forecast-budget sort, so no learned gamma appears on both sides of its own
+    update and no gamma-dependent pruning selects the evidence set.
+    `painting_log_evidence` was rejected as `F` for exactly that reason. This `F`
+    is largely a function of a candidate's amount and tone, so it is only weakly
+    correlated with the canvas-level modality rankings -- which is the second
+    reason the measured drift in item 26 is small.
+29. FROZEN FORECAST-ORDERING KEY. `_infer_policy_with_execution_forecasts` and
+    `_infer_spatial_policy_with_execution_forecasts` sort candidates for the motor
+    forecast budget by `config.policy_precision * G - brush_log_evidence`, reading
+    the DECLARED CONSTANT and never the belief mean. The ordering is a declared
+    fixed heuristic below the painting-policy boundary; a learned precision
+    selecting which candidates get evaluated would be a precision belief reaching
+    above that boundary.
+30. GAP-PROGRESS. The per-mark compression-gap increment is a Gaussian
+    random-walk belief updated by a scalar Kalman step, consumed ONLY by the stop
+    policy prior (§10.1). Named approximation: the increment is AMORTIZED over the
+    exact number of marks elapsed between planning-cadence gap readings, because
+    `belief_composition_gap` runs a model forward and reading it at mark completion
+    would put that forward on the polling thread. This is a deliberate deviation
+    from a literal per-mark observation: the sampling is coarse but the denominator
+    is exact. A second reading at the same mark index is composition-model TRAINING
+    drift, not a per-mark increment; it advances the anchor but is not counted, so
+    learning progress is never attributed to mark-making.
+31. COV-BETA-FLOOR. `coverage_beta_approximation` restricts the moment-matched
+    terminal forecast `q(C_T | pi)` to the INTERIOR-UNIMODAL Beta family
+    (`terminal_forecast_concentration_floor = 1.0`, both concentrations >= the
+    floor, rescaled by a COMMON factor so the forecast mean is preserved exactly
+    and the term stays an exact Beta-Beta KL). It is a declared forecast-family
+    restriction, not a clamp on risk, and it is measurably inert on every
+    well-conditioned forecast: (mean 0.05, var 1e-4) 246.6508 -> 246.6508;
+    (0.05, 1e-8) 250.5407 -> 250.5407; (0.5, 1e-6) 37.2720 -> 37.2720;
+    (0.87, 1e-8) 4.4849 -> 4.4849; (0.87, 1e-4) 0.7181 -> 0.7181. It bites only
+    where `alpha < 1` or `beta < 1`, i.e. where the moment match implied a boundary
+    spike the Beta family cannot honestly represent: at (mean 1e-4, std 2.29e-3)
+    the `digamma(alpha -> 0)` singularity gives 53248.18 nats and the floored
+    forecast gives 892.24. It therefore CHANGES BEHAVIOUR exactly in the
+    low-coverage cold-start regime, so which policy wins at low coverage can
+    change; `terminal_forecast_concentration_floor = 0.0` restores the previous
+    family exactly and the difference must be A/B measured before being treated as
+    settled. Note also that with the floor active on a fully blank canvas every
+    candidate's forecast saturates at `alpha = 1`, so terminal risk becomes
+    scale-invariant there (measured identical at belief logvar -4, -6, -8, -10).
+32. Learned precision and gap-increment state are persisted in the driver
+    checkpoint PAYLOAD (`precision_ledger`, `gap_increment_belief`) and NOT in
+    `_checkpoint_architecture_metadata`, which is compared with strict inequality
+    -- a learned quantity there would discard every trained model and replay buffer
+    on disk the moment it moved. A pre-Feature-C checkpoint loads with status
+    `loaded` and fresh beliefs. `composition_enabled` was split out of
+    `composition_gap_precision` for the same reason: the architecture key must stay
+    a declared constant, and a learned precision must never construct or destroy a
+    model. The split evaluates identically for every pre-existing config, so no
+    checkpoint on disk is invalidated. `PrecisionLedger.__post_init__` creates all
+    eight keys EAGERLY because updates run on the planner thread while
+    `summary()` runs on the HTTP thread.
+33. MANIFOLD SWEEP INTEGRATION IS FIRST-ORDER, AND THE LATENT FIT IS LOSSY.
+    `motion_manifold.MotionManifoldSampler._integrate` holds the brush tip on the
+    canvas plane by numerically projecting a fixed joint-velocity direction onto
+    the null space of the tip-depth gradient. It is a first-order projection
+    re-evaluated per integration step, not an exact constrained integration, and
+    the resulting arc is then re-expressed as a constant-turn equal-segment
+    polyline `PassageLatent`, which is a lossy fit of the true FK path
+    (`policies._polyline_relative_vertices` clips total length to `[0.04, 0.86]`
+    and turn to `+-1.2` rad). The emitted marks are therefore the LATENT's arc,
+    not the body's exact arc. That is the correct trade -- it keeps the latent
+    self-consistent for `infer_passage_observation` and `PassageBelief`, which a
+    best-fit latent glued onto raw FK segments would not -- but it does attenuate
+    the very curvature the generator exists to inject.
+34. SWEEP SPEED DOES NOT REACH THE CANVAS. Emitted marks are re-decoded from the
+    latent and re-timed by `stroke_execution.adaptive_stroke_timing` inside
+    `execute_stroke_action`, so a sweep's velocity profile is discarded.
+    `bootstrap_manifold_step_degrees` is therefore an exploration/discretization
+    range, not a realized mark speed: it changes which sweeps survive the contact
+    band, hence the emitted length distribution, and nothing else. Folding speed
+    into `amount` would be illegal -- `amount` is a deposition quantity feeding the
+    brush material preference, not a kinematic one -- so the limitation is named
+    rather than faked.
+35. BOOTSTRAP COMPRESSION-GAP PROBES ARE MEASURED OFF-SCALE AND ON A PARTIAL
+    CHANNEL BUDGET. `diagnostics()["compositionBootstrap"]` measures the gap on
+    16x16x6 fields taken from a `canvas_size=64` bootstrap simulator while the
+    live simulator paints at 256, so mark-to-cell scale differs between the
+    bootstrapped structure and live marks. The gap is also earnable only on
+    channels 3-5 (`SIGMA_FLOOR = 0.02` saturates the flat baseline member on
+    thickness-like channels living at ~0.002-0.008), and channels 4-5 are
+    deterministic functions of 0-3 (register item 3), so the achievable margin is
+    capped regardless of how structured the sweeps are. The block is EVIDENCE
+    ONLY: no EFE term, VFE term, preference, precision belief, policy prior, or
+    policy posterior reads it, and it carries `declaredAs` saying so.
+    `bootstrap_composition_train_steps` is a GRADIENT BUDGET, not an objective
+    term: it appears in no objective, and at fixed parameters it cannot change
+    which policy wins. Two measured properties of the probe set: (a) the declared
+    acceptance margin is bounded by the TIGHTER of two null models,
+    `max(gap(blank), gap(cell-shuffled))`, and measured at 2700 gradient steps
+    the binding one is BLANK (-0.05) rather than the marginal-preserving shuffle
+    (-74), because a well-trained code scores the shuffle as strongly
+    out-of-distribution -- a shuffle-only criterion would report a margin earned
+    by overconfidence; (b) the raw probe range is reported but is NOT a criterion
+    for the same reason (measured 296 vs 147 across the two bootstrap generators,
+    driven almost entirely by how confidently negative each model is about the
+    iid-scatter probe). Cost, measured: 330-450 ms per composition gradient step
+    at `batch_size = 32`, dominated by `relational_observations`' per-sample numpy
+    round-trip, which is why the budget defaults to 0.
+36. AMORTIZED POLICY PROPOSAL. `PolicyProposalNetwork` is a factorized
+    recognition density over mark and passage latents conditioned on flattened
+    canvas and relational posterior means. Its training target is the
+    normalized base-EFE posterior over the finite candidates already generated,
+    so it inherits any misspecification and truncation in that posterior. It has
+    no density for immediate stop or compound passage plans, and continuous
+    factors are conditionally independent given the shared features. The
+    hand-written and learned branches share deterministic decoders, but that
+    cancellation does not remove finite-candidate bias or the self-training loop
+    created when future training support is partly supplied by the learned
+    proposal itself. `learned_proposal_mix=0.0` keeps emitted candidates on the
+    hand-written baseline by default. The current implementation is an
+    in-progress approximation: source comments reference
+    `tests/test_proposal.py`, which is absent, and no convergence claim is
+    accepted under `AI-111`.
 
 ## 14. Required Next Decisions
 
-This specification unblocks, but does not answer:
+This specification records the following current decision state:
 
-- `AI-102`: which current values cross the future physical sensor boundary;
-- `AI-103`: which channels are observations versus deterministic transforms,
-  and what their units are;
-- `AI-104`: whether VFE matches analytic references;
+- `AI-102`: ANSWERED by `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md` and its
+  machine-readable inventory. Replacing the privileged paths remains M2 work;
+- `AI-103`: ANSWERED by `docs/OBSERVATION_FACTOR_AUDIT.md` and the focused
+  factorization/unit tests;
+- `AI-104`: whether VFE matches analytic references — PARTIALLY ANSWERED by
+  `tests/test_reference_oracle.py`. The spatial estimator's complexity, NLL, and
+  total all match independent fine-grid integration to 1e-6 (measured 4.6e-9).
+  The summary estimator's `complexity` matches the analytic Gaussian KL to 1e-4
+  (measured 1e-16) and its variational posterior reaches the conjugate solution
+  to within the declared 24-step optimizer budget, but its Monte Carlo `total` is
+  only verified inside a declared +-0.35 nat band (register item 22). Closing
+  that residue needs an analytic-NLL path or a raised sample count, both source
+  changes outside the harness;
 - `AI-105`: whether EFE signs, identities, and policy posteriors match
-  independent references;
+  independent references — IMPLEMENTED AND AWAITING ACCEPTANCE through
+  `tests/test_reference_oracle.py`.
+  Terminal coverage risk equals the reference full-KL risk to 1e-3 for coverage
+  means in `[0.70, 0.90]` (measured worst case 5.8e-5; see register item 21 for
+  the band's limits). The transition decomposition satisfies
+  `R_transition + A_transition = -I_theta` exactly, and the project's
+  `epistemic_value` is confirmed NOT to be subtracted a second time — unlike the
+  reference's Dirichlet parameter novelty, which is a different quantity and is.
+  The policy posterior equals `policy_posterior_full` to 1e-6 (measured 2.2e-8)
+  for both painters. The harness also found and forced the fix of a real defect:
+  the motor modality double-counted ambiguity at all six EFE total sites;
+
 - `AI-107`: whether predictive variances are calibrated;
 - `AI-110`: whether the composition preference can be retained;
-- `AI-111`: whether proposal distributions require explicit correction;
+- `AI-111`: PARTIALLY IMPLEMENTED. Hand-written and learned proposals are now
+  explicitly separate from policy priors, but dedicated tests, convergence
+  evidence, and the correction-versus-proposal-only decision remain open;
 - `AI-112`: what learned and episodic state may persist between runs.
 
 No claim of principled sensor-based active inference should pass the M1 gate

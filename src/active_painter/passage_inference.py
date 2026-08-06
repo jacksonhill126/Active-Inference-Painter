@@ -8,6 +8,7 @@ from .config import PainterConfig
 from .env import StrokeAction
 from .local_spatial import pixel_material_from_state
 from .policies import PassageLatent, fit_polyline_latent, polyline_vertices
+from .policy_ranges import latent_ranges_for_kind
 from .spatial_state import SpatialCanvasState
 
 
@@ -241,16 +242,22 @@ def _vector_to_latent(values: np.ndarray, template: PassageLatent, tone: float) 
 
 
 def _clip_latent_values(values: np.ndarray, kind: str) -> np.ndarray:
+    """Project a passage-posterior mean back into the latent's declared range.
+
+    The bounds are read from `policy_ranges`, which is the single source of truth
+    shared with `policies` and with the learned proposal. `direction` is taken
+    modulo 2*pi rather than clipped, because it is a circular coordinate.
+    """
+
+    bounds = latent_ranges_for_kind(kind)
     clipped = np.asarray(values, dtype=np.float64).copy()
-    clipped[0:2] = np.clip(clipped[0:2], 0.03, 0.97)
-    clipped[2] %= 2.0 * np.pi
-    clipped[3] = np.clip(clipped[3], 0.04, 0.86 if kind == "polyline" else 1.0)
-    clipped[4] = (
-        np.clip(clipped[4], -1.2, 1.2)
-        if kind == "polyline"
-        else np.clip(clipped[4], 0.01, 1.0)
-    )
-    clipped[5:] = np.clip(clipped[5:], 0.01, 1.0)
+    clipped[0] = np.clip(clipped[0], *bounds["center_x"])
+    clipped[1] = np.clip(clipped[1], *bounds["center_y"])
+    clipped[2] %= bounds["direction"].high
+    clipped[3] = np.clip(clipped[3], *bounds["length"])
+    clipped[4] = np.clip(clipped[4], *bounds["spacing"])
+    clipped[5] = np.clip(clipped[5], *bounds["width"])
+    clipped[6] = np.clip(clipped[6], *bounds["amount"])
     return clipped
 
 

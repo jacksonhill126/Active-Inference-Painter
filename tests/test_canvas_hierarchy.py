@@ -14,6 +14,7 @@ from active_painter.canvas_hierarchy import (
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.policies import PassageLatent, Policy, PolicySampler
+from active_painter.precision_beliefs import MODALITY_NAMES, PrecisionLedger
 from active_painter.preferences import TerminalCoveragePreference
 from active_painter.spatial_agent import SpatialActiveInferencePainter
 from active_painter.spatial_efe import SpatialExpectedFreeEnergy
@@ -221,14 +222,81 @@ def test_canvas_and_relational_transition_risks_enter_efe_separately() -> None:
         + components.composition_risk
         + components.canvas_transition_risk
         + components.relational_transition_risk
+        # The motor modality contributes pragmatic - information gain only;
+        # motor_ambiguity is logged but is not a summand.
         + components.motor_risk
-        + components.motor_ambiguity
         - components.motor_epistemic_value
     )
 
     assert components.canvas_transition_risk >= 0.0
     assert components.relational_transition_risk >= 0.0
     assert components.total == pytest.approx(expected)
+
+
+def test_hierarchy_risks_stay_separable_under_non_unit_precision_beliefs() -> None:
+    """CANARY for the unit-normalization work: the exact ten-summand identity
+    must still hold when every modality carries a moved Gamma-belief mean, and a
+    structurally-absent hierarchy term must stay exactly 0.0 rather than becoming
+    a NaN from a zero-denominator normalizer.
+    """
+
+    config = _config()
+    model = HierarchicalCanvasModel(config)
+    material = _field(config, slice(1, 4), slice(1, 4))
+    belief = SpatialCanvasState(material, np.full_like(material, -8.0))
+    model.reset_persistent_beliefs(torch.tensor(material).unsqueeze(0))
+    model.mark_transition_update()
+
+    ledger = PrecisionLedger(config)
+    rng = np.random.default_rng(3)
+    base = rng.normal(0.0, 1.0, size=16)
+    G = (base - base.mean()) * 1.7
+    for name in MODALITY_NAMES:
+        ledger.observe(name, G, 0.5 * G)
+    moved = {name: ledger.mean(name) for name in MODALITY_NAMES}
+    assert any(
+        moved[name] != ledger.prior_mean(name) for name in MODALITY_NAMES
+    ), moved
+
+    efe = SpatialExpectedFreeEnergy(
+        config,
+        _IdentitySpatialDynamics(),
+        TerminalCoveragePreference(config),
+        composition=model,
+        precision_ledger=ledger,
+    )
+    policy = Policy(
+        (
+            StrokeAction(0.2, 0.2, 0.7, 0.6, 0.1, 0.5, 1.0),
+            StrokeAction.stop_action(),
+        )
+    )
+    components = efe.evaluate(belief, policy)
+    expected = (
+        components.terminal_risk
+        + components.ambiguity
+        + components.transition_risk
+        + components.transition_ambiguity
+        + components.composition_risk
+        + components.canvas_transition_risk
+        + components.relational_transition_risk
+        + components.passage_canvas_trajectory_risk
+        + components.passage_relational_trajectory_risk
+        + components.motor_risk
+        - components.motor_epistemic_value
+    )
+    assert components.total == pytest.approx(expected)
+    assert np.isfinite(components.total)
+    # No passage trajectory is trained here, so both passage terms are
+    # structurally absent -- exactly 0.0, never NaN.
+    assert components.passage_canvas_trajectory_risk == 0.0
+    assert components.passage_relational_trajectory_risk == 0.0
+    assert components.canvas_latent_transition_precision == pytest.approx(
+        moved["canvas_latent_transition"]
+    )
+    assert components.relational_transition_precision == pytest.approx(
+        moved["relational_transition"]
+    )
 
 
 def test_high_level_posteriors_update_only_at_explicit_passage_boundary() -> None:

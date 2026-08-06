@@ -604,6 +604,8 @@ async function pollState() {
   const beliefStd = belief.std || [];
   const spatialBelief = state.agent?.spatialBelief || {};
   const composition = state.agent?.composition || {};
+  const compositionBootstrap = state.agent?.compositionBootstrap || {};
+  const bootstrapGap = compositionBootstrap.gap || {};
   const hierarchy = composition.hierarchy || {};
   const canvasLatent = hierarchy.canvas || {};
   const relationalLatent = hierarchy.relational || {};
@@ -611,6 +613,15 @@ async function pollState() {
   const passageKindUpdates = passageTrajectory.kindUpdateCounts || {};
   const topPassageTrajectory = composition.topPolicyPassageTrajectory || {};
   const passageEvaluation = composition.passageTrajectoryEvaluation || {};
+  const precisionBeliefs = state.agent?.precisionBeliefs || {};
+  const gapProgress = state.agent?.gapProgress || {};
+  const gammaRow = (label, key) => {
+    const belief = precisionBeliefs[key] || {};
+    return row(
+      label,
+      `${num(belief.gamma)} (prior ${num(belief.priorGamma)}, n=${belief.observations ?? 0}, ${belief.status ?? "-"})`,
+    );
+  };
   const materialPyramid = spatialBelief.materialPyramid || [];
   const pyramidText = materialPyramid.length
     ? materialPyramid.map((level) => `${level.name}:${level.gridSize}`).join(" -> ")
@@ -631,7 +642,7 @@ async function pollState() {
     `coverage mean <b>${state.canvas.coverage.toFixed(4)}</b> / pressure summary <b>${state.contact.pressure.toFixed(3)}</b>`,
     `agent <b>${state.agentEnabled ? agentPhaseLabel(state.agent) : "scripted fallback"}</b> / robot view <b>${robotModeLabel(state.robot.mode)}</b> / sim <b>${state.simTime.toFixed(1)}s</b>`,
     `VFE F <b>${num(vfe.total)}</b> = complexity <b>${num(vfe.complexity)}</b> + negative log likelihood <b>${num(vfe.negative_log_likelihood)}</b>`,
-    `EFE G <b>${num(efe.total)}</b> = terminal risk <b>${num(efe.terminal_risk)}</b> + ambiguity <b>${num(efe.ambiguity)}</b> + transition risk <b>${num(efe.transition_risk)}</b> + transition ambiguity <b>${num(efe.transition_ambiguity)}</b> + canvas latent risk <b>${num(efe.canvas_transition_risk)}</b> + relational risk <b>${num(efe.relational_transition_risk)}</b> + motor risk <b>${num(efe.motor_risk)}</b> + motor ambiguity <b>${num(efe.motor_ambiguity)}</b>`,
+    `EFE G <b>${num(efe.total)}</b> = terminal risk <b>${num(efe.terminal_risk)}</b> + ambiguity <b>${num(efe.ambiguity)}</b> + transition risk <b>${num(efe.transition_risk)}</b> + transition ambiguity <b>${num(efe.transition_ambiguity)}</b> + composition risk <b>${num(efe.composition_risk)}</b> + canvas latent risk <b>${num(efe.canvas_transition_risk)}</b> + relational risk <b>${num(efe.relational_transition_risk)}</b> + passage canvas risk <b>${num(efe.passage_canvas_trajectory_risk)}</b> + passage relational risk <b>${num(efe.passage_relational_trajectory_risk)}</b> + motor pragmatic <b>${num(efe.motor_risk)}</b> - motor information gain <b>${num(efe.motor_epistemic_value)}</b>`,
   ].join("<br>");
 
   specs.innerHTML = [
@@ -697,7 +708,21 @@ async function pollState() {
     row("Joint torque rms", num(executionForecast.joint_torque_rms)),
     row("Joint path deg", num(executionForecast.joint_path_length_deg)),
     row("Top q(policy)", pct(state.agent?.posterior)),
-    row("Policy precision", num(state.agent?.policyPrecision)),
+    row("Policy precision (belief mean)", num(state.agent?.policyPrecision)),
+    row("Policy precision prior mean", num(state.agent?.policyPrecisionPrior)),
+    gammaRow("gamma policy", "policy"),
+    gammaRow("gamma terminal coverage", "terminal_coverage"),
+    gammaRow("gamma observation ambiguity", "observation_ambiguity"),
+    gammaRow("gamma transition", "transition"),
+    gammaRow("gamma composition gap", "composition_gap"),
+    gammaRow("gamma canvas latent transition", "canvas_latent_transition"),
+    gammaRow("gamma relational transition", "relational_transition"),
+    gammaRow("gamma motor proprioceptive", "motor_proprioceptive"),
+    row(
+      "Delta-gap belief per mark",
+      `${num(gapProgress.posteriorMean)} +/- ${num(gapProgress.posteriorStd)} (n=${gapProgress.observations ?? 0})`,
+    ),
+    row("Delta-gap standardized", num(gapProgress.standardizedProgress)),
     row("Policy posterior entropy", num(state.agent?.posteriorEntropy)),
     row("Passage candidates", String(state.agent?.passageCandidateCount ?? 0)),
     row("Passage posterior mass", pct(state.agent?.passagePosteriorMass)),
@@ -708,6 +733,19 @@ async function pollState() {
     row("Relational latent", `${relationalLatent.dimensions ?? "-"} dims / ${relationalLatent.updateCount ?? 0} updates`),
     row("Relational posterior std", num(relationalLatent.posteriorStdMean)),
     row("Relational observation", `${hierarchy.relationalObservationDimensions ?? "-"} dims / ${hierarchy.markSlots ?? "-"} slots`),
+    row(
+      "Bootstrap generator",
+      compositionBootstrap.executedGenerator
+        ? `${compositionBootstrap.executedGenerator} (${compositionBootstrap.episodes ?? 0} episodes @ ${compositionBootstrap.canvasSize ?? "-"} px)`
+        : `${compositionBootstrap.configuredGenerator || "-"} (not executed)`,
+    ),
+    // The train-step budget is shown next to the margin on purpose: below a few
+    // hundred steps the gap does not discriminate structure at all, so an
+    // undertrained probe must be visible rather than read as a null result.
+    row(
+      "Bootstrap gap margin",
+      `${num(compositionBootstrap.discriminativeMargin)} nats vs shuffled/blank (${compositionBootstrap.compositionTrainSteps ?? 0} steps, boot ${num(bootstrapGap.bootstrapped)})`,
+    ),
     row("Passage transition replay", String(composition.passageReplaySize ?? 0)),
     row("Hierarchy transition loss", num(composition.lastTransitionTrainingLoss)),
     row("Passage-step replay", String(composition.passageStepReplaySize ?? 0)),
@@ -749,7 +787,9 @@ async function pollState() {
     row("Passage relational trajectory risk", num(efe.passage_relational_trajectory_risk)),
     row("Passage likelihood observations", num(efe.passage_trajectory_observation_count)),
     row("Motor risk", num(efe.motor_risk)),
-    row("Motor ambiguity", num(efe.motor_ambiguity)),
+    row("Motor ambiguity (logged, not in G)", num(efe.motor_ambiguity)),
+    row("Motor mutual information", num(efe.motor_mutual_information)),
+    row("Motor reliability novelty", num(efe.motor_reliability_novelty)),
     row("Motor EFE approx", efe.motor_efe_approximation || "-"),
     row("Epistemic value", num(efe.epistemic_value)),
     row("Pragmatic value", num(efe.pragmatic_value)),

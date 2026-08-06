@@ -10,6 +10,7 @@ from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
 from active_painter.models import GaussianBelief
 from active_painter.policies import Policy, policy_stop_log_prior
+from active_painter.precision_beliefs import GapIncrementBelief
 
 
 def make_agent_with_stop_favoring_efe(believed_coverage: float) -> ActiveInferencePainter:
@@ -77,3 +78,63 @@ def test_policy_stop_log_prior_is_monotone_and_flat_for_continuations() -> None:
     assert low < -20.0
     assert high > -0.01
     assert mid == pytest.approx(float(np.log(0.5)))
+
+
+def _observed_gap_belief(cfg: PainterConfig, increment: float) -> GapIncrementBelief:
+    belief = GapIncrementBelief.from_config(cfg)
+    belief.observe(0.0, 0)
+    belief.observe(increment, 1)
+    assert belief.has_observations()
+    return belief
+
+
+def test_gap_progress_is_a_separable_second_prior_factor() -> None:
+    """The stop prior is a PRODUCT of two priors, hence a sum of two logs.
+
+    The original intent -- the coverage factor alone equals log(0.5) at the
+    midpoint -- is preserved by DECOMPOSITION rather than deleted: the total
+    minus the progress factor must still be exactly log(0.5).
+    """
+
+    cfg = PainterConfig()
+    stop = Policy((StrokeAction.stop_action(),))
+    belief = _observed_gap_belief(cfg, 0.30)
+    progress = belief.stop_log_prior_term(cfg)
+
+    total = policy_stop_log_prior(stop, cfg.minimum_stop_coverage, cfg, belief)
+    assert progress < 0.0
+    assert total - progress == pytest.approx(float(np.log(0.5)))
+    assert total <= 0.0
+
+
+def test_gap_progress_factor_rises_as_believed_progress_falls() -> None:
+    cfg = PainterConfig()
+    stop = Policy((StrokeAction.stop_action(),))
+    values = [
+        policy_stop_log_prior(stop, 0.5, cfg, _observed_gap_belief(cfg, increment))
+        for increment in (0.4, 0.2, 0.05, 0.0, -0.2)
+    ]
+    assert all(value <= 0.0 for value in values)
+    assert values == sorted(values), values
+
+
+def test_continuations_stay_exactly_flat_with_a_fully_observed_gap_belief() -> None:
+    cfg = PainterConfig()
+    continuation = Policy(
+        (StrokeAction(0.1, 0.1, 0.9, 0.9, 0.08, 0.5, 1.0), StrokeAction.stop_action())
+    )
+    belief = _observed_gap_belief(cfg, 0.4)
+    assert policy_stop_log_prior(continuation, 0.05, cfg, belief) == 0.0
+    assert policy_stop_log_prior(continuation, 0.95, cfg, belief) == 0.0
+
+
+def test_stop_stays_admissible_at_every_coverage_with_the_progress_factor() -> None:
+    # The progress factor is bounded above by 0 and below by a finite value, so
+    # it can never veto stopping -- only make it a priori less likely.
+    cfg = PainterConfig()
+    stop = Policy((StrokeAction.stop_action(),))
+    belief = _observed_gap_belief(cfg, 5.0)
+    for coverage in (0.0, 0.05, 0.5, cfg.minimum_stop_coverage, 0.9, 1.0):
+        value = policy_stop_log_prior(stop, coverage, cfg, belief)
+        assert np.isfinite(value)
+        assert value <= 0.0

@@ -170,21 +170,23 @@ Notes: Accepted 2026-07-24 in `docs/OBSERVATION_FACTOR_AUDIT.md`; contrast and c
 
 ### AI-104 Verify VFE against tractable reference models
 
-Status: `Ready`
+Status: `Active`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-103  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Analytic linear-Gaussian fixtures independently verify posterior moments and VFE decomposition across precision regimes.
+Notes: `tests/test_reference_oracle.py` now verifies summary Gaussian complexity and posterior convergence plus spatial VFE against independent fine-grid integration. Spatial terms meet the declared tolerance; summary total VFE remains Monte Carlo and is only bounded within `+-0.35` nat. Acceptance awaits a decision on whether to retain that approximation or add an analytic-NLL/higher-sample path.
 
 ### AI-105 Verify EFE against enumerated or Monte Carlo references
 
-Status: `Blocked`  
+Status: `Active`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-104  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Independent fixtures verify risk, ambiguity, information gain, policy priors, signs, and posterior normalization.
+Notes: A bounded validation implementation proceeded while AI-104 remains open. `tests/test_reference_oracle.py` verifies terminal risk, transition information-gain identities, policy posterior normalization, and motor pragmatic/information-gain arithmetic, and found a motor-ambiguity double count that was removed. The broader acceptance matrix and Jackson review remain open; this status does not satisfy the AI-104 dependency.
 
 ### AI-106 Stress-test terminal coverage and stopping
 
@@ -233,12 +235,13 @@ Acceptance: Compression gap is formally approved with frozen/cross-fitted safegu
 
 ### AI-111 Separate proposal distributions from policy priors
 
-Status: `Blocked`  
+Status: `Active`
 Track: Policy Inference  
 Depends on: AI-101, AI-105  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Candidate frequency, intended policy prior, proposal density, and finite-budget bias have explicit semantics and convergence tests.
+Notes: A bounded implementation experiment proceeded ahead of AI-105 acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage proposal trained toward the existing base-EFE posterior and mixed with the hand-written sampler; its emission mix defaults to zero and it never enters EFE, VFE, preferences, or the normalized policy posterior. It does not correct finite-candidate bias. Dedicated `tests/test_proposal.py` plus candidate-count, horizon, seed, mixture, posterior-mass, and top-action convergence evidence remain absent, so the task is active rather than validated.
 
 ### AI-112 Define online learning and inheritance semantics
 

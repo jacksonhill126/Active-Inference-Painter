@@ -13,6 +13,7 @@ from active_painter.arm_sim import ArmPainterSim
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.motor_planning import motor_efe_terms, motor_realization_log_evidence
+from active_painter.precision_beliefs import constant_modality_weights
 from active_painter.policies import MotorPrimitiveLatent, Policy
 from active_painter.stroke_execution import (
     ContactAwareStrokeController,
@@ -113,6 +114,11 @@ def test_forecast_proprioceptive_risk_depends_on_body_state_controllability() ->
     far_forecast = forecast_stroke_execution(far, action, canvas_summary_state)
 
     assert far_forecast.joint_target_error_rms > near_forecast.joint_target_error_rms
+    # `risk` is the pragmatic term E_q[-log p*(o)] by declared contract, not a
+    # KL, so this ordering is a statement about expected preference violation
+    # alone. If risk were ever redefined as a full KL (i.e. minus the forecast
+    # outcome entropy) the far forecast's larger entropy could invert it, so
+    # this monotonicity is what that migration would have to re-establish.
     assert motor_efe_terms(far_forecast, cfg).risk > motor_efe_terms(near_forecast, cfg).risk
 
 
@@ -195,6 +201,7 @@ def test_motor_efe_terms_are_separate_precision_weighted_proprioceptive_terms() 
     cfg = PainterConfig(
         motor_proprioceptive_risk_precision=0.5,
         motor_proprioceptive_ambiguity_precision=0.25,
+        motor_reliability_novelty_precision=0.25,
     )
     sim = ArmPainterSim(cfg)
     action = StrokeAction(0.2, 0.35, 0.8, 0.55, 0.08, 0.7, 1.0)
@@ -211,12 +218,42 @@ def test_motor_efe_terms_are_separate_precision_weighted_proprioceptive_terms() 
     assert terms.risk >= 0.0
     assert terms.ambiguity >= 0.0
     assert terms.epistemic_value > 0.0
+    # The subtracted information gain is separately attributable: state/observation
+    # mutual information under one declared precision, learned-reliability
+    # parameter novelty under another. This call supplies no reliability
+    # evidence, so only the former is non-zero.
+    assert terms.mutual_information > 0.0
+    assert terms.reliability_novelty == pytest.approx(0.0)
+    assert terms.epistemic_value == pytest.approx(terms.mutual_information + terms.reliability_novelty)
+    # H[q(o)] is logged so the canonical KL form of risk stays derivable.
+    assert terms.forecast_outcome_entropy != 0.0
     assert "analytic in nats" in terms.approximation
     assert "hard safety limits remain external" in terms.approximation
+    # With no modality weights supplied the historical arithmetic is reproduced
+    # exactly, so no normalization clause is claimed.
+    assert terms.normalizer == 1.0
+    assert "nats per proprioceptive channel" not in terms.approximation
+
+    normalized = motor_efe_terms(forecast, cfg, weights=constant_modality_weights(cfg))
+    channel_count = len(forecast.proprioceptive_labels)
+    assert channel_count == 27
+    assert normalized.normalizer == pytest.approx(1.0 / channel_count)
+    assert normalized.normalizer_name == "nats_per_proprioceptive_channel"
+    assert normalized.risk == pytest.approx(terms.risk / channel_count)
+    # The two pinned substrings survive the appended clause.
+    assert "analytic in nats" in normalized.approximation
+    assert "hard safety limits remain external" in normalized.approximation
+    assert "nats per proprioceptive channel" in normalized.approximation
 
 
-def test_motor_realization_evidence_marginalizes_declared_prior_without_candidate_count_bonus() -> None:
-    precision = 2.5
+@pytest.mark.parametrize("precision", [0.035, 0.35, 2.5, 3.5])
+def test_motor_realization_evidence_marginalizes_declared_prior_without_candidate_count_bonus(
+    precision: float,
+) -> None:
+    # Swept over a drifting policy precision, including the declared clamp
+    # boundaries 0.1x and 10x the 0.35 web prior mean. The no-candidate-count
+    # bonus property is a logsumexp NORMALIZATION property and must therefore be
+    # gamma-independent: the driver now feeds a belief posterior mean here.
     single_evidence, single_posterior = motor_realization_log_evidence([1.2], [0.0], precision)
     repeated_evidence, repeated_posterior = motor_realization_log_evidence(
         [1.2, 1.2, 1.2],
@@ -311,7 +348,16 @@ def test_motor_efe_terms_contribute_to_total_without_mixing_with_coverage_terms(
     assert motor_loaded.motor_risk == pytest.approx(0.4)
     assert motor_loaded.motor_ambiguity == pytest.approx(0.2)
     assert motor_loaded.motor_epistemic_value == pytest.approx(0.1)
-    assert motor_loaded.total == pytest.approx(base.total + 0.5)
+    # The motor modality enters G as pragmatic - information gain: 0.4 - 0.1.
+    # motor_ambiguity is likelihood entropy in excess of the preference scale,
+    # logged above but never a summand -- adding it would double count ambiguity,
+    # because -I(s;o) already carries the canonical ambiguity contribution.
+    assert motor_loaded.total == pytest.approx(base.total + 0.3)
+    assert motor_loaded.total == pytest.approx(
+        base.total + motor_loaded.motor_risk - motor_loaded.motor_epistemic_value
+    )
+    # Explicit regression pin against the old `+ motor_ambiguity` arithmetic.
+    assert motor_loaded.total != pytest.approx(base.total + 0.5)
 
 
 def test_motor_forecast_batch_overlaps_independent_requests_and_preserves_order(monkeypatch) -> None:

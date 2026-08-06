@@ -10,6 +10,13 @@ from .config import PainterConfig
 
 JOINT_NAMES = ("yaw", "pitch", "roll", "elbow")
 
+# Depth band, in world units behind the canvas plane, within which an intended
+# contact pressure is still honoured even though the bushing has not deflected.
+# Named because the motion-manifold sweep sampler must integrate inside the same
+# band the contact model uses; duplicating the literal there would let the two
+# drift apart silently.
+NEAR_SURFACE_TOLERANCE = 0.08
+
 
 def clip_scalar(value: float, lower: float, upper: float) -> float:
     value = float(value)
@@ -687,7 +694,7 @@ class VerticalCanvas:
         deflection = min(raw, self.bushing_travel)
         force = self.contact_stiffness * deflection
         geometric_pressure = deflection / max(1e-5, self.bushing_travel)
-        near_surface = on_canvas and float(tip[1]) >= self.distance - 0.08
+        near_surface = on_canvas and float(tip[1]) >= self.distance - NEAR_SURFACE_TOLERANCE
         pressure = max(geometric_pressure, clip_scalar(intended_pressure, 0.0, 1.0) if near_surface else 0.0)
         force = max(force, pressure * self.contact_stiffness * self.bushing_travel)
         brush_width_px = 2.0 * self.brush_radius_world(pressure) * self._pixels_per_unit()

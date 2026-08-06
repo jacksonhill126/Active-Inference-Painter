@@ -44,10 +44,16 @@ def test_reliability_inflation_raises_motor_risk_for_the_same_forecast() -> None
     trusted = motor_efe_terms(forecast, cfg, reliability_inflation=1.0)
     jittery = motor_efe_terms(forecast, cfg, reliability_inflation=4.0)
     assert jittery.risk > trusted.risk
+    # Ambiguity remains a live observable even though it is not summed into G.
     assert jittery.ambiguity > trusted.ambiguity
     # Unresolved reliability uncertainty is credited as information gain.
     curious = motor_efe_terms(forecast, cfg, reliability_inflation=1.0, reliability_epistemic_nats=0.3)
     assert curious.epistemic_value > trusted.epistemic_value
+    # And only the PARAMETER-novelty component moves: the state/observation
+    # mutual information depends on the forecast, not on the reliability belief.
+    assert curious.mutual_information == pytest.approx(trusted.mutual_information)
+    assert trusted.reliability_novelty == pytest.approx(0.0)
+    assert curious.reliability_novelty > trusted.reliability_novelty
 
 
 def test_reliability_ledger_snapshot_round_trip() -> None:

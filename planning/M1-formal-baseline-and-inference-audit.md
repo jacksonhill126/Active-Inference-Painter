@@ -212,7 +212,7 @@ Notes:
 
 ### AI-104 Verify VFE against tractable reference models
 
-Status: `Ready`
+Status: `Active`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-103  
 Owner: Jackson/Codex  
@@ -231,9 +231,22 @@ Acceptance:
   the tractable fixture.
 - Keep pixel-diagonal and mean-evaluated approximations explicitly labeled.
 
+Notes:
+
+- `tests/test_reference_oracle.py` now independently checks the summary
+  Gaussian complexity, convergence toward the conjugate posterior, and the
+  spatial estimator against fine-grid integration.
+- Spatial complexity, expected negative log likelihood, and total agree with
+  the independent integration to the declared tolerance. Summary complexity is
+  analytic, while summary total VFE remains a Monte Carlo estimate accepted
+  only inside a declared `+-0.35` nat band.
+- The remaining work is to decide whether that bounded Monte Carlo comparison
+  satisfies the task or whether an analytic-NLL path or larger sample budget is
+  required. The task is not accepted by this documentation update.
+
 ### AI-105 Verify EFE against enumerated or Monte Carlo references
 
-Status: `Blocked`  
+Status: `Active`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-104  
 Owner: Jackson/Codex  
@@ -250,6 +263,20 @@ Acceptance:
 - Verify policy posterior normalization with and without policy priors.
 - Identify any production EFE term that lacks a defensible reference-model
   counterpart and either derive, rename, disable, or explicitly defer it.
+
+Notes:
+
+- Work proceeded as a bounded validation exception while AI-104 remains open;
+  acceptance still waits on AI-104 closure and review.
+- `tests/test_reference_oracle.py` independently checks terminal Beta risk,
+  transition risk/ambiguity versus negative parameter information gain, policy
+  posterior normalization, and motor pragmatic/information-gain arithmetic.
+- The harness found a production defect: motor ambiguity was counted once
+  inside the motor risk and again during total assembly. The duplicate term was
+  removed at all summary and spatial assembly sites.
+- The implemented reference cases pass, but the broader deterministic,
+  ambiguity-only, epistemic-only, and preference-dominated acceptance matrix
+  still requires an explicit review decision.
 
 ### AI-106 Stress-test terminal coverage and stopping
 
@@ -355,7 +382,7 @@ Acceptance:
 
 ### AI-111 Separate proposal distributions from policy priors
 
-Status: `Blocked`  
+Status: `Active`
 Track: Policy Inference  
 Depends on: AI-101, AI-105  
 Owner: Jackson/Codex  
@@ -371,6 +398,22 @@ Acceptance:
 - Add candidate-count, horizon, seed, and proposal-mixture convergence tests.
 - Measure top-action stability and posterior mass as candidate budgets grow.
 - Specify correction or explicit-prior treatment for M3.
+
+Notes:
+
+- Work proceeded ahead of AI-105 acceptance as a bounded implementation
+  experiment; it does not change the M1 dependency or gate.
+- `proposal.py` now defines an amortized, belief-conditioned proposal density
+  over mark and passage latents, trained toward the existing base-EFE painting
+  posterior. `PolicySampler` can mix its candidates with the hand-written
+  proposal, while immediate stop and passage-plan compounds remain outside its
+  learned scope.
+- This object is a computational proposal only. It is never added to EFE, VFE,
+  a prior preference, or the normalized painting-policy posterior, and it does
+  not correct finite-candidate bias. The emission mixture defaults to zero.
+- The implementation remains incomplete: `tests/test_proposal.py` is referenced
+  by the source but absent, and candidate-count, horizon, seed, mixture, and
+  action-stability convergence evidence has not been produced.
 
 ### AI-112 Define online learning and inheritance semantics
 

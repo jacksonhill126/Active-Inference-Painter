@@ -6,9 +6,10 @@ has failed, and what comes next. Detailed task state remains in
 
 ## Current Snapshot
 
-Snapshot date: 2026-07-24.
+Snapshot date: 2026-08-04.
 
-Phase: M1 formal baseline audit with S0 native reference work in parallel.
+Phase: M1 formal baseline audit, with bounded M2 sensor-path and simulation
+support work proceeding in parallel. M1 has not passed its lock decision.
 
 The current prototype can:
 
@@ -16,18 +17,30 @@ The current prototype can:
 - infer individual-mark and hierarchical passage candidates;
 - compare stochastic motor realizations;
 - learn local transition and hierarchy models online;
+- construct registered global and requested-foveal camera observations and
+  assimilate them through a provisional spatial likelihood;
+- infer a compact encoder/contact body posterior through an isolated estimator;
+- verify substantial parts of the VFE/EFE implementation against independent
+  analytic, enumerated, and fine-grid references;
 - checkpoint learned state and export telemetry;
 - render the live arm and canvas in a browser.
 
 It has not yet demonstrated:
 
-- inference from only sensor-equivalent observations;
-- independently verified VFE and EFE decompositions;
+- a complete live painting loop driven only by sensor-equivalent observations;
 - calibrated predictive uncertainty at live scale;
 - a predictively necessary global or relational latent;
+- proposal-budget convergence or a correction for finite-candidate bias;
+- a frozen or cross-fitted safeguard for the self-trained composition
+  preference;
 - MuJoCo parity;
 - physical hardware control or sim-to-real transfer;
 - emergent composition.
+
+The default `sensor_equivalent` runtime therefore remains deliberately
+fail-closed: visualization and scripted execution are available, but painting
+policy inference and learning are disabled. The `oracle_material_state` mode is
+an explicit diagnostic upper-bound comparator, not a sensor-based agent.
 
 ## Verification Snapshot
 
@@ -36,10 +49,10 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Deterministic smoke suite | 59 passed; 11.08 seconds observed | Includes observation-factorization, plant-interface, and sensor-access contracts |
-| Native plant/material suite | 55 passed; 2.48 seconds observed | Geometry, reset, and material contracts are green |
-| AI-103/T-103 focused contract suite | 12 passed; 3.85 seconds observed | Observation factorization/units and `plant-interface-v1` records are green |
-| Complete suite | 252 passed; 349.09 seconds observed; exit 0 | Current baseline and all new M0/AI/S0 contract tests are green |
+| Test collection | 415 tests collected | Includes the new reference-oracle, modality-unit, precision-belief, and motion-manifold suites |
+| Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
+| Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
+| Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -47,17 +60,42 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Verify VFE against independent analytic reference calculations in AI-104.
-2. Build the leakage-resistant live-scale baseline corpus in AI-108.
-3. Capture baseline web/telemetry behavior in T-105.
-4. Document and classify simulator shortcuts in T-106.
-5. Complete the T-208 standalone MuJoCo viewer inspection and accept or revise
-   the physical-draft/logical-retarget contract.
-6. Capture the T-309 matched native/MuJoCo stroke parity artifact.
-7. Move provisional MJCF geometry into the backend-neutral T-501
-   `RobotGeometrySpec`.
+1. Stabilize and review the current uncommitted working tree; complete the
+   learned-proposal tests and documentation before expanding its scope.
+2. Close AI-104/AI-105 acceptance around the independent reference harness,
+   including the remaining summary-VFE Monte Carlo tolerance.
+3. Build the leakage-resistant live-scale baseline corpus in AI-108, then
+   measure held-out likelihood and uncertainty calibration in AI-107/AI-109.
+4. Resolve the composition-preference closed loop and finite-proposal bias in
+   AI-110/AI-111. Until then, treat both mechanisms as provisional ablations.
+5. Define checkpoint inheritance and online-learning semantics, profile the
+   major runtime phases, and capture three manifested baseline replicas.
+6. Make the M1 lock decision before treating ongoing M2 work as an accepted
+   sensor model.
+7. After M1, connect the body posterior to motor forecasts and continuously
+   pair executed-action transition priors with delivered camera updates.
 
 ## Progress Log
+
+### 2026-08-04: formal-reference progress and interrupted proposal work
+
+- Added an independent reference-oracle harness covering terminal coverage
+  risk, transition information gain, policy posterior normalization, summary
+  and spatial VFE, and motor EFE decomposition. It found and forced the removal
+  of a motor-ambiguity double count.
+- Added per-modality Gamma precision beliefs, explicit per-channel units, a
+  gap-progress stop-prior factor, a stronger compression-gap baseline family,
+  and a motion-manifold bootstrap with named approximations and ablations.
+- Recorded that the precision update did not produce the hoped modality
+  ordering, motor normalization materially flattened the realization
+  posterior, and the composition bootstrap needs a much larger explicit
+  gradient budget than the default supplies.
+- Began an amortized learned policy-proposal distribution conditioned on canvas
+  and relational beliefs. Sampling, training, checkpoint, and diagnostic paths
+  exist, but dedicated proposal tests, convergence evidence, and documentation
+  reconciliation were not completed before the work stopped. Its mixture
+  weight defaults to zero and it is not an accepted solution to finite-proposal
+  bias.
 
 ### 2026-07-28: MuJoCo physical draft, backend, and contact-driven paint
 
