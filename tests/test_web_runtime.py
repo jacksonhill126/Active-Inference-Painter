@@ -559,6 +559,8 @@ def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> Non
     assert "VFE F" in main_js
     assert "Checkpoint" in main_js
     assert "retentionPolicy" in main_js
+    assert "Forecast initialization" in main_js
+    assert "Forecast approximation" in main_js
     assert "Canvas transition risk" in main_js
     assert "Relational transition risk" in main_js
     assert "Relational observation" in main_js

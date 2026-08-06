@@ -649,6 +649,14 @@ async function pollState() {
     row("Driver", state.agentEnabled ? "active inference" : "scripted IK"),
     row("Realized plant", state.plantBackend || "native"),
     row("Counterfactual plant", state.counterfactualPlantBackend || "native"),
+    row(
+      "Forecast initialization",
+      state.counterfactualPlant?.initialization || "unversioned"
+    ),
+    row(
+      "Forecast approximation",
+      state.counterfactualPlant?.approximation || "unversioned"
+    ),
     row("Robot geometry", robotModel.version),
     row("Robot state adapter", robotModeLabel(state.robot.mode)),
     row("Robot target error", `${(1000 * state.robot.alignmentErrorM).toFixed(3)} mm`),

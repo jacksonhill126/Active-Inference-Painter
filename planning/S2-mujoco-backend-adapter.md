@@ -218,10 +218,15 @@ Default:
 
 Notes:
 
-- Accepted 2026-07-28 as live MuJoCo execution with
-  `native-abstract-v0 approximation` counterfactual motor forecasts.
-- Runtime diagnostics and model docs expose the split; full MuJoCo/contact
-  forecasting is deferred and must not be claimed.
+- Initially accepted 2026-07-28 as live MuJoCo execution with a deferred native
+  counterfactual approximation.
+- Revised 2026-08-04: deep-copied policy particles now preserve
+  `mujoco-robstride-electromechanical-v4` with independent `MjData`, matched
+  contact/material registration, per-joint RobStride/MJCF normalization, and
+  explicit forecast provenance.
+- Initialization still uses exact process state in `baseline-oracle-v0`, and
+  MuJoCo body-parameter uncertainty is not yet sampled. A sensor-conditioned
+  `ExecutionForecaster` must not be claimed.
 
 ### T-309 Add backend parity checks
 
@@ -242,6 +247,8 @@ Notes:
 
 - Canonical transform, logical retarget, state-shape, contact/deposition, and
   runtime selection tests pass.
+- Same-plant counterfactual copying, independent rollout state, live-state
+  non-mutation, provenance, and runtime-selection tests pass.
 - A versioned matched-stroke artifact comparing path, timing, pressure,
   current, and material coverage remains.
 
@@ -261,8 +268,9 @@ Acceptance:
 
 Notes:
 
-- Blocked on the T-309 matched parity artifact and Jackson's explicit
-  acceptance of the native counterfactual-forecast approximation.
+- Blocked on the T-309 matched parity artifact and Jackson's explicit S2 lock
+  decision. The former native counterfactual substitution is no longer a
+  blocker; exact-state oracle initialization remains documented M2 work.
 
 ## Validation Gate
 

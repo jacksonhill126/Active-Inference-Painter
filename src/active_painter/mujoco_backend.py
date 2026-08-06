@@ -12,7 +12,6 @@ from .arm_sim import (
     ArmKinematics,
     ArmPose,
     ContactState,
-    JointPlant,
     MotorTelemetry,
     VerticalCanvas,
     clip_scalar,
@@ -429,13 +428,20 @@ class MujocoPlantBackend:
 class MujocoJointPlant:
     """Compatibility facade from the current canvas controller to MuJoCo.
 
-    Actual execution is physical MJCF state. Deep-copied counterfactuals return
-    the existing native JointPlant as an explicitly transitional approximation.
+    Actual execution and deep-copied oracle counterfactuals both use independent
+    MuJoCo data under the same immutable MJCF model. The legacy logical
+    controller retarget remains an explicit approximation below policy
+    selection.
     """
 
     handles_contact = True
     backend_id = "mujoco-robstride-electromechanical-v4"
-    counterfactual_backend_id = "native-abstract-v0 approximation"
+    counterfactual_backend_id = "mujoco-robstride-electromechanical-v4"
+    counterfactual_initialization = "baseline-oracle-v0 exact MuJoCo process snapshot"
+    counterfactual_approximation = (
+        "exact MJCF dynamics/contact under legacy_canvas_cartesian_retarget; "
+        "MuJoCo body-parameter uncertainty is not yet sampled"
+    )
 
     # Compatibility parameters consumed by existing telemetry/EFE code.
     current_limit = 25.5
@@ -448,8 +454,13 @@ class MujocoJointPlant:
     encoder_velocity_noise_deg = 0.0
     process_torque_noise_std: dict[str, float] | float = 0.0
 
-    def __init__(self, model_path: Path | str = ROBOT_MODEL_PATH) -> None:
-        self.backend = MujocoPlantBackend(model_path)
+    def __init__(
+        self,
+        model_path: Path | str = ROBOT_MODEL_PATH,
+        *,
+        model: mujoco.MjModel | None = None,
+    ) -> None:
+        self.backend = MujocoPlantBackend(model_path, model=model)
         self.robot_model = load_robot_visual_model(model_path)
         self._native_kinematics = ArmKinematics()
         self.velocity = dict.fromkeys(JOINT_NAMES, 0.0)
@@ -469,6 +480,26 @@ class MujocoJointPlant:
             0.0,
             np.zeros(3, dtype=np.float64),
         )
+        self.forecast_current_scale = self.backend._model_peak_current.copy()
+        self.forecast_torque_scale = self.backend._custom_numeric(
+            "robstride_peak_torque_nm"
+        )
+        self.forecast_velocity_scale = self.backend._custom_numeric(
+            "robstride_no_load_speed_rad_s"
+        )
+        nominal_inertia = np.asarray(
+            [
+                self.backend.model.dof_M0[
+                    int(self.backend.model.jnt_dofadr[self.backend._joint_ids[name]])
+                ]
+                for name in JOINT_NAMES
+            ],
+            dtype=np.float64,
+        )
+        self.forecast_acceleration_scale = self.forecast_torque_scale / np.maximum(
+            nominal_inertia,
+            1e-6,
+        )
 
     @staticmethod
     def _joint_param(
@@ -480,12 +511,14 @@ class MujocoJointPlant:
             return float(values.get(name, fallback))
         return float(values)
 
-    def __deepcopy__(self, memo: dict[int, Any]) -> JointPlant:
-        approximation = JointPlant()
-        approximation.reset_state(copy.deepcopy(self._logical_pose, memo))
-        approximation.velocity = dict(self.velocity)
-        approximation.telemetry = copy.deepcopy(self.telemetry, memo)
-        return approximation
+    def __deepcopy__(self, memo: dict[int, Any]) -> MujocoJointPlant:
+        clone = type(self)(
+            self.backend.model_path,
+            model=self.backend.model,
+        )
+        memo[id(self)] = clone
+        clone.restore_state(copy.deepcopy(self.state_snapshot(), memo))
+        return clone
 
     def select_forecast_noise_sample(self, sample_index: int) -> None:
         _ = sample_index
@@ -556,6 +589,21 @@ class MujocoJointPlant:
     def telemetry_joint_target_deg(self) -> dict[str, float]:
         """Return the physical actuator target corresponding to the controller target."""
         return dict(self._physical_target_deg)
+
+    def forecast_joint_limit_proximity_vector(
+        self,
+        margin_degrees: float,
+    ) -> np.ndarray:
+        """Return physical MJCF joint-limit proximity in declared joint order."""
+
+        margin = max(np.deg2rad(float(margin_degrees)), 1e-9)
+        position = self.backend.encoder_position_rad()
+        proximity = []
+        for index, limits in enumerate(self.backend.capabilities.position_limits_rad):
+            low, high = limits
+            distance = min(position[index] - low, high - position[index])
+            proximity.append(clip_scalar((margin - distance) / margin, 0.0, 1.0))
+        return np.asarray(proximity, dtype=np.float64)
 
     def reset_state(self, pose: ArmPose) -> None:
         self._logical_pose = pose.clipped()
@@ -710,6 +758,7 @@ class MujocoJointPlant:
             "last_roll_preserved": self._last_roll_preserved,
             "sequence": self._sequence,
             "telemetry": copy.deepcopy(self.telemetry),
+            "last_contact": copy.deepcopy(self._last_contact),
         }
 
     def restore_state(self, snapshot: dict[str, Any]) -> None:
@@ -719,6 +768,7 @@ class MujocoJointPlant:
         self._last_roll_preserved = bool(snapshot["last_roll_preserved"])
         self._sequence = int(snapshot["sequence"])
         self.telemetry = copy.deepcopy(snapshot["telemetry"])
+        self._last_contact = copy.deepcopy(snapshot.get("last_contact", self._last_contact))
         self._sync_telemetry()
 
     def close(self) -> None:

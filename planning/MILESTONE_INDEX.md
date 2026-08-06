@@ -64,8 +64,10 @@ before the next begins:
 - S1 began from T-101 but deliberately evolved from an exact abstract clone
   into a versioned physical draft with a named logical retarget. T-209 remains
   open until the viewer inspection and contract are accepted.
-- S2 live execution is implemented; T-309 matched-backend evidence and the
-  native counterfactual-forecast approximation remain before T-310.
+- S2 live execution and selected-plant counterfactuals are implemented; T-309
+  matched-backend evidence and the explicit lock decision remain before T-310.
+  Forecast initialization remains `baseline-oracle-v0` until M2 connects the
+  body posterior.
 - M4 contract work may begin when T-003, T-103, and T-105 are complete. Only
   cross-backend parity work waits for S2 outputs.
 - M5 and targeted M6 risk-reduction work may proceed alongside M1-M3 when their

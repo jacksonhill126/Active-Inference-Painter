@@ -115,11 +115,14 @@ Four related terms refer to different decisions and models:
 | MuJoCo plant | `mujoco-robstride-electromechanical-v4`, a selectable vendor-grounded realized-execution backend, not yet a calibrated hardware twin. |
 | Motor realization | An inferred controller/trajectory latent; it chooses how to realize a painting policy, not which motor product is installed. |
 
-Counterfactual motor forecasts currently use the native abstract plant even
-when MuJoCo realizes the selected action. That mismatch is a named transitional
-approximation. See the canonical [model record](models/README.md), the
-[native reference](docs/NATIVE_PLANT_REFERENCE.md), and the
-[control/plant/policy boundary](docs/CONTROL_PLANT_POLICY_BOUNDARY.md).
+Counterfactual motor forecasts preserve the selected plant: native execution
+uses native forecasts, while MuJoCo execution uses independent MuJoCo rollout
+data under the same immutable model. Forecast initialization still deep-copies
+exact process state, so forecast-driven policy inference remains confined to
+the explicit `baseline-oracle-v0` diagnostic until the body posterior is
+connected. MuJoCo parameter uncertainty is not yet sampled. See the canonical
+[model record](models/README.md), the [native reference](docs/NATIVE_PLANT_REFERENCE.md),
+and the [control/plant/policy boundary](docs/CONTROL_PLANT_POLICY_BOUNDARY.md).
 
 ## Implemented Prototype
 
@@ -151,9 +154,9 @@ approximation. See the canonical [model record](models/README.md), the
   Python material-canvas display.
 - Selectable native and MuJoCo realized-execution backends behind the SI-unit
   plant contract. The MuJoCo backend uses output-equivalent RobStride dcmotors
-  with voltage, current-lag, back-EMF, and peak-torque saturation. MuJoCo
-  execution currently retains the native abstract body as an explicitly
-  labeled counterfactual motor-forecast approximation.
+  with voltage, current-lag, back-EMF, and peak-torque saturation. MuJoCo motor
+  forecasts now use independent instances of that same plant, with explicit
+  exact-state-oracle initialization and approximation provenance.
 - Broad deterministic and integration test coverage across material,
   inference, hierarchy, arm, execution, and runtime behavior.
 

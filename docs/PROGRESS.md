@@ -20,6 +20,8 @@ The current prototype can:
 - construct registered global and requested-foveal camera observations and
   assimilate them through a provisional spatial likelihood;
 - infer a compact encoder/contact body posterior through an isolated estimator;
+- preserve the selected native or MuJoCo plant in counterfactual motor
+  forecasts, with independent MuJoCo rollout state and explicit provenance;
 - verify the AI-104/AI-105 VFE/EFE acceptance matrix against independent
   analytic, enumerated, and fine-grid references;
 - checkpoint learned state and export telemetry;
@@ -50,13 +52,14 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 442 tests collected | Adds the learned-proposal, AI-111 convergence, and completed AI-104/AI-105 reference suites to the prior 415-test baseline |
+| Current test collection | 448 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, documentation-contract, and MuJoCo forecast-alignment coverage |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
 | Current deterministic CI gate | 164 passed; 20.82 seconds observed | Includes both proposal suites and all files listed in `.github/workflows/ci.yml`; two expected obsolete-summary warnings |
 | Pre-AI111 complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
+| MuJoCo forecast alignment | 60 focused motor, plant, MuJoCo, documentation, and runtime tests passed | Selected-plant copying, independent rollout state, live-state non-mutation, contact/material execution, provenance, and the fail-closed sensor boundary are covered |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -80,6 +83,19 @@ captured in a run manifest.
    pair executed-action transition priors with delivered camera updates.
 
 ## Progress Log
+
+### 2026-08-04: selected-plant motor forecast alignment
+
+- Removed the compatibility hook that silently replaced MuJoCo with
+  `native-abstract-v0` during deep-copied policy forecasts.
+- MuJoCo forecast particles now own independent `MjData` under the same
+  immutable `mujoco-robstride-electromechanical-v4` model used for execution.
+- Proprioceptive forecasts use physical MuJoCo positions, targets, joint limits,
+  current, torque, velocity, contact, and per-joint RobStride/MJCF scales.
+- Added explicit backend, initialization, and approximation provenance. The
+  path remains `baseline-oracle-v0` because it starts from exact process state;
+  MuJoCo body-parameter uncertainty and live body-posterior initialization are
+  still open.
 
 ### 2026-08-04: formal-reference progress, proposal recovery, and AI-111 result
 

@@ -39,11 +39,16 @@ Keep these four concepts distinct in code, documentation, and status reports:
   controller/trajectory realization such as Cartesian IK, joint spline, elbow
   pivot, or upper-arm roll. This does not select an actuator product or SKU.
 
-MuJoCo realized execution and counterfactual motor prediction are not yet the
-same plant: policy forecasts still use `native-abstract-v0` as a named
-transitional approximation. Never describe those forecasts as
-RobStride-calibrated. Never state that no specific motors have been selected
-without explicitly limiting that statement to the native abstract plant.
+Realized execution and counterfactual motor prediction must preserve the
+selected plant: native execution forecasts through `native-abstract-v0`, while
+MuJoCo execution forecasts through independent MuJoCo data under
+`mujoco-robstride-electromechanical-v4`. The current driver still initializes
+both from an exact process snapshot and therefore permits forecast-driven
+policy inference only in the explicit `baseline-oracle-v0` diagnostic. MuJoCo
+body-parameter uncertainty is not yet sampled. Never describe these forecasts
+as sensor-conditioned, hardware-calibrated, or sufficient for embodiment
+claims. Never state that no specific motors have been selected without
+explicitly limiting that statement to the native abstract plant.
 
 The canonical hardware-plant record is `models/README.md` plus
 `models/active_inference_painter.xml`; the semantic boundary is

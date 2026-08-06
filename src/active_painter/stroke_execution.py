@@ -82,6 +82,9 @@ class ExecutionForecast:
     proprioceptive_likelihood_variance: tuple[float, ...] = ()
     motor_rollout_samples: int = 1
     feasibility_probability: float = 1.0
+    forecast_plant_backend_id: str = "native-abstract-v0"
+    forecast_initialization: str = "baseline-oracle-v0 exact native process snapshot"
+    forecast_approximation: str = "native representative plant"
 
     def diagnostics(self, *, include_state_fields: bool = True) -> dict[str, object]:
         omitted = {"next_state_mean", "next_state_variance", "canvas_delta_mean"}
@@ -495,12 +498,63 @@ def _jitter_body_parameters(working: ArmPainterSim, noise_sample_index: int) -> 
     rng = np.random.default_rng(9173 + 31 * int(noise_sample_index))
     sigma = float(np.log1p(max(0.0, fraction)))
     for name in _JITTERED_BODY_PARAMETERS:
+        if not hasattr(working.plant, name):
+            # The MuJoCo oracle forecaster currently shares an immutable MJCF
+            # model across independent MjData instances. Its missing parameter
+            # particle model is reported in forecast provenance rather than
+            # silently replacing MuJoCo with the native plant.
+            continue
         value = getattr(working.plant, name)
         scale = float(np.exp(rng.normal(0.0, sigma)))
         if isinstance(value, dict):
             setattr(working.plant, name, {key: float(entry) * scale for key, entry in value.items()})
         else:
             setattr(working.plant, name, float(value) * scale)
+
+
+def _joint_array(value: object, *, fallback: float) -> np.ndarray:
+    if isinstance(value, dict):
+        return np.asarray(
+            [float(value.get(name, fallback)) for name in JOINT_NAMES],
+            dtype=np.float64,
+        )
+    array = np.asarray(value, dtype=np.float64)
+    if array.ndim == 0:
+        return np.full(len(JOINT_NAMES), float(array), dtype=np.float64)
+    if array.shape != (len(JOINT_NAMES),):
+        raise ValueError("Plant forecast scale must contain one value per joint.")
+    return array
+
+
+def _forecast_joint_position_deg(working: ArmPainterSim) -> np.ndarray:
+    provider = getattr(working.plant, "telemetry_joint_position_deg", None)
+    if callable(provider):
+        values = provider()
+        return np.asarray([values[name] for name in JOINT_NAMES], dtype=np.float64)
+    return _pose_vector(working.actual_pose)
+
+
+def _forecast_joint_target_deg(working: ArmPainterSim) -> np.ndarray:
+    provider = getattr(working.plant, "telemetry_joint_target_deg", None)
+    if callable(provider):
+        values = provider()
+        return np.asarray([values[name] for name in JOINT_NAMES], dtype=np.float64)
+    return _pose_vector(working.target_pose)
+
+
+def _forecast_joint_limit_proximity(
+    working: ArmPainterSim,
+) -> np.ndarray:
+    provider = getattr(working.plant, "forecast_joint_limit_proximity_vector", None)
+    if callable(provider):
+        return np.asarray(
+            provider(working.config.motor_limit_margin_degrees),
+            dtype=np.float64,
+        )
+    return _joint_limit_proximity_vector(
+        working.actual_pose,
+        working.config.motor_limit_margin_degrees,
+    )
 
 
 def _forecast_stroke_execution_once(
@@ -560,8 +614,8 @@ def _forecast_stroke_execution_once(
         working.intended_contact_pressure = command.intended_pressure
         working.brush_flow = command.reference.flow
         working.step(dt)
-        pose_vec = _pose_vector(working.actual_pose)
-        target_vec = _pose_vector(working.target_pose)
+        pose_vec = _forecast_joint_position_deg(working)
+        target_vec = _forecast_joint_target_deg(working)
         velocity_vec = np.asarray([working.plant.velocity[name] for name in JOINT_NAMES], dtype=np.float64)
         current_vec = np.asarray([working.plant.telemetry.current[name] for name in JOINT_NAMES], dtype=np.float64)
         torque_vec = np.asarray([working.plant.telemetry.torque[name] for name in JOINT_NAMES], dtype=np.float64)
@@ -570,9 +624,7 @@ def _forecast_stroke_execution_once(
         current_samples.append(current_vec)
         torque_samples.append(torque_vec)
         target_error_samples.append(target_vec - pose_vec)
-        limit_proximity_samples.append(
-            _joint_limit_proximity_vector(working.actual_pose, working.config.motor_limit_margin_degrees)
-        )
+        limit_proximity_samples.append(_forecast_joint_limit_proximity(working))
         encoder_std_samples.append(
             np.asarray(
                 [working.plant.telemetry.encoder_std_deg[name] for name in JOINT_NAMES],
@@ -639,11 +691,38 @@ def _forecast_stroke_execution_once(
     variance[0] += np.float32((0.015 * execution_uncertainty + 0.025 * contact_loss_probability) ** 2)
     variance[1:] += np.float32((0.01 * execution_uncertainty) ** 2)
 
-    current_by_joint = _sample_rms_by_joint(current_samples) / max(1e-6, working.plant.current_limit)
-    torque_by_joint = _sample_rms_by_joint(torque_samples) / max(
-        1e-6, working.plant.kt * working.plant.current_limit
+    current_scale = _joint_array(
+        getattr(working.plant, "forecast_current_scale", working.plant.current_limit),
+        fallback=float(working.plant.current_limit),
     )
-    velocity_by_joint = _sample_rms_by_joint(velocity_samples) / max(1e-6, working.plant.max_link_velocity)
+    torque_scale = _joint_array(
+        getattr(
+            working.plant,
+            "forecast_torque_scale",
+            working.plant.kt * working.plant.current_limit,
+        ),
+        fallback=float(working.plant.kt * working.plant.current_limit),
+    )
+    velocity_scale = _joint_array(
+        getattr(
+            working.plant,
+            "forecast_velocity_scale",
+            working.plant.max_link_velocity,
+        ),
+        fallback=float(working.plant.max_link_velocity),
+    )
+    current_by_joint = _sample_rms_by_joint(current_samples) / np.maximum(
+        current_scale,
+        1e-6,
+    )
+    torque_by_joint = _sample_rms_by_joint(torque_samples) / np.maximum(
+        torque_scale,
+        1e-6,
+    )
+    velocity_by_joint = _sample_rms_by_joint(velocity_samples) / np.maximum(
+        velocity_scale,
+        1e-6,
+    )
     joint_inertias = np.asarray(
         [
             working.plant._joint_param(working.plant.link_inertia, name, working.plant.inertia)
@@ -652,12 +731,24 @@ def _forecast_stroke_execution_once(
         ],
         dtype=np.float64,
     )
-    acceleration_scales = working.plant.kt * working.plant.current_limit / np.maximum(joint_inertias, 1e-6)
+    native_acceleration_scales = (
+        working.plant.kt
+        * working.plant.current_limit
+        / np.maximum(joint_inertias, 1e-6)
+    )
+    acceleration_scales = _joint_array(
+        getattr(
+            working.plant,
+            "forecast_acceleration_scale",
+            native_acceleration_scales,
+        ),
+        fallback=float(np.mean(native_acceleration_scales)),
+    )
     acceleration_by_joint = _sample_rms_by_joint(acceleration_samples) / acceleration_scales
     target_error_by_joint = _sample_rms_by_joint(target_error_samples) / 45.0
     limit_by_joint = np.mean(np.stack(limit_proximity_samples), axis=0) if limit_proximity_samples else np.zeros(4)
-    joint_current_rms = _sample_rms(current_samples) / max(1e-6, working.plant.current_limit)
-    joint_torque_rms = _sample_rms(torque_samples) / max(1e-6, working.plant.kt * working.plant.current_limit)
+    joint_current_rms = float(np.sqrt(np.mean(current_by_joint * current_by_joint)))
+    joint_torque_rms = float(np.sqrt(np.mean(torque_by_joint * torque_by_joint)))
     joint_velocity_rms = _sample_rms(velocity_samples)
     joint_acceleration_rms = _sample_rms(acceleration_samples)
     joint_target_error_rms = _sample_rms(target_error_samples)
@@ -674,9 +765,12 @@ def _forecast_stroke_execution_once(
     )
     current_sensor_variance = np.full(len(JOINT_NAMES), 0.02**2, dtype=np.float64)
     torque_sensor_variance = np.full(len(JOINT_NAMES), 0.02**2, dtype=np.float64)
-    velocity_sensor_variance = np.full(
-        len(JOINT_NAMES),
-        (np.deg2rad(working.plant.encoder_velocity_noise_deg) / max(1e-6, working.plant.max_link_velocity)) ** 2,
+    velocity_sensor_variance = np.asarray(
+        (
+            np.deg2rad(working.plant.encoder_velocity_noise_deg)
+            / np.maximum(velocity_scale, 1e-6)
+        )
+        ** 2,
         dtype=np.float64,
     )
     acceleration_sensor_variance = (
@@ -762,6 +856,27 @@ def _forecast_stroke_execution_once(
         proprioceptive_likelihood_variance=tuple(float(max(value, 1e-8)) for value in likelihood_variance),
         motor_rollout_samples=1,
         feasibility_probability=float(feasible),
+        forecast_plant_backend_id=str(
+            getattr(
+                working.plant,
+                "counterfactual_backend_id",
+                getattr(working.plant, "backend_id", "native-abstract-v0"),
+            )
+        ),
+        forecast_initialization=str(
+            getattr(
+                working.plant,
+                "counterfactual_initialization",
+                "baseline-oracle-v0 exact process snapshot",
+            )
+        ),
+        forecast_approximation=str(
+            getattr(
+                working.plant,
+                "counterfactual_approximation",
+                "unversioned plant forecast approximation",
+            )
+        ),
     )
 
 

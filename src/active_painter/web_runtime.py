@@ -352,6 +352,23 @@ class WebSimRuntime:
                     "counterfactual_backend_id",
                     self.plant_backend,
                 ),
+                "counterfactualPlant": {
+                    "backendId": getattr(
+                        self.sim.plant,
+                        "counterfactual_backend_id",
+                        self.plant_backend,
+                    ),
+                    "initialization": getattr(
+                        self.sim.plant,
+                        "counterfactual_initialization",
+                        "unversioned",
+                    ),
+                    "approximation": getattr(
+                        self.sim.plant,
+                        "counterfactual_approximation",
+                        "unversioned",
+                    ),
+                },
                 "brushTone": "black" if self.sim.brush_tone >= 0.5 else "white",
                 "canvas": {
                     "width": self.sim.canvas.width,

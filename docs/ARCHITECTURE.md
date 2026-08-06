@@ -305,10 +305,10 @@ The active-inference boundary is important:
 
 ### 6.2 Native abstract joint and motor plant
 
-`JointPlant` is the `native-abstract-v0` realized-execution plant and the
-current counterfactual motor-forecast model. It is a stochastic, coupled,
-quasi-direct-drive-style actuator model whose values are representative rather
-than identified from a specific motor.
+`JointPlant` is the `native-abstract-v0` realized-execution and counterfactual
+motor-forecast model when the native backend is selected. It is a stochastic,
+coupled, quasi-direct-drive-style actuator model whose values are
+representative rather than identified from a specific motor.
 
 This native model must not be confused with either the selectable
 `mujoco-robstride-electromechanical-v4` backend or the inferred motor-realization
@@ -316,8 +316,8 @@ latent:
 
 | Concept | Current status |
 | --- | --- |
-| Native plant | Representative `JointPlant`; selectable for realized execution and still used for counterfactual forecasts. |
-| MuJoCo plant | Hardware-oriented realized-execution backend with fixed RobStride 03 `yaw`/`pitch` and RobStride 02 `roll`/`elbow` assignments. Vendor-grounded, but not a calibrated hardware twin. |
+| Native plant | Representative `JointPlant`; used for native realized execution and native counterfactual forecasts. |
+| MuJoCo plant | Hardware-oriented realized-execution and counterfactual-forecast backend with fixed RobStride 03 `yaw`/`pitch` and RobStride 02 `roll`/`elbow` assignments. Vendor-grounded, but not a calibrated hardware twin. |
 | Motor realization | Conditional controller/trajectory latent used to realize a painting-policy candidate; not an actuator SKU choice. |
 
 The canonical actuator assignment and approximation ledger are in
@@ -1448,11 +1448,20 @@ delays are intentionally absent until measured. Those limitations are reported
 as model uncertainty and safety work, not hidden behind a painting reward or
 preference.
 
-Actual MuJoCo execution and counterfactual policy prediction are deliberately
-separate in this first integration. Deep-copied planning rollouts use
-`native-abstract-v0` as an explicit approximation; they do not receive MuJoCo
-evaluation truth. Moving counterfactuals onto a calibrated MuJoCo generative
-model requires separate likelihood validation and performance work.
+Actual MuJoCo execution and counterfactual policy prediction now use the same
+`mujoco-robstride-electromechanical-v4` plant. Each forecast owns independent
+`MjData` and shares only the immutable MJCF model; physical joint position,
+target, current, torque, velocity, limit proximity, brush compliance, contact,
+and realized paint registration therefore come from MuJoCo. Per-joint
+RobStride/MJCF envelopes normalize the proprioceptive likelihood channels.
+
+This is a matched-plant result, not yet a conforming sensor-conditioned
+forecaster. The current oracle driver initializes planning from an exact
+`ArmPainterSim`/MuJoCo process snapshot. MuJoCo body-parameter particles are not
+yet sampled, and the legacy logical Cartesian retarget remains below policy
+selection. Runtime and forecast diagnostics label the initialization
+`baseline-oracle-v0` and name these approximations. Connecting the compact body
+posterior and validating predictive distributions remain separate M2 work.
 
 The code-version counter fingerprints files under `src/active_painter`, `web`,
 `models/active_inference_painter.xml`, and `pyproject.toml`; it does not
@@ -1648,9 +1657,12 @@ palette/solvent/cleaning action geometry. Reload is currently instantaneous.
 
 ### 31.9 Forecast model and simulated world are closely related
 
-The motor forecast runs deep copies of the same simulator family used as the
-world. Noise and parameter jitter create uncertainty, but this is still easier
-than sim-to-real deployment. Hardware will introduce unmodeled dynamics.
+The motor forecast runs independent data copies of the selected simulator
+family used as the world. Native particles include process noise and parameter
+jitter; MuJoCo particles currently preserve its deterministic plant and do not
+yet sample body-parameter uncertainty. Both oracle paths start from exact
+process state. This remains easier than sensor-conditioned prediction or
+sim-to-real deployment, where hardware will introduce unmodeled dynamics.
 
 ### 31.10 No production robot safety layer
 

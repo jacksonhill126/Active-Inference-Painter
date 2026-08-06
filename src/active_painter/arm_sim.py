@@ -156,6 +156,13 @@ class JointPlant:
     to policy forecasts while safety limits stay external to painting choice.
     """
 
+    backend_id = "native-abstract-v0"
+    counterfactual_backend_id = "native-abstract-v0"
+    counterfactual_initialization = "baseline-oracle-v0 exact native process snapshot"
+    counterfactual_approximation = (
+        "native representative plant; body parameters are not identified from selected hardware"
+    )
+
     supply_voltage: float = 24.0
     current_limit: float = 7.0
     servo_stiffness: float = 1.0

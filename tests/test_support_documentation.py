@@ -31,6 +31,7 @@ def test_agent_entry_documents_keep_plant_and_motor_terms_distinct(
     assert "motor realization" in normalized
     assert "robstride 03" in normalized
     assert "robstride 02" in normalized
+    assert "baseline oracle v0" in normalized
 
 
 def test_support_documents_do_not_restore_superseded_mujoco_status() -> None:
@@ -38,6 +39,10 @@ def test_support_documents_do_not_restore_superseded_mujoco_status() -> None:
         "a future mujoco backend",
         "| mujoco backend | not implemented |",
         "build mujoco as\nan abstract clone and execution backend",
+        "policy forecasts still use `native-abstract-v0`",
+        "counterfactual motor forecasts still deep-copy `native-abstract-v0`",
+        "counterfactual motor forecasts currently use the native abstract plant",
+        "counterfactual motor forecasts still use a deep-copied native plant",
     )
 
     for path in SUPPORT_DOCUMENTS:

@@ -29,11 +29,15 @@ claims.
 | MuJoCo plant | `mujoco-robstride-electromechanical-v4`; a selectable vendor-grounded realized-execution model, not yet a calibrated hardware twin. |
 | Motor realization | A conditional controller/trajectory latent. It does not select an actuator product. |
 
-Realized execution and counterfactual prediction are separate choices. The
-MuJoCo backend can execute the selected policy, while current motor forecasts
-still deep-copy `native-abstract-v0`. This is a named transitional
-approximation. The canonical plant fields and actuator assignment live in
-`models/README.md` and `models/active_inference_painter.xml`.
+Realized execution and counterfactual prediction preserve the selected plant.
+Native execution forecasts with `native-abstract-v0`; MuJoCo execution
+forecasts with independent data under
+`mujoco-robstride-electromechanical-v4`. The current driver still initializes
+those forecasts from exact process state, so this matched-plant path remains an
+explicit `baseline-oracle-v0` diagnostic rather than a conforming
+belief-conditioned `ExecutionForecaster`. The canonical plant fields and
+actuator assignment live in `models/README.md` and
+`models/active_inference_painter.xml`.
 
 ## Semantic Layers
 
@@ -154,15 +158,18 @@ could not possess.
 | Counterfactual request schema | conforming |
 | Native realized-execution path | implemented; legacy direct `JointPlant` loop, not yet a `PlantBackend` adapter |
 | MuJoCo realized-execution path | implemented and selectable; `PlantBackend` in SI units |
-| Current motor forecast model | `native-abstract-v0` deep-copy; oracle-only transitional path, not MuJoCo-matched |
+| Selected-plant motor forecast | implemented; native-to-native and MuJoCo-to-MuJoCo with independent rollout state and explicit provenance |
+| Current motor forecast initialization | nonconforming exact-process snapshot; oracle diagnostic only |
+| MuJoCo forecast parameter uncertainty | not implemented; deterministic plant particles currently share the immutable MJCF model |
 | Live proprioceptive posterior feeding forecasts | not implemented |
 | Hardware backend | not implemented |
 
 Migration of the runtime forecast path depends on the M2 sensor package,
 observation likelihood, and compact state estimator. Until then, diagnostics
 and research reports using forecast-driven policy inference must retain the
-`baseline-oracle-v0` label. Selecting the MuJoCo execution backend does not
-remove that forecast limitation.
+`baseline-oracle-v0` label. Selecting the MuJoCo execution backend removes the
+plant-family substitution, but it does not remove the exact-state
+initialization limitation.
 
 ## Verification
 

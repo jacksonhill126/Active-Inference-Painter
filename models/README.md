@@ -50,9 +50,15 @@ maps the current legacy Cartesian controller into the physical workspace and
 maps realized tip motion back into the existing canvas coordinates. Policy
 selection and the material process are unchanged.
 
-Counterfactual motor forecasts still deep-copy `native-abstract-v0`, rather
-than running MuJoCo per policy particle. This is a named transitional
-approximation, not a claim that the two plants have identical dynamics.
+Counterfactual motor forecasts now preserve the selected backend. Under MuJoCo,
+each policy particle receives independent `MjData` initialized from the current
+MuJoCo snapshot while sharing the immutable
+`mujoco-robstride-electromechanical-v4` model. Forecast current, torque,
+velocity, and acceleration channels use per-joint RobStride/MJCF normalization
+rather than one generic native scale. This removes the native-versus-MuJoCo
+plant substitution, but it is still a `baseline-oracle-v0` exact-state
+initialization: a sensor-conditioned body posterior and MuJoCo body-parameter
+particles remain unimplemented.
 
 ## Direct-Mount Actuator Assignment
 

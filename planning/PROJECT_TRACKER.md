@@ -821,7 +821,7 @@ Depends on: T-201
 Owner: Jackson/Codex  
 Estimate: 0.5 day  
 Acceptance: Model documentation distinguishes simulator-truth fields from visual placeholders.
-Notes: Accepted 2026-07-28 in `models/README.md`, including provisional datasheet-derived RobStride values, lumped brush compliance, Python-owned paint, native counterfactual forecasts, and first calibration measurements.
+Notes: Accepted 2026-07-28 in `models/README.md`, including provisional datasheet-derived RobStride values, lumped brush compliance, Python-owned paint, the then-native counterfactual approximation, and first calibration measurements. Updated 2026-08-04 for matched MuJoCo counterfactuals and their remaining exact-state-oracle limitation.
 
 ### T-206 Add MuJoCo load/compile smoke test
 
@@ -943,7 +943,7 @@ Depends on: T-301, T-305
 Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Initial MuJoCo live-execution versus forecast-rollout scope is decided and documented.
-Notes: Accepted 2026-07-28 as live MuJoCo execution with `native-abstract-v0 approximation` counterfactual motor forecasts; runtime diagnostics and model docs expose the split. Full MuJoCo/contact forecasting is deferred and must not be claimed.
+Notes: Initially accepted 2026-07-28 with a deferred native forecast approximation. Revised 2026-08-04: MuJoCo execution now produces independent same-model MuJoCo/contact counterfactuals with explicit backend, exact-state initialization, and approximation provenance. Sensor-conditioned initialization and MuJoCo body-parameter particles remain deferred.
 
 ### T-309 Add backend parity checks
 
@@ -953,7 +953,7 @@ Depends on: T-305, T-306
 Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Same scripted stroke can run on native and MuJoCo backends with path/contact/coverage differences recorded.
-Notes: Canonical transform, logical retarget, state-shape, contact/deposition, and runtime selection tests pass. A versioned matched-stroke artifact comparing path, timing, pressure, current, and material coverage remains.
+Notes: Canonical transform, logical retarget, state-shape, contact/deposition, runtime selection, same-model counterfactual copying, rollout independence, and live-state non-mutation tests pass. A versioned matched-stroke artifact comparing path, timing, pressure, current, and material coverage remains.
 
 ### T-310 S2 lock decision
 
@@ -963,7 +963,7 @@ Depends on: T-305, T-306, T-307, T-308, T-309
 Owner: Jackson  
 Estimate: 0.5 day  
 Acceptance: S2 is locked only after MuJoCo execution, paint update, backend selection, and known gaps are documented.
-Notes: Blocked on the T-309 matched parity artifact and Jackson's explicit acceptance of the native counterfactual-forecast approximation.
+Notes: Blocked on the T-309 matched parity artifact and Jackson's explicit S2 lock decision. The native counterfactual substitution was removed 2026-08-04; exact-state oracle initialization remains documented M2 work.
 
 ## M4: Experimental Observatory And Digital Twin
 

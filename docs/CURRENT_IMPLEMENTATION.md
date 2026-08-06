@@ -673,10 +673,13 @@ sample/transport delay, dropout, or motor/output-side disagreement.
 The current painting controllers still operate in the
 `native-abstract-v0` canvas frame. A conventional execution adapter maps their
 Cartesian targets into the hardware-oriented MJCF workspace and maps the
-realized tip back to the material canvas. Counterfactual motor forecasts still
-use a deep-copied native plant for tractability and are reported as
-`native-abstract-v0 approximation`. Direct MuJoCo counterfactual forecasting
-and sensor-only body-state inference remain future work.
+realized tip back to the material canvas. Counterfactual motor forecasts now
+preserve the selected plant: MuJoCo forecasts own independent `MjData` under
+the same immutable MJCF model and report per-joint RobStride-normalized current,
+torque, velocity, and acceleration consequences. They still initialize from an
+exact process snapshot and do not sample MuJoCo body-parameter uncertainty, so
+they remain `baseline-oracle-v0`; sensor-conditioned body-state initialization
+remains future work.
 When the active-inference driver selects `stop`, the web runtime automatically
 starts a fresh painting. Every fifth completed painting is saved by default to
 `runs/web/painting_####.png`; use `--save-every-paintings` and `--archive-dir`

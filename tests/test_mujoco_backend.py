@@ -7,7 +7,8 @@ import pytest
 pytest.importorskip("mujoco")
 
 from active_painter.arm_control import ik_pose_for_canvas_point
-from active_painter.arm_sim import ArmPainterSim, JointPlant
+from active_painter.arm_agent_driver import canvas_summary_state
+from active_painter.arm_sim import ArmPainterSim
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.mujoco_backend import MujocoJointPlant, MujocoPlantBackend
@@ -18,7 +19,11 @@ from active_painter.plant_interface import (
     SteppablePlantBackend,
 )
 from active_painter.web_runtime import WebSimRuntime
-from active_painter.stroke_execution import ContactAwareStrokeController, adaptive_stroke_timing
+from active_painter.stroke_execution import (
+    ContactAwareStrokeController,
+    adaptive_stroke_timing,
+    forecast_stroke_execution,
+)
 
 
 def test_dcmotor_backend_exposes_dynamic_current_and_peak_torque_envelope() -> None:
@@ -242,7 +247,7 @@ def test_mujoco_loaded_brush_deposits_continuously_while_physical_contact_persis
     assert sim.brush.loaded
 
 
-def test_mujoco_actual_execution_keeps_native_counterfactual_approximation() -> None:
+def test_mujoco_counterfactual_copy_preserves_model_and_has_independent_state() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=32))
     sim.plant = MujocoJointPlant()
     sim.reset_pose()
@@ -250,10 +255,64 @@ def test_mujoco_actual_execution_keeps_native_counterfactual_approximation() -> 
     forecast_copy = copy.deepcopy(sim)
 
     assert isinstance(sim.plant, MujocoJointPlant)
-    assert isinstance(forecast_copy.plant, JointPlant)
-    assert sim.plant.counterfactual_backend_id == "native-abstract-v0 approximation"
+    assert isinstance(forecast_copy.plant, MujocoJointPlant)
+    assert forecast_copy.plant.backend.model is sim.plant.backend.model
+    assert forecast_copy.plant.backend.data is not sim.plant.backend.data
+    assert (
+        sim.plant.counterfactual_backend_id
+        == "mujoco-robstride-electromechanical-v4"
+    )
     assert forecast_copy.actual_pose == sim.actual_pose
     assert np.array_equal(forecast_copy.canvas.thickness, sim.canvas.thickness)
+
+    original_position = sim.plant.backend.joint_position_rad().copy()
+    moved_position = original_position.copy()
+    moved_position[0] += 0.1
+    forecast_copy.plant.backend.set_state(moved_position, control_rad=moved_position)
+
+    assert forecast_copy.plant.backend.joint_position_rad()[0] == pytest.approx(
+        moved_position[0]
+    )
+    assert sim.plant.backend.joint_position_rad() == pytest.approx(original_position)
+
+
+def test_mujoco_motor_forecast_uses_mujoco_dynamics_without_mutating_live_plant() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=32, motor_forecast_samples=1))
+    sim.plant = MujocoJointPlant()
+    sim.reset_pose()
+    initial_state = sim.plant.backend.state_snapshot()
+    action = StrokeAction(0.38, 0.32, 0.62, 0.68, 0.08, 0.7, 1.0)
+
+    assert sim.plant.forecast_current_scale == pytest.approx(
+        sim.plant.backend._model_peak_current
+    )
+    assert sim.plant.forecast_torque_scale == pytest.approx(
+        sim.plant.backend._custom_numeric("robstride_peak_torque_nm")
+    )
+    assert sim.plant.forecast_current_scale[0] != pytest.approx(
+        sim.plant.forecast_current_scale[2]
+    )
+    assert sim.plant.forecast_torque_scale[0] != pytest.approx(
+        sim.plant.forecast_torque_scale[2]
+    )
+
+    forecast = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        dt=1.0 / 45.0,
+    )
+
+    assert forecast.forecast_plant_backend_id == "mujoco-robstride-electromechanical-v4"
+    assert forecast.forecast_initialization == (
+        "baseline-oracle-v0 exact MuJoCo process snapshot"
+    )
+    assert "exact MJCF dynamics/contact" in forecast.forecast_approximation
+    assert forecast.proprioceptive_observation_dim == 27
+    assert np.isfinite(forecast.proprioceptive_mean).all()
+    assert sim.plant.backend.data.time == pytest.approx(initial_state["time"])
+    assert sim.plant.backend.data.qpos == pytest.approx(initial_state["qpos"])
+    assert sim.plant.backend.data.qvel == pytest.approx(initial_state["qvel"])
 
 
 def test_web_runtime_can_select_direct_mujoco_state() -> None:
@@ -273,7 +332,16 @@ def test_web_runtime_can_select_direct_mujoco_state() -> None:
     telemetry = runtime.telemetry_log.recent(1)[0]
 
     assert state["plantBackend"] == "mujoco"
-    assert state["counterfactualPlantBackend"] == "native-abstract-v0 approximation"
+    assert (
+        state["counterfactualPlantBackend"]
+        == "mujoco-robstride-electromechanical-v4"
+    )
+    assert state["counterfactualPlant"]["backendId"] == (
+        "mujoco-robstride-electromechanical-v4"
+    )
+    assert state["counterfactualPlant"]["initialization"] == (
+        "baseline-oracle-v0 exact MuJoCo process snapshot"
+    )
     assert state["robot"]["mode"] == "mujoco_direct"
     assert (
         state["robot"]["backendId"]
