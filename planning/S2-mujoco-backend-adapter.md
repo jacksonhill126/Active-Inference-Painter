@@ -227,8 +227,11 @@ Notes:
 - Revised 2026-08-05: the MuJoCo runtime updates `BodyStateEstimator` from
   physical sensor packets and forecast q/qvel particles start from a frozen
   posterior revision with independent future-noise seeds. The precision profile
-  is provisional simulation-only. Material/brush/model context is still copied,
-  contact belief is not mapped into brush compliance, and MuJoCo body-parameter
+  is provisional simulation-only. Material fields now come from
+  `SpatialCanvasState`; compact brush load/pigment comes from `BrushLoadBelief`,
+  with independent versioned microstructure noise. Substrate grain/model
+  context and held-paint/persistent-bristle history remain unresolved, contact
+  belief is not mapped into brush compliance, and MuJoCo body-parameter
   uncertainty is not sampled. A fully sensor-equivalent `ExecutionForecaster`
   must not be claimed.
 

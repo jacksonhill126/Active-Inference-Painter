@@ -203,6 +203,7 @@ class ArmActiveInferenceDriver:
     _planning_forecast_cache: dict[tuple[object, ...], ExecutionForecast] = field(default_factory=dict, init=False)
     _planning_body_belief: BodyBeliefSnapshot | None = field(default=None, init=False)
     _planning_material_belief: SpatialCanvasState | None = field(default=None, init=False)
+    _planning_brush_beliefs: dict[str, BrushLoadBelief] = field(default_factory=dict, init=False)
     _planning_started_at: float | None = field(default=None, init=False)
     _planner_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _planner_thread: threading.Thread | None = field(default=None, init=False)
@@ -912,6 +913,7 @@ class ArmActiveInferenceDriver:
             self._planning_forecast_cache = {}
             self._planning_body_belief = None
             self._planning_material_belief = None
+            self._planning_brush_beliefs = {}
             self._planning_started_at = None
             self._pending_current = None
             self._pending_stopped = False
@@ -1349,6 +1351,9 @@ class ArmActiveInferenceDriver:
                 if isinstance(self.belief, SpatialCanvasState)
                 else None
             )
+            self._planning_brush_beliefs = copy.deepcopy(
+                self.brush_load_beliefs
+            )
             generation = self._planner_generation
         thread = threading.Thread(
             target=self._background_local_passage_plan,
@@ -1486,6 +1491,9 @@ class ArmActiveInferenceDriver:
             state = self._planner_state(sim)
             body_snapshot = copy.deepcopy(sim)
             self._planning_body_belief = copy.deepcopy(self.body_belief)
+            self._planning_brush_beliefs = copy.deepcopy(
+                self.brush_load_beliefs
+            )
             self.planning = True
             self._planning_started_at = time.perf_counter()
             self._pending_error = None
@@ -1572,6 +1580,9 @@ class ArmActiveInferenceDriver:
                     copy.deepcopy(self.belief)
                     if isinstance(self.belief, SpatialCanvasState)
                     else None
+                )
+                self._planning_brush_beliefs = copy.deepcopy(
+                    self.brush_load_beliefs
                 )
             self._profile_add_seconds("beliefUpdateSeconds", time.perf_counter() - phase_started)
             phase_started = time.perf_counter()
@@ -1716,7 +1727,7 @@ class ArmActiveInferenceDriver:
     ) -> ExecutionForecast | None:
         if sim is None or action.stop:
             return None
-        belief = self.brush_load_beliefs[self._brush_key(action.tone)]
+        belief = self._planning_brush_belief(action.tone)
         key = self._forecast_cache_key(
             action,
             motor_primitive,
@@ -1756,7 +1767,11 @@ class ArmActiveInferenceDriver:
             belief_key = (
                 brush_belief.revision,
                 round(brush_belief.load_mean, 6),
+                round(brush_belief.load_variance, 8),
                 round(brush_belief.black_fraction_mean, 6),
+                round(brush_belief.black_fraction_variance, 8),
+                brush_belief.inference_model_id,
+                brush_belief.calibration_status,
             )
         body_key: tuple[object, ...] = ()
         if self._planning_body_belief is not None:
@@ -1777,6 +1792,15 @@ class ArmActiveInferenceDriver:
             + body_key
             + material_key
         )
+
+    def _planning_brush_belief(self, tone: float) -> BrushLoadBelief:
+        key = self._brush_key(tone)
+        beliefs = (
+            self._planning_brush_beliefs
+            if self._planning_brush_beliefs
+            else self.brush_load_beliefs
+        )
+        return beliefs[key]
 
     def _forecast_noise_seed(self) -> int:
         seed = 0
@@ -2203,7 +2227,7 @@ class ArmActiveInferenceDriver:
         for index, motor_policy in enumerate(motor_policies):
             primitive = motor_policy.motor_primitive
             preparation = motor_policy.brush_preparation
-            belief = self.brush_load_beliefs[self._brush_key(action.tone)]
+            belief = self._planning_brush_belief(action.tone)
             key = self._forecast_cache_key(
                 action,
                 primitive,

@@ -3,13 +3,18 @@ from __future__ import annotations
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, replace
+import math
 from typing import Callable, Sequence
 
 import numpy as np
 
 from .arm_control import ik_pose_for_canvas_point
-from .arm_sim import ArmPainterSim, ArmPose, JOINT_NAMES, clip_scalar
-from .brush_loading import BrushLoadBelief
+from .arm_sim import ArmPainterSim, ArmPose, Brush, JOINT_NAMES, clip_scalar
+from .brush_loading import (
+    BRUSH_MICROSTRUCTURE_PRIOR_VERSION,
+    BrushLoadBelief,
+    BrushLoadingModel,
+)
 from .env import StrokeAction
 from .local_spatial import pixel_logvar_from_state, pixel_material_from_state
 from .plant_interface import BodyBeliefSnapshot
@@ -98,6 +103,11 @@ class ExecutionForecast:
     material_posterior_revision: int | None = None
     material_inference_model_id: str | None = None
     material_calibration_status: str | None = None
+    brush_posterior_revision: int | None = None
+    brush_inference_model_id: str | None = None
+    brush_calibration_status: str | None = None
+    brush_microstructure_prior_id: str | None = None
+    brush_preparation_kind: str | None = None
 
     def diagnostics(self, *, include_state_fields: bool = True) -> dict[str, object]:
         omitted = {"next_state_mean", "next_state_variance", "canvas_delta_mean"}
@@ -723,6 +733,114 @@ def _initialize_from_material_belief(
     )
 
 
+def _set_representative_brush_microstructure(brush: Brush) -> None:
+    """Set particle zero to a deterministic representative of the prior.
+
+    Bristle offsets and gains use their prior means. Uniform circular phases
+    have no unique scalar mean, so streak phases use deterministic strata and
+    boundary wobble is set to its zero-mean effect. Later particles sample the
+    declared microstructure prior instead.
+    """
+
+    cfg = brush.config
+    count = max(1, int(cfg.brush_bristle_count))
+    brush.bristle_offsets = (
+        np.linspace(-1.0, 1.0, count, dtype=np.float32)
+        if count > 1
+        else np.zeros(1, dtype=np.float32)
+    )
+    mean_gain = 1.0 - 0.5 * clip_scalar(cfg.brush_bristle_depth, 0.0, 1.0)
+    brush.bristle_gains = np.full(count, mean_gain, dtype=np.float32)
+    brush.streak_phases = (
+        (np.arange(count, dtype=np.float32) + 0.5) / float(count)
+    ).astype(np.float32)
+    brush.wobble_phases = np.zeros(3, dtype=np.float32)
+    brush.wobble_amps = np.zeros(3, dtype=np.float32)
+
+
+def _initialize_from_brush_belief(
+    working: ArmPainterSim,
+    action: StrokeAction,
+    belief: BrushLoadBelief | None,
+    *,
+    brush_reload: bool,
+    independent_noise_seed: int,
+    sample_index: int,
+) -> BrushLoadBelief:
+    """Initialize q(brush) and independent microstructure forecast noise."""
+
+    if independent_noise_seed < 0:
+        raise ValueError("independent_noise_seed must be non-negative.")
+    model = BrushLoadingModel(working.config)
+    if belief is None:
+        if not brush_reload:
+            raise ValueError(
+                "Preserve forecasts require a BrushLoadBelief; copied process "
+                "brush state is not an admissible fallback."
+            )
+        belief = model.unloaded_belief(action.tone)
+    prepared = (
+        model.reload_transition(belief, action.tone)
+        if brush_reload
+        else belief
+    )
+    if sample_index == 0:
+        load = prepared.load_mean
+        black_fraction = prepared.black_fraction_mean
+    else:
+        moment_rng = np.random.default_rng(
+            np.random.SeedSequence(
+                [
+                    int(independent_noise_seed),
+                    int(sample_index),
+                    0x42524C44,
+                    int(prepared.revision),
+                    int(action.tone >= 0.5),
+                ]
+            )
+        )
+        load = float(
+            np.clip(
+                moment_rng.normal(
+                    prepared.load_mean,
+                    math.sqrt(prepared.load_variance),
+                ),
+                0.0,
+                1.0,
+            )
+        )
+        black_fraction = float(
+            np.clip(
+                moment_rng.normal(
+                    prepared.black_fraction_mean,
+                    math.sqrt(prepared.black_fraction_variance),
+                ),
+                0.0,
+                1.0,
+            )
+        )
+
+    working.select_brush(action.tone)
+    brush = working.brush
+    brush.rng = np.random.default_rng(
+        np.random.SeedSequence(
+            [
+                int(independent_noise_seed),
+                int(sample_index),
+                0x42524D49,
+                int(prepared.revision),
+                int(action.tone >= 0.5),
+            ]
+        )
+    )
+    brush.reload(load, action.tone)
+    brush.fresh_tone = black_fraction
+    brush.carried_tone = black_fraction
+    if sample_index == 0:
+        _set_representative_brush_microstructure(brush)
+    return prepared
+
+
 def _forecast_stroke_execution_once(
     sim: ArmPainterSim,
     action: StrokeAction,
@@ -773,17 +891,16 @@ def _forecast_stroke_execution_once(
             independent_noise_seed=independent_noise_seed,
             sample_index=noise_sample_index,
         )
-    before_state = summary_fn(working)
-    working.select_brush(action.tone)
     working.deposition_amount = action.amount
-    if brush_reload:
-        working.load_brush(1.0, action.tone)
-    elif brush_belief is not None:
-        # Generative-model forecast from q(brush), never from the exact process
-        # brush reservoir hidden inside the simulator snapshot.
-        working.brush.reload(brush_belief.load_mean, action.tone)
-        working.brush.fresh_tone = brush_belief.black_fraction_mean
-        working.brush.carried_tone = brush_belief.black_fraction_mean
+    prepared_brush_belief = _initialize_from_brush_belief(
+        working,
+        action,
+        brush_belief,
+        brush_reload=brush_reload,
+        independent_noise_seed=independent_noise_seed,
+        sample_index=noise_sample_index,
+    )
+    before_state = summary_fn(working)
     controller.reset(working, action, timing)
 
     intended_points: list[tuple[float, float]] = []
@@ -1051,9 +1168,21 @@ def _forecast_stroke_execution_once(
         )
         plant_approximation = (
             f"{plant_approximation}; material samples use piecewise-constant "
-            "posterior-cell upsampling and physical clipping; substrate grain, "
-            "brush bristle/RNG state, and model parameters remain copied"
+            "posterior-cell upsampling and physical clipping; substrate grain "
+            "and model parameters remain copied"
         )
+    plant_initialization = (
+        f"{plant_initialization}; BrushLoadBelief revision "
+        f"{prepared_brush_belief.revision} after "
+        f"{'reload' if brush_reload else 'preserve'}; particle zero uses "
+        "belief means and representative microstructure, later particles "
+        "sample diagonal load/mixture variance and independent microstructure"
+    )
+    plant_approximation = (
+        f"{plant_approximation}; {BRUSH_MICROSTRUCTURE_PRIOR_VERSION} uses "
+        "configured uncalibrated bristle priors; held paint and bristle history "
+        "are collapsed into load/average-pigment belief"
+    )
 
     return ExecutionForecast(
         next_state_mean=after_state.astype(np.float32),
@@ -1128,6 +1257,11 @@ def _forecast_stroke_execution_once(
             if initial_material_belief is not None
             else None
         ),
+        brush_posterior_revision=prepared_brush_belief.revision,
+        brush_inference_model_id=prepared_brush_belief.inference_model_id,
+        brush_calibration_status=prepared_brush_belief.calibration_status,
+        brush_microstructure_prior_id=BRUSH_MICROSTRUCTURE_PRIOR_VERSION,
+        brush_preparation_kind="reload" if brush_reload else "preserve",
     )
 
 

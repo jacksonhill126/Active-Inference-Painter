@@ -413,11 +413,17 @@ likelihood is provisional simulation-only and body VFE is logged separately.
 Also on 2026-08-05, planning began freezing one `SpatialCanvasState` revision
 and initializing forecast thickness, wetness, black mass, and surface tone
 from its mean and diagonal particles. Material samples cannot read the hidden
-live fields, and derived coverage/contrast are recomputed. This does not yet
-initialize substrate grain, brush bristle/RNG state, contact compliance, or
-model parameters from beliefs, nor pair each executed-action transition prior
-with the delivered camera likelihood update. AI-204 remains not accepted on
-those grounds. On 2026-07-29 the
+live fields, and derived coverage/contrast are recomputed. Planning now also
+freezes the selected `BrushLoadBelief`: particle zero uses load/average-pigment
+means and a representative microstructure, while later particles sample its
+diagonal moments and independent `brush-microstructure-prior-v0` noise. The
+live brush RNG and exact bristle realization no longer initialize forecasts.
+Held paint and persistent bristle history remain collapsed, and the camera
+path does not yet supply the local mark statistic used by the brush
+likelihood. The forecast also does not yet initialize substrate grain, contact
+compliance, or model parameters from beliefs, nor pair each executed-action
+transition prior with the delivered camera likelihood update. AI-204 remains
+not accepted on those grounds. On 2026-07-29 the
 six-aggregate summary planner was formally marked
 `obsolete_compatibility_fixture`; it is not an acceptable compact posterior
 for AI-204.
@@ -777,10 +783,12 @@ Notes: The live default now fails closed before copied simulator state can
 reach the model. On 2026-08-05 the MuJoCo runtime began initializing forecast
 q/qvel from `BodyBeliefSnapshot` with independent future plant noise. T-109
 remains blocked because native execution lacks a `PlantBackend` sensor adapter
-and the forecast container still copies substrate grain, brush bristle/RNG,
-and model state rather than building all initial latents from beliefs. The four
-independent material fields are now overwritten from `SpatialCanvasState` when
-one is supplied.
+and the forecast container still copies substrate grain and model state rather
+than building all initial latents from beliefs. The four independent material
+fields are overwritten from `SpatialCanvasState` when supplied; compact brush
+load/pigment is overwritten from `BrushLoadBelief`, and bristle-scale variation
+uses independent prior noise. Held paint and persistent bristle history remain
+collapsed rather than inferred.
 
 ## S1: MuJoCo Physical Draft And Logical Retarget
 
@@ -954,7 +962,7 @@ Depends on: T-301, T-305
 Owner: Jackson/Codex
 Estimate: 1-2 days  
 Acceptance: Initial MuJoCo live-execution versus forecast-rollout scope is decided and documented.
-Notes: Initially accepted 2026-07-28 with a deferred native forecast approximation. Revised 2026-08-04: MuJoCo execution now produces independent same-model MuJoCo/contact counterfactuals with explicit backend and approximation provenance. Revised 2026-08-05: MuJoCo q/qvel initialization is sensor-conditioned through a frozen `BodyBeliefSnapshot` and independent seed. Material/brush/model context, contact-to-compliance initialization, and MuJoCo body-parameter particles remain deferred.
+Notes: Initially accepted 2026-07-28 with a deferred native forecast approximation. Revised 2026-08-04: MuJoCo execution now produces independent same-model MuJoCo/contact counterfactuals with explicit backend and approximation provenance. Revised 2026-08-05: MuJoCo q/qvel initialization is sensor-conditioned through a frozen `BodyBeliefSnapshot` and independent seed; material fields initialize from `SpatialCanvasState`; compact brush load/pigment initializes from `BrushLoadBelief` and bristle-scale variation uses an independent versioned prior. Substrate grain/model context, held-paint and persistent-bristle history, contact-to-compliance initialization, and MuJoCo body-parameter particles remain deferred.
 
 ### T-309 Add backend parity checks
 

@@ -7,7 +7,12 @@ from active_painter.arm_agent_driver import (
     canvas_summary_state,
 )
 from active_painter.arm_sim import ArmPainterSim
-from active_painter.brush_loading import BrushLoadBelief, BrushLoadingModel
+from active_painter.brush_loading import (
+    BRUSH_LOADING_CALIBRATION_STATUS,
+    BRUSH_LOADING_MODEL_VERSION,
+    BrushLoadBelief,
+    BrushLoadingModel,
+)
 from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
@@ -38,6 +43,8 @@ def test_reload_transition_is_full_and_uniformly_selected_color() -> None:
     assert white.load_variance == pytest.approx(
         model.config.brush_reload_load_std**2
     )
+    assert white.inference_model_id == BRUSH_LOADING_MODEL_VERSION
+    assert white.calibration_status == BRUSH_LOADING_CALIBRATION_STATUS
 
 
 def test_preparation_posterior_preserves_full_matching_brush_and_reloads_low_brush() -> None:
@@ -93,6 +100,11 @@ def test_camera_derived_mark_likelihood_updates_load_and_reports_vfe() -> None:
     assert model.last_vfe.expected_log_likelihood == pytest.approx(
         -model.last_vfe.negative_log_likelihood
     )
+    assert posterior.inference_model_id == (
+        f"{BRUSH_LOADING_MODEL_VERSION}:"
+        "camera-derived-mark-deposition-likelihood-v0"
+    )
+    assert posterior.calibration_status == BRUSH_LOADING_CALIBRATION_STATUS
 
 
 def test_driver_preserve_policy_does_not_implicitly_reload_process_brush() -> None:

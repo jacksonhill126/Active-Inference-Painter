@@ -197,11 +197,13 @@ Progress, 2026-08-05: `BodyStateEstimator` is connected to the MuJoCo sensor
 packet and motor forecasts initialize q/qvel from a frozen posterior revision
 with independent future-noise seeds. Forecast thickness, wetness, black mass,
 and surface tone now initialize from a separately frozen spatial posterior,
-with mean particle zero and diagonal material particles. The full
-material/relational factorization, substrate-grain/brush/contact/model rollout
-initialization, contact-to-brush compliance mapping, and continuous
-action-conditioned update schedule remain open; see the canonical status in
-`PROJECT_TRACKER.md`.
+with mean particle zero and diagonal material particles. Compact brush load and
+average pigment now initialize from a frozen `BrushLoadBelief`; later particles
+also use independent versioned microstructure noise rather than continuing the
+live brush RNG. The full material/relational factorization,
+substrate-grain/model rollout initialization, held-paint and persistent-bristle
+history, contact-to-brush compliance mapping, and continuous action-conditioned
+update schedule remain open; see the canonical status in `PROJECT_TRACKER.md`.
 
 ### AI-205 Align local dynamics training with live execution
 

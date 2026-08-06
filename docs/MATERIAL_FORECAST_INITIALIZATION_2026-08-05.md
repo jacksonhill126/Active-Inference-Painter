@@ -105,11 +105,18 @@ covered provenance/support validation added during review.
 
 ## Remaining Nonconformance
 
+Update: the brush realization/RNG item below was corrected later on 2026-08-05
+by `docs/BRUSH_FORECAST_INITIALIZATION_2026-08-05.md`. Compact load/pigment now
+comes from `BrushLoadBelief`, and bristle-scale variation uses independent
+versioned prior noise. Held paint and persistent bristle history remain
+collapsed approximations.
+
 This does not make the whole forecast sensor-equivalent. The deep-copied
 rollout container still supplies:
 
 - substrate grain;
-- brush bristle realization and brush RNG state;
+- held-paint and persistent-bristle history (compact brush state now uses a
+  posterior plus independent microstructure prior as noted above);
 - plant/model parameters;
 - native plant dynamic/RNG state when no `BodyBeliefSnapshot` is supplied.
 
@@ -125,11 +132,10 @@ back to process truth.
 
 ## Recommended Next Boundary
 
-The next implementation should remove copied brush realization/RNG from
-counterfactual forecasts by defining a forecastable brush-state posterior that
-extends the existing load/average-pigment belief with the minimal bristle or
-mark-variation factors needed by the paint likelihood. Contact-to-compliance
-mapping should follow only after the body posterior explicitly represents the
-corresponding compliance latent. Continuous action-conditioned camera updates
-can then be wired without allowing either forecast path to fall back to hidden
-process material.
+The next implementation should continuously pair executed-action transition
+priors with delivered camera updates, including the local mark statistic used
+by the brush likelihood. Contact-to-compliance mapping should follow only after
+the body posterior explicitly represents the corresponding compliance latent.
+Substrate-grain and parameter beliefs can then replace the remaining copied
+forecast context without allowing either path to fall back to hidden process
+material.

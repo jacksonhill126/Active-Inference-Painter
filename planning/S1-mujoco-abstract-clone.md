@@ -15,8 +15,10 @@ now preserve the selected plant: MuJoCo execution predicts through independent
 `MjData` under the same immutable model, and its runtime q/qvel initialization
 comes from a provisional sensor-conditioned body posterior. Independent
 material fields initialize from the frozen spatial posterior. Copied substrate
-grain/brush/model context, contact-to-compliance initialization, and MuJoCo
-parameter uncertainty remain declared forecast approximations.
+grain/model context, collapsed held-paint/persistent-bristle history,
+contact-to-compliance initialization, and MuJoCo parameter uncertainty remain
+declared forecast approximations. Compact brush load/pigment and independent
+bristle-scale prior noise now have their own declared forecast boundary.
 
 ## Physical-Draft And Retarget Contracts
 

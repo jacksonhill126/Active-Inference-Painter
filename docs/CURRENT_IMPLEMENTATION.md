@@ -630,10 +630,16 @@ surface tone with belief samples. Particle zero is the posterior mean; later
 particles sample diagonal variance at the posterior grid, then use
 piecewise-constant upsampling and physical projection. This preserves spatial
 cell correlation and keeps coverage/contrast deterministic. The container
-still copies substrate grain, brush bristle/RNG state, and model parameters,
-and the live loop does not yet pair every executed-action transition prior with
-its delivered camera likelihood update. Those are the remaining fail-closed
-boundaries for painting policy inference.
+also replaces copied brush loading and RNG continuation: a frozen
+`BrushLoadBelief` supplies load/pigment moments, and
+`brush-microstructure-prior-v0` supplies independent bristle-scale mark
+variation. Particle zero uses belief means and a deterministic representative
+microstructure; later particles sample both sources of uncertainty. Held paint
+and bristle history are still collapsed into the compact belief. The container
+still copies substrate grain and model parameters, and the live loop does not
+yet pair every executed-action transition prior with its delivered camera
+likelihood update. Those are the remaining fail-closed boundaries for painting
+policy inference.
 
 To reproduce the legacy upper-bound comparator, opt in explicitly:
 
@@ -700,10 +706,12 @@ joint position/velocity now starts from the frozen body posterior rather than
 exact MuJoCo q/qvel; particle randomness is isolated from the live process.
 Thickness, wetness, black mass, and surface tone now start from the frozen
 spatial posterior rather than exact canvas fields. Substrate grain, brush
-bristle/RNG state, and model context are still copied, contact belief is not
-mapped into brush compliance, and MuJoCo body-parameter uncertainty is not
-sampled. Those limitations retain the `baseline-oracle-v0` painting-policy
-label even though joint and material initialization are posterior-conditioned.
+history, and model context remain unresolved, but forecast brush load/pigment
+now comes from the frozen belief and bristle-scale variation from independent
+prior noise rather than copied RNG state. Contact belief is not mapped into
+brush compliance, and MuJoCo body-parameter uncertainty is not sampled. Those
+limitations retain the `baseline-oracle-v0` painting-policy label even though
+joint, material, and compact brush initialization are posterior-conditioned.
 When the active-inference driver selects `stop`, the web runtime automatically
 starts a fresh painting. Every fifth completed painting is saved by default to
 `runs/web/painting_####.png`; use `--save-every-paintings` and `--archive-dir`

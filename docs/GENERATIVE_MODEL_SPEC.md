@@ -79,8 +79,12 @@ and surface-tone distribution: particle zero uses its mean and later particles
 sample its diagonal variance at posterior-cell resolution. Nonnegative support,
 `black_mass <= thickness`, and tone bounds are physically projected; coverage
 and ground contrast are recomputed rather than sampled. Substrate grain, brush
-bristle/RNG state, and model parameters still come from the copied process
-container.
+history, and model parameters remain unresolved. Forecast brush load and black
+fraction use a frozen diagonal `BrushLoadBelief`; particle zero uses its means
+and later particles sample bounded Gaussian moments. Bristle offsets/gains and
+mark phases use `brush-microstructure-prior-v0` under an independent forecast
+seed, with a deterministic representative particle zero. The approximation
+collapses held paint and persistent bristle history into load/average pigment.
 
 This specification is "executable" in the limited engineering sense that every
 factor and free-energy term maps to a named implementation location. It does
@@ -1056,10 +1060,11 @@ details:
 
 1. Oracle diagnostic mode still uses exact simulator material state as its
    observation; sensor mode uses the analytic camera likelihood but remains
-   blocked from live control by copied substrate-grain/brush/contact/model
-   forecast context and continuous action-conditioned observation scheduling.
-   MuJoCo forecast q/qvel and independent material-field initialization are now
-   posterior-conditioned when their respective snapshots are supplied.
+   blocked from live control by copied substrate-grain/contact/model forecast
+   context, collapsed brush history, and continuous action-conditioned
+   observation scheduling. MuJoCo q/qvel, independent material fields, and
+   compact brush initialization are posterior-conditioned when their respective
+   snapshots are supplied; brush microstructure uses independent prior noise.
 2. Summary and pixel posteriors are diagonal Gaussian.
 3. Derived channels may be double-counted before deterministic projection. The
    compression gap and both baseline members are computed over all six material

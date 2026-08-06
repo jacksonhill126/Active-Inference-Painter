@@ -12,6 +12,10 @@ from .policies import BrushPreparationPolicy
 
 
 BRUSH_LOADING_MODEL_VERSION = "brush-loading-belief-v0"
+BRUSH_LOADING_CALIBRATION_STATUS = (
+    "provisional_simulation_only_not_hardware_calibrated"
+)
+BRUSH_MICROSTRUCTURE_PRIOR_VERSION = "brush-microstructure-prior-v0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +32,8 @@ class BrushLoadBelief:
     black_fraction_mean: float
     black_fraction_variance: float
     revision: int = 0
+    inference_model_id: str = BRUSH_LOADING_MODEL_VERSION
+    calibration_status: str = BRUSH_LOADING_CALIBRATION_STATUS
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.load_mean <= 1.0:
@@ -48,6 +54,10 @@ class BrushLoadBelief:
             raise ValueError("Brush belief moments must be finite.")
         if self.revision < 0:
             raise ValueError("revision must be non-negative.")
+        if not self.inference_model_id or not self.calibration_status:
+            raise ValueError(
+                "inference_model_id and calibration_status must be non-empty."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +103,8 @@ class BrushLoadingModel:
             load_variance=self.config.brush_initial_load_std**2,
             black_fraction_mean=tone,
             black_fraction_variance=self.config.brush_reload_mixture_std**2,
+            inference_model_id=BRUSH_LOADING_MODEL_VERSION,
+            calibration_status=BRUSH_LOADING_CALIBRATION_STATUS,
         )
 
     def reload_transition(
@@ -109,6 +121,8 @@ class BrushLoadingModel:
             black_fraction_mean=tone,
             black_fraction_variance=self.config.brush_reload_mixture_std**2,
             revision=belief.revision + 1,
+            inference_model_id=BRUSH_LOADING_MODEL_VERSION,
+            calibration_status=BRUSH_LOADING_CALIBRATION_STATUS,
         )
 
     def stroke_transition(
@@ -144,6 +158,8 @@ class BrushLoadingModel:
                 )
             ),
             revision=belief.revision + 1,
+            inference_model_id=BRUSH_LOADING_MODEL_VERSION,
+            calibration_status=BRUSH_LOADING_CALIBRATION_STATUS,
         )
 
     def infer_load_from_mark(
@@ -209,6 +225,11 @@ class BrushLoadingModel:
             black_fraction_mean=prior.black_fraction_mean,
             black_fraction_variance=prior.black_fraction_variance,
             revision=prior.revision + 1,
+            inference_model_id=(
+                f"{BRUSH_LOADING_MODEL_VERSION}:"
+                "camera-derived-mark-deposition-likelihood-v0"
+            ),
+            calibration_status=BRUSH_LOADING_CALIBRATION_STATUS,
         )
 
     def infer_preparation(

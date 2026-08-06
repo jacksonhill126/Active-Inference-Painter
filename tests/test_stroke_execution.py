@@ -11,6 +11,10 @@ import active_painter.stroke_execution as stroke_execution_module
 
 from active_painter.arm_agent_driver import canvas_summary_state
 from active_painter.arm_sim import ArmPainterSim, JOINT_NAMES, JointPlant
+from active_painter.brush_loading import (
+    BRUSH_MICROSTRUCTURE_PRIOR_VERSION,
+    BrushLoadBelief,
+)
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
 from active_painter.motor_planning import motor_efe_terms, motor_realization_log_evidence
@@ -281,6 +285,197 @@ def test_material_posterior_replaces_hidden_canvas_and_samples_declared_variance
         np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(second.next_state_mean, first.next_state_mean)
     np.testing.assert_allclose(second.next_state_variance, first.next_state_variance)
+
+
+def test_brush_posterior_replaces_live_rng_and_samples_mark_variation(
+    monkeypatch,
+) -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        motor_forecast_samples=3,
+        body_param_jitter_fraction=0.0,
+        canvas_grain_strength=0.0,
+    )
+    sim = ArmPainterSim(cfg)
+    sim.plant.process_noise_enabled = False
+    sim.load_brush(0.22, 1.0)
+    live_brush_state = {
+        "load": sim.brush.load,
+        "fresh_tone": sim.brush.fresh_tone,
+        "offsets": sim.brush.bristle_offsets.copy(),
+        "gains": sim.brush.bristle_gains.copy(),
+        "streaks": sim.brush.streak_phases.copy(),
+        "wobble_phases": sim.brush.wobble_phases.copy(),
+        "wobble_amps": sim.brush.wobble_amps.copy(),
+        "rng": copy.deepcopy(sim.brush.rng.bit_generator.state),
+    }
+    belief = BrushLoadBelief(
+        load_mean=0.63,
+        load_variance=0.01,
+        black_fraction_mean=0.74,
+        black_fraction_variance=0.02,
+        revision=9,
+        inference_model_id="brush-loading-belief-v0:test-camera-v0",
+        calibration_status="synthetic_test_only",
+    )
+    action = StrokeAction(0.42, 0.45, 0.58, 0.55, 0.05, 0.6, 1.0)
+    captured: list[dict[str, object]] = []
+    original_reset = ContactAwareStrokeController.reset
+
+    def capture_reset(self, working, reset_action, timing):
+        brush = working.brush
+        captured.append(
+            {
+                "load": brush.load,
+                "fresh_tone": brush.fresh_tone,
+                "offsets": brush.bristle_offsets.copy(),
+                "gains": brush.bristle_gains.copy(),
+                "streaks": brush.streak_phases.copy(),
+                "wobble_phases": brush.wobble_phases.copy(),
+                "wobble_amps": brush.wobble_amps.copy(),
+                "rng": copy.deepcopy(brush.rng.bit_generator.state),
+            }
+        )
+        return original_reset(self, working, reset_action, timing)
+
+    monkeypatch.setattr(ContactAwareStrokeController, "reset", capture_reset)
+    first = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        dt=0.02,
+        brush_reload=False,
+        brush_belief=belief,
+        independent_noise_seed=719,
+    )
+    first_initializations = copy.deepcopy(captured)
+
+    assert len(first_initializations) == 3
+    assert first_initializations[0]["load"] == pytest.approx(belief.load_mean)
+    assert first_initializations[0]["fresh_tone"] == pytest.approx(
+        belief.black_fraction_mean
+    )
+    np.testing.assert_allclose(
+        first_initializations[0]["offsets"],
+        np.linspace(-1.0, 1.0, cfg.brush_bristle_count, dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        first_initializations[0]["gains"],
+        1.0 - 0.5 * cfg.brush_bristle_depth,
+    )
+    np.testing.assert_allclose(first_initializations[0]["wobble_amps"], 0.0)
+    assert first_initializations[1]["load"] != pytest.approx(
+        first_initializations[0]["load"]
+    )
+    assert not np.allclose(
+        first_initializations[1]["offsets"],
+        first_initializations[0]["offsets"],
+    )
+    assert not np.allclose(
+        first_initializations[2]["streaks"],
+        first_initializations[0]["streaks"],
+    )
+    assert first.brush_posterior_revision == belief.revision
+    assert first.brush_inference_model_id == belief.inference_model_id
+    assert first.brush_calibration_status == belief.calibration_status
+    assert first.brush_microstructure_prior_id == BRUSH_MICROSTRUCTURE_PRIOR_VERSION
+    assert first.brush_preparation_kind == "preserve"
+    assert "BrushLoadBelief revision 9" in first.forecast_initialization
+    assert BRUSH_MICROSTRUCTURE_PRIOR_VERSION in first.forecast_approximation
+    assert sim.brush.load == pytest.approx(live_brush_state["load"])
+    assert sim.brush.fresh_tone == pytest.approx(live_brush_state["fresh_tone"])
+    np.testing.assert_allclose(sim.brush.bristle_offsets, live_brush_state["offsets"])
+    np.testing.assert_allclose(sim.brush.bristle_gains, live_brush_state["gains"])
+    assert sim.brush.rng.bit_generator.state == live_brush_state["rng"]
+
+    captured.clear()
+    mean_particle = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        dt=0.02,
+        rollout_samples=1,
+        brush_reload=False,
+        brush_belief=belief,
+        independent_noise_seed=719,
+    )
+    assert np.any(first.next_state_variance > mean_particle.next_state_variance)
+
+    # Neither exact brush fields nor continuation of its RNG can affect a
+    # belief-conditioned forecast under the same independent request seed.
+    sim.brush.load = 0.04
+    sim.brush.fresh_tone = 0.05
+    sim.brush.bristle_offsets = sim.brush.bristle_offsets[::-1].copy()
+    sim.brush.bristle_gains.fill(0.13)
+    sim.brush.streak_phases.fill(0.91)
+    sim.brush.wobble_phases.fill(2.4)
+    sim.brush.wobble_amps.fill(0.99)
+    sim.brush.rng.random(127)
+    captured.clear()
+    second = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        dt=0.02,
+        brush_reload=False,
+        brush_belief=belief,
+        independent_noise_seed=719,
+    )
+    for expected, actual in zip(first_initializations, captured, strict=True):
+        for key in ("load", "fresh_tone"):
+            assert actual[key] == pytest.approx(expected[key])
+        for key in (
+            "offsets",
+            "gains",
+            "streaks",
+            "wobble_phases",
+            "wobble_amps",
+        ):
+            np.testing.assert_allclose(actual[key], expected[key], rtol=0.0, atol=0.0)
+        assert actual["rng"] == expected["rng"]
+    np.testing.assert_allclose(second.next_state_mean, first.next_state_mean)
+    np.testing.assert_allclose(second.next_state_variance, first.next_state_variance)
+
+
+def test_brush_reload_forecast_uses_reload_transition_and_preserve_requires_belief(
+    monkeypatch,
+) -> None:
+    cfg = PainterConfig(canvas_size=24, motor_forecast_samples=1)
+    sim = ArmPainterSim(cfg)
+    belief = BrushLoadBelief(0.2, 0.04, 0.3, 0.05, revision=4)
+    action = StrokeAction(0.42, 0.45, 0.58, 0.55, 0.05, 0.6, 1.0)
+    captured: list[tuple[float, float]] = []
+    original_reset = ContactAwareStrokeController.reset
+
+    def capture_reset(self, working, reset_action, timing):
+        captured.append((working.brush.load, working.brush.fresh_tone))
+        return original_reset(self, working, reset_action, timing)
+
+    monkeypatch.setattr(ContactAwareStrokeController, "reset", capture_reset)
+    forecast = forecast_stroke_execution(
+        sim,
+        action,
+        canvas_summary_state,
+        rollout_samples=1,
+        brush_reload=True,
+        brush_belief=belief,
+        independent_noise_seed=91,
+    )
+
+    assert captured == [(1.0, 1.0)]
+    assert forecast.brush_posterior_revision == belief.revision + 1
+    assert forecast.brush_preparation_kind == "reload"
+
+    with pytest.raises(ValueError, match="Preserve forecasts require"):
+        forecast_stroke_execution(
+            sim,
+            action,
+            canvas_summary_state,
+            rollout_samples=1,
+            brush_reload=False,
+            brush_belief=None,
+            independent_noise_seed=91,
+        )
 
 
 def test_contact_pressure_ramps_before_the_stroke_sweep() -> None:

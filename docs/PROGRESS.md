@@ -25,6 +25,9 @@ The current prototype can:
 - feed the MuJoCo sensor packet into that body estimator and initialize
   forecast joint position/velocity from a frozen posterior revision with
   independent future-noise seeds;
+- initialize forecast brush load and average pigment from a frozen compact
+  posterior while drawing bristle-scale mark variation from an independent,
+  versioned microstructure prior;
 - verify the AI-104/AI-105 VFE/EFE acceptance matrix against independent
   analytic, enumerated, and fine-grid references;
 - checkpoint learned state and export telemetry;
@@ -55,7 +58,7 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 454 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body/material-posterior forecast, documentation-contract, and MuJoCo alignment coverage |
+| Current test collection | 456 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body/material/brush-posterior forecast, documentation-contract, and MuJoCo alignment coverage |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
@@ -64,6 +67,7 @@ available, but this test result is not a GPU performance benchmark.
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 | Body/MuJoCo forecast alignment | 90 affected motor, plant, MuJoCo, web-runtime, documentation, and boundary tests passed in 278.69 seconds | Posterior sampling, frozen planning revisions, selected-plant copying, independent rollout noise, live-state non-mutation, provenance/VFE, and the fail-closed sensor boundary are covered |
 | Material forecast alignment | 93 affected boundary, documentation, spatial-state, camera, stroke-execution, and driver tests passed; the broad 91-test run took 107.48 seconds and two final provenance/support checks took 1.95 seconds | Frozen material revisions, posterior mean/variance particles, process-material independence, physical projection, provenance, and planning integration are covered |
+| Brush forecast alignment | 203 affected brush, stroke, driver, sensor-boundary, body/material inference, plant, MuJoCo, motor, web-runtime, camera, and independent-reference tests reported passed | Frozen brush revisions, mean/variance particles, live-brush/RNG independence, reload/preserve transitions, provenance, selected-plant behavior, and fail-closed boundary contracts are covered. Two broad Windows invocations printed complete passing pytest summaries before the outer command wrapper timed out while exiting; the other 72 checks exited normally. |
 
 These timings are local observations, not stable performance claims. Hardware,
 operating system, dependency versions, and concurrent load were not yet
@@ -83,12 +87,30 @@ captured in a run manifest.
    major runtime phases, and capture three manifested baseline replicas.
 5. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-6. Replace copied brush/contact/model forecast initialization with declared
-   beliefs, map the contact posterior into brush compliance, and continuously
-   pair executed-action transition priors with delivered camera updates. The
-   independent material-field slice is now posterior-conditioned.
+6. Continuously pair executed-action transition priors with delivered camera
+   updates, then define the missing compliance latent before mapping contact
+   beliefs into brush deformation. Substrate grain and model-parameter
+   forecast initialization also remain privileged; material fields and compact
+   brush state are now posterior-conditioned.
 
 ## Progress Log
+
+### 2026-08-05: brush-posterior motor-forecast initialization
+
+Technical record: `docs/BRUSH_FORECAST_INITIALIZATION_2026-08-05.md`.
+
+- Froze the selected `BrushLoadBelief` revision for each planning pass and
+  included both posterior moments and provenance in the forecast cache key.
+- Forecast particle zero now uses the compact load/average-pigment means and a
+  deterministic representative microstructure. Later particles sample the
+  declared diagonal moments and independent `brush-microstructure-prior-v0`
+  noise under request-derived seeds.
+- Preserve forecasts now require a brush belief. Reload forecasts apply the
+  explicit reload transition. Neither path continues the live brush RNG or
+  initializes from its exact bristle realization.
+- Kept the limitation explicit: held paint, persistent bristle history, and
+  tip-lag history are collapsed; the microstructure prior and brush likelihood
+  are provisional simulation-only; the live sensor loop remains fail-closed.
 
 ### 2026-08-05: material-posterior motor-forecast initialization
 
@@ -103,9 +125,10 @@ Technical record: `docs/MATERIAL_FORECAST_INITIALIZATION_2026-08-05.md`.
   constantly, and physically projected. Coverage and ground contrast are
   recomputed from primary material factors rather than sampled as extra
   evidence; black pigment mass is constrained not to exceed thickness.
-- Kept the live policy loop fail-closed. Substrate grain, brush bristle/RNG
-  state, contact-to-compliance initialization, model parameters, and continuous
-  camera scheduling remain open.
+- Kept the live policy loop fail-closed. At that checkpoint substrate grain,
+  brush realization/RNG, contact-to-compliance initialization, model
+  parameters, and continuous camera scheduling remained open; the brush
+  initialization part is superseded by the entry above.
 
 ### 2026-08-05: body-posterior motor-forecast initialization
 
@@ -122,7 +145,8 @@ Technical record: `docs/MATERIAL_FORECAST_INITIALIZATION_2026-08-05.md`.
 - Kept the default policy loop fail-closed. At that checkpoint exact
   material/brush/model context, contact-to-compliance initialization,
   continuous camera scheduling, and MuJoCo parameter uncertainty remained
-  open; the material-field part is superseded by the entry above.
+  open; the material-field and compact-brush parts are superseded by the two
+  entries above.
 
 ### 2026-08-04: selected-plant motor forecast alignment
 

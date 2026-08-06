@@ -67,9 +67,11 @@ before the next begins:
 - S2 live execution and selected-plant counterfactuals are implemented; T-309
   matched-backend evidence and the explicit lock decision remain before T-310.
   M2 now connects the MuJoCo body posterior to forecast q/qvel initialization,
-  and independent material fields now initialize from the spatial posterior.
-  Copied substrate grain/brush/model context and missing contact-compliance
-  mapping retain the `baseline-oracle-v0` painting-policy label.
+  independent material fields initialize from the spatial posterior, and
+  compact brush state initializes from `BrushLoadBelief` plus independent
+  microstructure noise. Copied substrate grain/model context, collapsed brush
+  history, and missing contact-compliance mapping retain the
+  `baseline-oracle-v0` painting-policy label.
 - M4 contract work may begin when T-003, T-103, and T-105 are complete. Only
   cross-backend parity work waits for S2 outputs.
 - M5 and targeted M6 risk-reduction work may proceed alongside M1-M3 when their

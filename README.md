@@ -126,9 +126,11 @@ samples feed a versioned body estimator and forecast particles initialize
 joint position/velocity from that posterior with independent future-noise
 seeds. Its likelihood precision is provisional simulation-only, contact belief
 is not yet mapped into brush compliance, and substrate grain, brush
-bristle/RNG state, and model parameters remain copied. Material fields are
-posterior-conditioned when a `SpatialCanvasState` is supplied, but the whole
-forecast remains oracle-conditioned. Forecast-driven policy inference
+history, and model parameters remain unresolved. Material fields are
+posterior-conditioned when a `SpatialCanvasState` is supplied. Brush load and
+pigment are sampled from the frozen `BrushLoadBelief`, while bristle-scale mark
+variation uses an independent versioned prior instead of the live brush RNG.
+The whole forecast remains oracle-conditioned. Forecast-driven policy inference
 therefore remains confined to the explicit `baseline-oracle-v0` diagnostic;
 MuJoCo parameter uncertainty is not yet sampled. See the canonical
 [model record](models/README.md), the [native reference](docs/NATIVE_PLANT_REFERENCE.md),

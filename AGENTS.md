@@ -63,15 +63,21 @@ wetness, black pigment mass, and surface tone from that frozen material
 posterior. Particle zero uses its mean; later particles sample its declared
 diagonal variance at posterior-cell resolution before piecewise-constant
 upsampling and physical projection. Coverage and ground contrast remain
-derived, not independently sampled. The containing process snapshot still
-supplies substrate grain, brush bristle/RNG state, and model parameters; the
-inferred contact probability/force is not yet mapped into MuJoCo
-brush-compliance state; native runtime execution has no `PlantBackend` sensor
-adapter; and MuJoCo body-parameter uncertainty is not sampled. Forecast-driven
-painting policy inference therefore remains fail-closed outside the explicit
-`baseline-oracle-v0` diagnostic. Describe joint and material initialization as
-posterior-conditioned, never the complete motor/material forecast as
-sensor-equivalent, hardware-calibrated, or sufficient for embodiment claims.
+derived, not independently sampled. Brush forecasts freeze the selected
+`BrushLoadBelief`; particle zero uses load/pigment means and a deterministic
+representative microstructure, while later particles sample its diagonal
+load/pigment variance and `brush-microstructure-prior-v0` under independent
+forecast noise. Never continue the live brush RNG. This prior is provisional
+and uncalibrated, and held paint/bristle history are collapsed into the compact
+load/average-pigment belief. The containing process snapshot still supplies
+substrate grain and model parameters; the inferred contact probability/force
+is not yet mapped into MuJoCo brush-compliance state; native runtime execution
+has no `PlantBackend` sensor adapter; and MuJoCo body-parameter uncertainty is
+not sampled. Forecast-driven painting policy inference therefore remains
+fail-closed outside the explicit `baseline-oracle-v0` diagnostic. Describe
+joint, material, and brush initialization as posterior-conditioned, never the
+complete motor/material forecast as sensor-equivalent, hardware-calibrated, or
+sufficient for embodiment claims.
 Never state that no specific motors have been selected without explicitly
 limiting that statement to the native abstract plant.
 

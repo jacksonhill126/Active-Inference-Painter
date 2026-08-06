@@ -21,6 +21,7 @@ from active_painter.arm_agent_driver import (
 )
 from active_painter.arm_sim import ArmPainterSim, ArmPose
 from active_painter.body_inference import BodyVFEComponents
+from active_painter.brush_loading import BrushLoadBelief
 from active_painter.config import PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
@@ -652,7 +653,7 @@ def test_active_inference_driver_diagnostics_with_execution_forecast_are_json_se
     assert "retained for inference" in forecast["state_fields_omitted"]
 
 
-def test_motor_forecast_uses_frozen_body_and_material_posteriors_per_planning_pass(
+def test_motor_forecast_uses_frozen_body_material_and_brush_posteriors_per_planning_pass(
     monkeypatch,
 ) -> None:
     cfg = PainterConfig(canvas_size=24, motor_forecast_candidates=1)
@@ -700,6 +701,26 @@ def test_motor_forecast_uses_frozen_body_and_material_posteriors_per_planning_pa
         calibration_status="synthetic_test_only",
     )
     driver._planning_material_belief = copy.deepcopy(frozen_material)
+    frozen_brush = BrushLoadBelief(
+        0.61,
+        0.02,
+        0.83,
+        0.03,
+        revision=4,
+        inference_model_id="brush-loading-belief-v0:driver-test-v0",
+        calibration_status="synthetic_test_only",
+    )
+    driver._planning_brush_beliefs = {
+        "white": copy.deepcopy(driver.brush_load_beliefs["white"]),
+        "black": copy.deepcopy(frozen_brush),
+    }
+    driver.brush_load_beliefs["black"] = BrushLoadBelief(
+        0.12,
+        0.08,
+        0.25,
+        0.09,
+        revision=5,
+    )
     driver.ingest_body_belief(belief(6), vfe)
     action = StrokeAction(0.4, 0.45, 0.6, 0.55, 0.05, 0.6, 1.0)
     policy = Policy(
@@ -710,6 +731,7 @@ def test_motor_forecast_uses_frozen_body_and_material_posteriors_per_planning_pa
     sentinel = object()
 
     def fake_batch(*args, **kwargs):
+        captured["requests"] = args[1]
         captured.update(kwargs)
         return [sentinel]
 
@@ -733,6 +755,8 @@ def test_motor_forecast_uses_frozen_body_and_material_posteriors_per_planning_pa
     np.testing.assert_allclose(captured_material.material, frozen_material.material)
     assert captured_material.posterior_revision == frozen_material.posterior_revision
     assert captured_material.inference_model_id == frozen_material.inference_model_id
+    captured_brush = captured["requests"][0][3]
+    assert captured_brush == frozen_brush
     assert captured["independent_noise_seed"] == (
         104_729 + 1_009 * 5 + 130_363 + 1_013 * 3
     )
