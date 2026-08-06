@@ -20,7 +20,7 @@ The current prototype can:
 - construct registered global and requested-foveal camera observations and
   assimilate them through a provisional spatial likelihood;
 - infer a compact encoder/contact body posterior through an isolated estimator;
-- verify substantial parts of the VFE/EFE implementation against independent
+- verify the AI-104/AI-105 VFE/EFE acceptance matrix against independent
   analytic, enumerated, and fine-grid references;
 - checkpoint learned state and export telemetry;
 - render the live arm and canvas in a browser.
@@ -50,11 +50,11 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 435 tests collected | Adds 14 learned-proposal integrity tests and 6 AI-111 convergence/provenance tests to the prior 415-test baseline |
+| Current test collection | 442 tests collected | Adds the learned-proposal, AI-111 convergence, and completed AI-104/AI-105 reference suites to the prior 415-test baseline |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
-| Current deterministic CI gate | 157 passed; 57.74 seconds observed | Includes both proposal suites and all files listed in `.github/workflows/ci.yml` |
+| Current deterministic CI gate | 164 passed; 20.82 seconds observed | Includes both proposal suites and all files listed in `.github/workflows/ci.yml`; two expected obsolete-summary warnings |
 | Pre-AI111 complete-suite attempt | No terminal result before the fixed 15-minute limit | Stopped under load with no failure traceback; this is not reported as either a pass or a code failure |
 | Source checks | Python compilation and `git diff --check` passed | No truncated source or malformed patch was found |
 
@@ -64,8 +64,8 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Close AI-104/AI-105 acceptance around the independent reference harness,
-   including the remaining summary-VFE Monte Carlo tolerance.
+1. Stress-test terminal coverage and stopping in AI-106, especially the
+   low-coverage regime outside the accepted discrete/continuous KL oracle band.
 2. Build the leakage-resistant live-scale baseline corpus in AI-108, then
    measure held-out likelihood and uncertainty calibration in AI-107/AI-109.
 3. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
@@ -83,6 +83,14 @@ captured in a run manifest.
 
 ### 2026-08-04: formal-reference progress, proposal recovery, and AI-111 result
 
+- Accepted AI-104 and AI-105 through
+  `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`. The summary VFE diagnostic
+  now uses a declared 4096-sample reporting-only budget (measured maximum error
+  0.02317 nats over seeds 0-4) whose RNG draw cannot perturb later stochastic
+  work. The harness covers scalar/multivariate VFE, precision sweeps, local
+  identity, and an enumerated deterministic/ambiguous/epistemic/preference EFE
+  matrix. AI-106 is now ready. Low-coverage terminal behavior and the AI-110
+  composition decision remain explicitly open.
 - Added an independent reference-oracle harness covering terminal coverage
   risk, transition information gain, policy posterior normalization, summary
   and spatial VFE, and motor EFE decomposition. It found and forced the removal

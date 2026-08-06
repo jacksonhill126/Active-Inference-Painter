@@ -170,27 +170,27 @@ Notes: Accepted 2026-07-24 in `docs/OBSERVATION_FACTOR_AUDIT.md`; contrast and c
 
 ### AI-104 Verify VFE against tractable reference models
 
-Status: `Active`
+Status: `Done`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-103  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Analytic linear-Gaussian fixtures independently verify posterior moments and VFE decomposition across precision regimes.
-Notes: `tests/test_reference_oracle.py` now verifies summary Gaussian complexity and posterior convergence plus spatial VFE against independent fine-grid integration. Spatial terms meet the declared tolerance; summary total VFE remains Monte Carlo and is only bounded within `+-0.35` nat. Acceptance awaits a decision on whether to retain that approximation or add an analytic-NLL/higher-sample path.
+Notes: Accepted 2026-08-04 in `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`. Scalar and multivariate conjugate fixtures verify posterior moments, all VFE components, analytic minimization, four-order precision behavior, and the local outside-patch identity prior. The declared 4096-sample summary VFE report has measured maximum absolute error 0.02317 nats over seeds 0-4 inside the accepted `+-0.05` nat band; spatial VFE remains within `1e-6` of independent integration.
 
 ### AI-105 Verify EFE against enumerated or Monte Carlo references
 
-Status: `Active`
+Status: `Done`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-104  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Independent fixtures verify risk, ambiguity, information gain, policy priors, signs, and posterior normalization.
-Notes: A bounded validation implementation proceeded while AI-104 remains open. `tests/test_reference_oracle.py` verifies terminal risk, transition information-gain identities, policy posterior normalization, and motor pragmatic/information-gain arithmetic, and found a motor-ambiguity double count that was removed. The broader acceptance matrix and Jackson review remain open; this status does not satisfy the AI-104 dependency.
+Notes: Accepted 2026-08-04 in `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`. The independent matrix covers deterministic, ambiguity-only, purely epistemic, and preference-dominated controls plus policy posteriors with and without priors. Terminal, transition, motor, and posterior identities pass. Low-coverage terminal behavior moves to AI-106; the composition-gap preference is explicitly deferred to AI-110 rather than approved by this task.
 
 ### AI-106 Stress-test terminal coverage and stopping
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Preferences/Validation  
 Depends on: AI-105  
 Owner: Jackson/Codex  

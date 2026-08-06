@@ -212,7 +212,7 @@ Notes:
 
 ### AI-104 Verify VFE against tractable reference models
 
-Status: `Active`
+Status: `Done`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-103  
 Owner: Jackson/Codex  
@@ -233,20 +233,19 @@ Acceptance:
 
 Notes:
 
-- `tests/test_reference_oracle.py` now independently checks the summary
-  Gaussian complexity, convergence toward the conjugate posterior, and the
-  spatial estimator against fine-grid integration.
-- Spatial complexity, expected negative log likelihood, and total agree with
-  the independent integration to the declared tolerance. Summary complexity is
-  analytic, while summary total VFE remains a Monte Carlo estimate accepted
-  only inside a declared `+-0.35` nat band.
-- The remaining work is to decide whether that bounded Monte Carlo comparison
-  satisfies the task or whether an analytic-NLL path or larger sample budget is
-  required. The task is not accepted by this documentation update.
+- Accepted 2026-08-04 in
+  `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`.
+- Scalar and multivariate conjugate fixtures independently verify posterior
+  moments, all VFE components, precision behavior across four orders of
+  magnitude, the analytic minimum, and the local outside-patch identity prior.
+- The summary VFE reporting-only budget is now the declared 4096 posterior
+  samples. Measured maximum absolute error against fine-grid integration over
+  seeds 0-4 is 0.02317 nats inside the accepted `+-0.05` nat band. The spatial
+  VFE remains within `1e-6` of independent integration.
 
 ### AI-105 Verify EFE against enumerated or Monte Carlo references
 
-Status: `Active`
+Status: `Done`
 Track: Active Inference/Validation  
 Depends on: AI-101, AI-104  
 Owner: Jackson/Codex  
@@ -266,21 +265,22 @@ Acceptance:
 
 Notes:
 
-- Work proceeded as a bounded validation exception while AI-104 remains open;
-  acceptance still waits on AI-104 closure and review.
-- `tests/test_reference_oracle.py` independently checks terminal Beta risk,
-  transition risk/ambiguity versus negative parameter information gain, policy
-  posterior normalization, and motor pragmatic/information-gain arithmetic.
-- The harness found a production defect: motor ambiguity was counted once
-  inside the motor risk and again during total assembly. The duplicate term was
-  removed at all summary and spatial assembly sites.
-- The implemented reference cases pass, but the broader deterministic,
-  ambiguity-only, epistemic-only, and preference-dominated acceptance matrix
-  still requires an explicit review decision.
+- Accepted 2026-08-04 in
+  `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md` after AI-104 closure.
+- The enumerated matrix now isolates deterministic, ambiguity-only, purely
+  epistemic, and preference-dominated cases and verifies policy posteriors both
+  with and without policy priors.
+- Terminal, transition, motor, and policy-posterior signs and identities match
+  independent references. The earlier motor-ambiguity double count remains
+  removed at every summary and spatial total site.
+- Low-coverage terminal approximation behavior is assigned to AI-106. The
+  composition-gap preference has no accepted normalized reference counterpart
+  and is explicitly deferred to AI-110, satisfying this task without approving
+  that self-referential preference.
 
 ### AI-106 Stress-test terminal coverage and stopping
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Preferences/Validation  
 Depends on: AI-105  
 Owner: Jackson/Codex  

@@ -43,7 +43,11 @@ from active_painter.models import (
     SpatialDynamicsEnsemble,
 )
 from active_painter.motor_planning import motor_efe_contribution, motor_efe_terms
-from active_painter.policies import Policy, policy_stop_log_prior
+from active_painter.policies import (
+    Policy,
+    policy_posterior_from_efe,
+    policy_stop_log_prior,
+)
 from active_painter.preferences import TerminalCoveragePreference
 from active_painter.spatial_agent import SpatialActiveInferencePainter
 from active_painter.spatial_efe import SpatialExpectedFreeEnergy
@@ -51,7 +55,11 @@ from active_painter.spatial_inference import (
     SpatialVariationalStateEstimator,
     spatial_observation_variance,
 )
-from active_painter.local_spatial import pixel_logvar_from_state, pixel_material_from_state
+from active_painter.local_spatial import (
+    local_patch_bounds_for_raster,
+    pixel_logvar_from_state,
+    pixel_material_from_state,
+)
 from active_painter.spatial_state import (
     SpatialCanvasState,
     independent_material_channel_count,
@@ -107,11 +115,12 @@ class _FixedVarianceObservationStub:
     posterior exact, which is what turns the estimator into a testable object.
     """
 
-    def __init__(self, variance: float) -> None:
-        self.variance = float(variance)
+    def __init__(self, variance: float | tuple[float, ...]) -> None:
+        self.variance = torch.as_tensor(variance, dtype=torch.float64)
 
     def distribution(self, state: torch.Tensor) -> Normal:
-        return Normal(state, torch.full_like(state, math.sqrt(self.variance)))
+        variance = self.variance.to(device=state.device, dtype=state.dtype)
+        return Normal(state, torch.sqrt(variance))
 
 
 class _DeterministicSummaryDynamics:
@@ -152,6 +161,25 @@ class _DenseSpatialStubDynamics:
         return mean, aleatoric, epistemic
 
 
+class _ControlledVarianceSpatialDynamics:
+    """Identity-mean transition with a declared diagonal variance."""
+
+    def __init__(self, variance: float) -> None:
+        self.variance = float(variance)
+
+    def predictive_moments(
+        self,
+        material: torch.Tensor,
+        action_raster: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        del action_raster
+        return (
+            material.clone(),
+            torch.full_like(material, self.variance),
+            torch.zeros_like(material),
+        )
+
+
 def _fine_grid_vfe(
     q_mean: float,
     q_variance: float,
@@ -183,6 +211,33 @@ def _fine_grid_vfe(
     kl = float(np.sum(q * (log_q - log_p)) * dx)
     negative_log_likelihood = float(-np.sum(q * log_likelihood) * dx)
     return kl + negative_log_likelihood, kl, negative_log_likelihood
+
+
+def _analytic_diagonal_gaussian_vfe(
+    posterior_mean: np.ndarray,
+    posterior_variance: np.ndarray,
+    prior_mean: np.ndarray,
+    prior_variance: np.ndarray,
+    observation: np.ndarray,
+    observation_variance: np.ndarray,
+) -> tuple[float, float, float]:
+    """Independent closed form for a factorized linear-Gaussian VFE."""
+
+    complexity = 0.5 * np.sum(
+        np.log(prior_variance / posterior_variance)
+        + (posterior_variance + (posterior_mean - prior_mean) ** 2) / prior_variance
+        - 1.0
+    )
+    negative_log_likelihood = 0.5 * np.sum(
+        np.log(2.0 * np.pi * observation_variance)
+        + ((observation - posterior_mean) ** 2 + posterior_variance)
+        / observation_variance
+    )
+    return (
+        float(complexity + negative_log_likelihood),
+        float(complexity),
+        float(negative_log_likelihood),
+    )
 
 
 # The 1-D conjugate problem used by the summary-VFE tests. Prior N(0.30, 0.04),
@@ -465,6 +520,98 @@ def test_policy_posterior_matches_reference_policy_posterior_full(pomdp) -> None
         np.testing.assert_allclose(project, reference, rtol=1e-6, atol=1e-6)
 
 
+def test_discrete_efe_acceptance_matrix_and_policy_priors(pomdp) -> None:
+    """Enumerated controls isolate deterministic, ambiguous, epistemic, and preferred cases.
+
+    The informative and ambiguous controls have the same uniform predicted
+    outcome and uniform preference. Their risk is therefore identical and the
+    EFE difference is purely information-theoretic: deterministic observations
+    carry one bit of state information, while the uniform likelihood carries
+    none. The preference controls use deterministic observations, so their EFE
+    difference is purely risk. No production EFE helper is reused to construct
+    these expected values.
+    """
+
+    identity = np.eye(2, dtype=np.float64)
+    uniform_likelihood = np.full((2, 2), 0.5, dtype=np.float64)
+    uniform_state = np.asarray([0.5, 0.5], dtype=np.float64)
+    uniform_preference = np.asarray([0.5, 0.5], dtype=np.float64)
+
+    deterministic = pomdp.efe_components(
+        pomdp.POMDPModel(A=identity, D=np.asarray([1.0, 0.0])),
+        np.asarray([1.0, 0.0]),
+        np.asarray([1.0, 0.0]),
+    )
+    informative = pomdp.efe_components(
+        pomdp.POMDPModel(A=identity, D=uniform_state),
+        uniform_state,
+        uniform_preference,
+    )
+    ambiguous = pomdp.efe_components(
+        pomdp.POMDPModel(A=uniform_likelihood, D=uniform_state),
+        uniform_state,
+        uniform_preference,
+    )
+
+    assert deterministic.risk == pytest.approx(0.0, abs=1e-12)
+    assert deterministic.ambiguity == pytest.approx(0.0, abs=1e-12)
+    assert deterministic.total == pytest.approx(0.0, abs=1e-12)
+    assert informative.risk == pytest.approx(0.0, abs=1e-12)
+    assert informative.ambiguity == pytest.approx(0.0, abs=1e-12)
+    assert ambiguous.risk == pytest.approx(0.0, abs=1e-12)
+    assert ambiguous.ambiguity == pytest.approx(math.log(2.0), abs=1e-12)
+    assert ambiguous.total - informative.total == pytest.approx(math.log(2.0), abs=1e-12)
+
+    # Manual mutual information, independent of the reference helper. Both
+    # controls predict H[O] = log(2), but only the identity likelihood resolves
+    # the hidden state.
+    informative_information = math.log(2.0) - 0.0
+    ambiguous_information = math.log(2.0) - math.log(2.0)
+    assert informative_information == pytest.approx(math.log(2.0))
+    assert ambiguous_information == pytest.approx(0.0)
+    assert ambiguous.total - informative.total == pytest.approx(
+        informative_information - ambiguous_information
+    )
+
+    preference = np.asarray([0.9, 0.1], dtype=np.float64)
+    good = pomdp.efe_components(
+        pomdp.POMDPModel(A=identity, D=np.asarray([1.0, 0.0])),
+        np.asarray([1.0, 0.0]),
+        preference,
+    )
+    bad = pomdp.efe_components(
+        pomdp.POMDPModel(A=identity, D=np.asarray([0.0, 1.0])),
+        np.asarray([0.0, 1.0]),
+        preference,
+    )
+    assert good.ambiguity == pytest.approx(0.0, abs=1e-12)
+    assert bad.ambiguity == pytest.approx(0.0, abs=1e-12)
+    assert good.risk == pytest.approx(-math.log(0.9), abs=1e-12)
+    assert bad.risk == pytest.approx(-math.log(0.1), abs=1e-12)
+    assert good.total < bad.total
+
+    g = torch.tensor([bad.total, good.total], dtype=torch.float64)
+    no_prior = policy_posterior_from_efe(g, torch.zeros_like(g), gamma=2.0).numpy()
+    no_prior_reference = pomdp.policy_posterior_full(g.numpy(), gamma=2.0)
+    np.testing.assert_allclose(no_prior, no_prior_reference, atol=1e-12, rtol=0.0)
+    assert no_prior[1] > no_prior[0]
+
+    # A declared prior can oppose preferences without changing G. Production
+    # and reference posteriors must still agree after normalization.
+    policy_prior = np.asarray([0.95, 0.05], dtype=np.float64)
+    with_prior = policy_posterior_from_efe(
+        g,
+        torch.tensor(np.log(policy_prior), dtype=torch.float64),
+        gamma=2.0,
+    ).numpy()
+    with_prior_reference = pomdp.policy_posterior_full(
+        g.numpy(), E=policy_prior, gamma=2.0
+    )
+    np.testing.assert_allclose(with_prior, with_prior_reference, atol=1e-12, rtol=0.0)
+    assert float(no_prior.sum()) == pytest.approx(1.0, abs=1e-12)
+    assert float(with_prior.sum()) == pytest.approx(1.0, abs=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # (d) Gaussian VFE against independent numerical integration
 # ---------------------------------------------------------------------------
@@ -515,17 +662,14 @@ def test_summary_variational_posterior_approaches_the_conjugate_solution() -> No
     assert float(posterior.logvar.exp()[0]) == pytest.approx(_POSTERIOR_VARIANCE, abs=0.01)
 
 
-def test_summary_vfe_total_matches_fine_grid_integration_within_monte_carlo_noise() -> None:
+def test_summary_vfe_total_matches_fine_grid_integration_within_declared_monte_carlo_error() -> None:
     """Identity: F = KL(q||p) - E_q[log p(o|s)], evaluated at the reported q.
 
-    The reported ``total`` estimates the expectation with 32 posterior samples,
-    which the estimator declares in its approximation string. That Monte Carlo
-    error does not shrink with more optimizer steps, so the tolerance here is a
-    declared noise band, not oracle precision: measured per-seed deviation over
-    seeds 0-4 spans -0.071 to +0.078 nats against a total of magnitude ~0.1.
-    The strong parts of this deliverable are the complexity assertion above
-    (1e-16) and the spatial assertion below (1e-6); this one only rules out
-    sign errors and missing Gaussian normalizers, which are >= 1.3 nats.
+    The reported ``total`` estimates the expectation with the declared 4096
+    posterior samples. Monte Carlo error does not shrink with more optimizer
+    steps, so this remains a declared approximation rather than an analytic
+    identity. The larger reporting-only budget closes the old +-0.35 nat band
+    without changing the inferred posterior, EFE, or policy selection.
     """
 
     reported: list[float] = []
@@ -533,7 +677,7 @@ def test_summary_vfe_total_matches_fine_grid_integration_within_monte_carlo_nois
     for seed in range(5):
         estimator, posterior = _summary_conjugate_inference(seed)
         assert estimator.last_vfe is not None
-        assert "32 posterior state samples" in estimator.last_vfe.approximation
+        assert "4096 posterior state samples" in estimator.last_vfe.approximation
         grid_total, _, _ = _fine_grid_vfe(
             float(posterior.mean[0]),
             float(posterior.logvar.exp()[0]),
@@ -542,12 +686,224 @@ def test_summary_vfe_total_matches_fine_grid_integration_within_monte_carlo_nois
             _OBSERVATION,
             _LIKELIHOOD_VARIANCE,
         )
-        assert estimator.last_vfe.total == pytest.approx(grid_total, abs=0.35)
+        assert estimator.last_vfe.total == pytest.approx(grid_total, abs=0.05)
         reported.append(estimator.last_vfe.total)
         integrated.append(grid_total)
 
-    # Averaging cancels most of the Monte Carlo error: measured 2.4e-3.
-    assert float(np.mean(reported)) == pytest.approx(float(np.mean(integrated)), abs=0.12)
+    assert float(np.mean(reported)) == pytest.approx(float(np.mean(integrated)), abs=0.025)
+
+
+def test_summary_vfe_reporting_does_not_advance_the_learning_rng_stream() -> None:
+    """The reporting-only Monte Carlo estimate cannot perturb later inference."""
+
+    config = PainterConfig(inference_steps=0, summary_vfe_report_samples=64)
+    prior = GaussianBelief(
+        torch.tensor([_PRIOR_MEAN], dtype=torch.float64),
+        torch.tensor([math.log(_PRIOR_VARIANCE)], dtype=torch.float64),
+    )
+    observation = torch.tensor([_OBSERVATION], dtype=torch.float64)
+
+    torch.manual_seed(2026)
+    expected_next = torch.rand(8, dtype=torch.float64)
+    torch.manual_seed(2026)
+    estimator = VariationalStateEstimator(
+        config, _FixedVarianceObservationStub(_LIKELIHOOD_VARIANCE)
+    )
+    estimator.infer(prior, observation)
+    actual_next = torch.rand(8, dtype=torch.float64)
+
+    assert torch.equal(actual_next, expected_next)
+    assert estimator.last_vfe is not None
+    assert "64 posterior state samples" in estimator.last_vfe.approximation
+
+
+def test_multivariate_summary_vfe_selects_the_analytic_diagonal_gaussian_posterior() -> None:
+    """A 3-D conjugate fixture verifies all reported VFE terms and the minimizer.
+
+    The likelihood is diagonal and homoscedastic per dimension, so the exact
+    posterior follows by adding prior and likelihood precisions. The production
+    estimator still minimizes with reparameterized samples; a larger optimizer
+    budget is declared for this validation fixture so optimization error does
+    not obscure the identity being tested.
+    """
+
+    prior_mean = np.asarray([-0.2, 0.3, 1.1], dtype=np.float64)
+    prior_variance = np.asarray([0.04, 0.25, 0.01], dtype=np.float64)
+    observation = np.asarray([0.4, -0.1, 0.7], dtype=np.float64)
+    observation_variance = np.asarray([0.09, 0.02, 0.16], dtype=np.float64)
+    posterior_variance = 1.0 / (1.0 / prior_variance + 1.0 / observation_variance)
+    posterior_mean = posterior_variance * (
+        prior_mean / prior_variance + observation / observation_variance
+    )
+
+    torch.manual_seed(0)
+    estimator = VariationalStateEstimator(
+        PainterConfig(inference_steps=512, inference_lr=0.02),
+        _FixedVarianceObservationStub(tuple(observation_variance)),
+    )
+    inferred = estimator.infer(
+        GaussianBelief(
+            torch.tensor(prior_mean, dtype=torch.float64),
+            torch.tensor(np.log(prior_variance), dtype=torch.float64),
+        ),
+        torch.tensor(observation, dtype=torch.float64),
+    )
+    inferred_mean = inferred.mean.numpy()
+    inferred_variance = inferred.logvar.exp().numpy()
+
+    np.testing.assert_allclose(inferred_mean, posterior_mean, atol=0.02, rtol=0.0)
+    np.testing.assert_allclose(inferred_variance, posterior_variance, atol=0.005, rtol=0.0)
+
+    inferred_total, inferred_complexity, inferred_nll = _analytic_diagonal_gaussian_vfe(
+        inferred_mean,
+        inferred_variance,
+        prior_mean,
+        prior_variance,
+        observation,
+        observation_variance,
+    )
+    optimum_total, _, _ = _analytic_diagonal_gaussian_vfe(
+        posterior_mean,
+        posterior_variance,
+        prior_mean,
+        prior_variance,
+        observation,
+        observation_variance,
+    )
+    assert estimator.last_vfe is not None
+    assert estimator.last_vfe.complexity == pytest.approx(inferred_complexity, abs=1e-10)
+    assert estimator.last_vfe.negative_log_likelihood == pytest.approx(inferred_nll, abs=0.06)
+    assert estimator.last_vfe.total == pytest.approx(inferred_total, abs=0.06)
+    assert inferred_total - optimum_total < 0.03
+
+    # Independent perturbations of either sufficient statistic raise F. This
+    # pins the analytic posterior as the VFE minimizer rather than merely a
+    # plausible point approached by the optimizer.
+    competitors = (
+        (posterior_mean + 0.05, posterior_variance),
+        (posterior_mean - 0.05, posterior_variance),
+        (posterior_mean, 0.5 * posterior_variance),
+        (posterior_mean, 2.0 * posterior_variance),
+    )
+    for candidate_mean, candidate_variance in competitors:
+        candidate_total, _, _ = _analytic_diagonal_gaussian_vfe(
+            candidate_mean,
+            candidate_variance,
+            prior_mean,
+            prior_variance,
+            observation,
+            observation_variance,
+        )
+        assert candidate_total > optimum_total
+
+
+@pytest.mark.parametrize(
+    ("transition_variance", "observation_variance"),
+    [
+        (1e-2, 1e-6),
+        (1e-4, 1e-4),
+        (1e-6, 1e-2),
+    ],
+)
+def test_spatial_posterior_tracks_precision_across_four_orders_of_magnitude(
+    transition_variance: float,
+    observation_variance: float,
+) -> None:
+    """The exact spatial posterior follows likelihood/transition precision."""
+
+    config = PainterConfig(
+        canvas_size=4,
+        spatial_grid_size=4,
+        material_pyramid_levels=(4,),
+        base_observation_std=math.sqrt(observation_variance),
+        smear_observation_std=0.0,
+    )
+    prior_values = np.asarray([0.20, 0.10, 0.08, 0.30, 0.0, 1.0], dtype=np.float32)
+    observed_values = np.asarray([0.80, 0.60, 0.40, 0.70, 0.0, 1.0], dtype=np.float32)
+    prior_material = np.broadcast_to(prior_values[:, None, None], (6, 4, 4)).copy()
+    observed_material = np.broadcast_to(observed_values[:, None, None], (6, 4, 4)).copy()
+    carried_variance = 1e-12
+    previous = SpatialCanvasState(
+        prior_material,
+        np.full_like(prior_material, math.log(carried_variance)),
+    )
+    observed = SpatialCanvasState(
+        observed_material,
+        np.full_like(observed_material, math.log(observation_variance)),
+    )
+
+    estimator = SpatialVariationalStateEstimator(config, torch.device("cpu"))
+    posterior = estimator.infer(
+        previous,
+        StrokeAction.stop_action(),
+        observed,
+        _ControlledVarianceSpatialDynamics(transition_variance),
+    )
+    actual_mean = pixel_material_from_state(posterior)[:4]
+    actual_variance = np.exp(pixel_logvar_from_state(posterior, config)[:4])
+    total_transition_variance = transition_variance + carried_variance
+    expected_variance = 1.0 / (
+        1.0 / total_transition_variance + 1.0 / observation_variance
+    )
+    expected_mean = expected_variance * (
+        prior_material[:4] / total_transition_variance
+        + observed_material[:4] / observation_variance
+    )
+
+    np.testing.assert_allclose(actual_mean, expected_mean, atol=2e-6, rtol=0.0)
+    np.testing.assert_allclose(actual_variance, expected_variance, atol=1e-9, rtol=1e-5)
+
+
+def test_local_transition_prior_is_identity_outside_the_stroke_patch() -> None:
+    """Outside local support, Bayesian fusion uses the declared identity prior."""
+
+    config = PainterConfig(
+        canvas_size=16,
+        spatial_grid_size=16,
+        material_pyramid_levels=(16,),
+        spatial_hidden_channels=4,
+        spatial_residual_blocks=1,
+        spatial_ensemble_size=2,
+        local_patch_margin_cells=1,
+        local_patch_min_cells=4,
+        local_identity_logvar=-10.0,
+    )
+    previous, observation = _spatial_belief_pair(config, seed=11)
+    action = StrokeAction(0.45, 0.45, 0.55, 0.55, 0.03, 0.6, 1.0)
+    raster = rasterize_stroke_action(action, 16, config=config)
+    bounds = local_patch_bounds_for_raster(raster, 16, config)
+    assert bounds is not None
+    assert not (bounds.row0 <= 0 < bounds.row1 and bounds.col0 <= 0 < bounds.col1)
+
+    estimator = SpatialVariationalStateEstimator(config, torch.device("cpu"))
+    posterior = estimator.infer(
+        previous,
+        action,
+        observation,
+        LocalSpatialDynamicsEnsemble(config),
+    )
+    current_mean = pixel_material_from_state(previous)[:4, 0, 0]
+    current_variance = np.exp(pixel_logvar_from_state(previous, config)[:4, 0, 0])
+    observed_mean = pixel_material_from_state(observation)[:4, 0, 0]
+    observed_variance = spatial_observation_variance(
+        pixel_material_from_state(observation), config
+    )[:4, 0, 0]
+    identity_variance = math.exp(config.local_identity_logvar)
+    transition_variance = current_variance + identity_variance
+    expected_variance = 1.0 / (1.0 / transition_variance + 1.0 / observed_variance)
+    expected_mean = expected_variance * (
+        current_mean / transition_variance + observed_mean / observed_variance
+    )
+
+    np.testing.assert_allclose(
+        pixel_material_from_state(posterior)[:4, 0, 0], expected_mean, atol=2e-6, rtol=0.0
+    )
+    np.testing.assert_allclose(
+        np.exp(pixel_logvar_from_state(posterior, config)[:4, 0, 0]),
+        expected_variance,
+        atol=1e-9,
+        rtol=1e-5,
+    )
 
 
 def test_spatial_vfe_matches_independent_fine_grid_integration() -> None:

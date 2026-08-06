@@ -326,6 +326,14 @@ class PainterConfig:
     stroke_tone_prior: float | None = None
     inference_steps: int = 24
     inference_lr: float = 0.08
+    # Posterior samples used only to report the summary-state VFE decomposition
+    # after optimization. Sampling is RNG-isolated, so this does not change
+    # q(s), later stochastic learning, EFE, or policy selection.
+    # The previous implicit budget of 32 left the independently checked total
+    # inside only a +-0.35 nat Monte Carlo band; 4096 makes that diagnostic
+    # precise enough for the AI-104 reference-model acceptance gate while the
+    # heteroscedastic summary likelihood remains explicitly approximate.
+    summary_vfe_report_samples: int = 4096
 
     # Modality-level multiplier on the motor proprioceptive EFE contribution.
     # The three precisions above are applied INSIDE motor_efe_terms; this one is

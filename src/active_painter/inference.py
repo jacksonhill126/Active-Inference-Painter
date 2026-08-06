@@ -49,7 +49,19 @@ class VariationalStateEstimator:
         with torch.no_grad():
             q = Normal(mean, torch.exp(0.5 * logvar))
             prior_dist = Normal(prior.mean.detach(), torch.exp(0.5 * prior.logvar.detach()))
-            samples = q.rsample((32,))
+            report_samples = max(1, int(self.cfg.summary_vfe_report_samples))
+            rng_devices: list[int] = []
+            if mean.device.type == "cuda":
+                rng_devices.append(
+                    torch.cuda.current_device()
+                    if mean.device.index is None
+                    else int(mean.device.index)
+                )
+            # Diagnostic sampling must not alter the RNG stream consumed by
+            # later learning or policy inference. fork_rng restores both the
+            # CPU state and the selected CUDA device state on exit.
+            with torch.random.fork_rng(devices=rng_devices):
+                samples = q.rsample((report_samples,))
             expected_log_likelihood = self.observation_model.distribution(samples).log_prob(observation).sum(dim=-1).mean()
             complexity = kl_divergence(q, prior_dist).sum()
             negative_log_likelihood = -expected_log_likelihood
@@ -60,7 +72,10 @@ class VariationalStateEstimator:
                 negative_log_likelihood=float(negative_log_likelihood.item()),
                 expected_log_likelihood=float(expected_log_likelihood.item()),
                 units="nats",
-                approximation="Monte Carlo expectation with 32 posterior state samples",
+                approximation=(
+                    "Monte Carlo expectation with "
+                    f"{report_samples} posterior state samples"
+                ),
             )
 
         return GaussianBelief(mean.detach(), logvar.detach())

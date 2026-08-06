@@ -124,6 +124,12 @@ free energy. In spatial mode, a local Gaussian transition prior and material
 observation likelihood are fused at the native pixel level; the posterior is
 then projected deterministically into the material pyramid. Coarse levels do
 not independently guess material that disagrees with the pixel posterior.
+The obsolete summary fixture reports its heteroscedastic expected likelihood
+with the declared `summary_vfe_report_samples=4096` Monte Carlo budget. This is
+a reporting-only approximation after optimization. Its RNG state is restored
+after the draw, so it has no direct or random-stream path into later learning,
+EFE, or policy selection; its accepted reference error is recorded in
+`docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`.
 
 The immediate `stop` policy is always available. Continuation policies are sampled as one or more strokes followed by `stop`, so the planner can anticipate coverage overshoot rather than merely checking a threshold afterward.
 

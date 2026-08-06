@@ -1104,11 +1104,15 @@ details:
     and 4.8e+1 at 0.30). Terminal risk in the low-coverage cold-start regime is
     NOT certified by that test.
 22. The summary VFE `total` reported by `inference.VariationalStateEstimator`
-    carries irreducible 32-sample Monte Carlo error that does not shrink with
-    more optimizer steps (measured per-seed deviation from fine-grid
-    integration: -0.071 to +0.078 nats on a quantity of magnitude ~0.1). Its
-    `complexity` term is closed form and verified to 1e-16; the total is only
-    verified inside a declared +-0.35 nat band.
+    remains a Monte Carlo expectation whose error does not shrink with more
+    optimizer steps. Its reporting-only budget is now the declared
+    `summary_vfe_report_samples=4096`, raised from the previous implicit 32.
+    Measured per-seed deviations from fine-grid integration over seeds 0-4 are
+    +0.00613, -0.02316, -0.01272, -0.00398, and +0.01796 nats (maximum absolute
+    error 0.02317); the accepted band is +-0.05 nats. Its `complexity` term is
+    closed form and verified to 1e-16. The diagnostic draw restores the global
+    CPU/CUDA RNG state on exit; this budget therefore cannot change q(s), later
+    stochastic learning, EFE, preferences, or policy selection.
 23. The compression-gap baseline is an unnormalized best-of-family maximum over
     a two-member hand-written code family, not a normalized Bayesian model
     average. It omits the `log(family size)` model-index cost (`log 2 /
@@ -1320,18 +1324,16 @@ This specification records the following current decision state:
   machine-readable inventory. Replacing the privileged paths remains M2 work;
 - `AI-103`: ANSWERED by `docs/OBSERVATION_FACTOR_AUDIT.md` and the focused
   factorization/unit tests;
-- `AI-104`: whether VFE matches analytic references — PARTIALLY ANSWERED by
-  `tests/test_reference_oracle.py`. The spatial estimator's complexity, NLL, and
-  total all match independent fine-grid integration to 1e-6 (measured 4.6e-9).
-  The summary estimator's `complexity` matches the analytic Gaussian KL to 1e-4
-  (measured 1e-16) and its variational posterior reaches the conjugate solution
-  to within the declared 24-step optimizer budget, but its Monte Carlo `total` is
-  only verified inside a declared +-0.35 nat band (register item 22). Closing
-  that residue needs an analytic-NLL path or a raised sample count, both source
-  changes outside the harness;
-- `AI-105`: whether EFE signs, identities, and policy posteriors match
-  independent references — IMPLEMENTED AND AWAITING ACCEPTANCE through
-  `tests/test_reference_oracle.py`.
+- `AI-104`: ANSWERED by `tests/test_reference_oracle.py` and
+  `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`. Scalar and multivariate
+  conjugate fixtures verify posterior moments, every VFE component, analytic
+  minimization, four-order precision behavior, and the local outside-patch
+  identity prior. The spatial estimator's complexity, NLL, and total match
+  independent fine-grid integration to 1e-6 (measured 4.6e-9). The summary
+  estimator's complexity matches the analytic Gaussian KL to 1e-4 (measured
+  1e-16), and its declared 4096-sample total is accepted inside +-0.05 nats
+  (measured maximum absolute error 0.02317; register item 22);
+- `AI-105`: ANSWERED by the same acceptance record and harness.
   Terminal coverage risk equals the reference full-KL risk to 1e-3 for coverage
   means in `[0.70, 0.90]` (measured worst case 5.8e-5; see register item 21 for
   the band's limits). The transition decomposition satisfies
@@ -1340,7 +1342,12 @@ This specification records the following current decision state:
   reference's Dirichlet parameter novelty, which is a different quantity and is.
   The policy posterior equals `policy_posterior_full` to 1e-6 (measured 2.2e-8)
   for both painters. The harness also found and forced the fix of a real defect:
-  the motor modality double-counted ambiguity at all six EFE total sites;
+  the motor modality double-counted ambiguity at all six EFE total sites. An
+  enumerated matrix now isolates deterministic, ambiguity-only, purely
+  epistemic, and preference-dominated controls and verifies posterior
+  normalization with and without policy priors. Low-coverage terminal behavior
+  is assigned to AI-106; the unnormalized self-trained composition preference
+  remains explicitly deferred to AI-110 rather than being accepted here;
 
 - `AI-107`: whether predictive variances are calibrated;
 - `AI-110`: whether the composition preference can be retained;
