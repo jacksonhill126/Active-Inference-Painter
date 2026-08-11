@@ -416,14 +416,10 @@ def test_camera_housing_envelopes_share_optical_frames_and_stay_behind_lenses() 
     for camera_name in (
         "canvas_right_oblique",
         "canvas_left_oblique",
-        "canvas_inspection_deployed",
-        "brush_standoff_overhead",
     ):
         housing_name = {
             "canvas_right_oblique": "canvas_right_camera_housing",
             "canvas_left_oblique": "canvas_left_camera_housing",
-            "canvas_inspection_deployed": "canvas_inspection_camera_housing",
-            "brush_standoff_overhead": "brush_standoff_camera_housing",
         }[camera_name]
         camera = cameras[camera_name]
         housing = bodies[housing_name]
@@ -471,10 +467,8 @@ def test_mujoco_compiles_with_stable_adapter_names_and_separated_anchors() -> No
         "overview",
         "canvas_view",
         "top_view",
-            "canvas_right_oblique",
-            "canvas_left_oblique",
-            "canvas_inspection_deployed",
-            "brush_standoff_overhead",
+        "canvas_right_oblique",
+        "canvas_left_oblique",
         ]
     assert [
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, index)

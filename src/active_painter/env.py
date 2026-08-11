@@ -26,6 +26,11 @@ class StrokeAction:
     amount: float
     tone: float
     stop: bool = False
+    # Signed maximum lateral deflection of a quadratic Bezier path, expressed
+    # as a fraction of endpoint chord length. Zero preserves the historical
+    # straight mark exactly. This is painting-policy geometry, not a motor
+    # command: bodily realization is inferred separately.
+    curvature: float = 0.0
 
     @staticmethod
     def stop_action() -> "StrokeAction":
@@ -33,11 +38,134 @@ class StrokeAction:
 
     def vector(self) -> np.ndarray:
         if self.stop:
-            return np.zeros(7, dtype=np.float32)
+            return np.zeros(8, dtype=np.float32)
         return np.asarray(
-            [self.x0, self.y0, self.x1, self.y1, self.width, self.amount, self.tone],
+            [
+                self.x0,
+                self.y0,
+                self.x1,
+                self.y1,
+                self.width,
+                self.amount,
+                self.tone,
+                self.curvature,
+            ],
             dtype=np.float32,
         )
+
+
+def mark_path_points(action: StrokeAction, u: np.ndarray | float) -> np.ndarray:
+    """Evaluate the declared straight/quadratic mark path in canvas UV.
+
+    ``curvature`` is the signed midpoint deflection divided by chord length.
+    The corresponding quadratic control point is displaced by twice that
+    amount because a quadratic Bezier reaches half its control-point offset at
+    ``u=0.5``.
+    """
+
+    parameter = np.asarray(u, dtype=np.float64)
+    start = np.asarray((action.x0, action.y0), dtype=np.float64)
+    end = np.asarray((action.x1, action.y1), dtype=np.float64)
+    chord = end - start
+    length = float(np.linalg.norm(chord))
+    if length <= 1e-12 or abs(float(action.curvature)) <= 1e-12:
+        return (1.0 - parameter[..., None]) * start + parameter[..., None] * end
+    normal = np.asarray((-chord[1], chord[0]), dtype=np.float64) / length
+    control = 0.5 * (start + end) + 2.0 * float(action.curvature) * length * normal
+    one_minus = 1.0 - parameter
+    return (
+        one_minus[..., None] ** 2 * start
+        + 2.0 * one_minus[..., None] * parameter[..., None] * control
+        + parameter[..., None] ** 2 * end
+    )
+
+
+def mark_path_length(action: StrokeAction, samples: int = 65) -> float:
+    """Numerical arclength of the declared mark path in normalized canvas UV."""
+
+    points = mark_path_points(action, np.linspace(0.0, 1.0, max(2, int(samples))))
+    return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+
+
+def squared_distance_to_mark_path(
+    action: StrokeAction,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    segments: int = 32,
+) -> np.ndarray:
+    """Squared distance from a grid to the finite declared mark path."""
+
+    if abs(float(action.curvature)) <= 1e-12:
+        start = np.asarray((action.x0, action.y0), dtype=np.float64)
+        delta = np.asarray(
+            (action.x1 - action.x0, action.y1 - action.y0), dtype=np.float64
+        )
+        denominator = float(delta @ delta) + 1e-12
+        projection = np.clip(
+            ((x - start[0]) * delta[0] + (y - start[1]) * delta[1])
+            / denominator,
+            0.0,
+            1.0,
+        )
+        px = start[0] + projection * delta[0]
+        py = start[1] + projection * delta[1]
+        return (x - px) ** 2 + (y - py) ** 2
+
+    points = mark_path_points(action, np.linspace(0.0, 1.0, max(1, int(segments)) + 1))
+    minimum = np.full(np.broadcast_shapes(x.shape, y.shape), np.inf, dtype=np.float64)
+    for start, end in zip(points[:-1], points[1:]):
+        delta = end - start
+        denominator = float(delta @ delta) + 1e-12
+        projection = np.clip(
+            ((x - start[0]) * delta[0] + (y - start[1]) * delta[1]) / denominator,
+            0.0,
+            1.0,
+        )
+        px = start[0] + projection * delta[0]
+        py = start[1] + projection * delta[1]
+        minimum = np.minimum(minimum, (x - px) ** 2 + (y - py) ** 2)
+    return minimum
+
+
+def bounded_mark_curvature(
+    action: StrokeAction,
+    curvature: float,
+    *,
+    margin: float = 0.0,
+) -> float:
+    """Project a requested signed curvature into the canvas support.
+
+    The projection scales only curvature, never endpoints. It is deterministic
+    decoder geometry shared by proposal and execution, not a preference.
+    """
+
+    requested = float(curvature)
+    if abs(requested) <= 1e-12:
+        return 0.0
+    lower = float(margin)
+    upper = 1.0 - float(margin)
+    sign = 1.0 if requested >= 0.0 else -1.0
+    low, high = 0.0, abs(requested)
+    for _ in range(24):
+        magnitude = 0.5 * (low + high)
+        candidate = StrokeAction(
+            action.x0,
+            action.y0,
+            action.x1,
+            action.y1,
+            action.width,
+            action.amount,
+            action.tone,
+            stop=action.stop,
+            curvature=sign * magnitude,
+        )
+        points = mark_path_points(candidate, np.linspace(0.0, 1.0, 65))
+        if bool(np.all((points >= lower) & (points <= upper))):
+            low = magnitude
+        else:
+            high = magnitude
+    return sign * low
 
 
 class PaintCanvasEnv:
@@ -130,14 +258,7 @@ class PaintCanvasEnv:
         return state + self.rng.normal(0.0, self.observation_std(state)).astype(np.float32)
 
     def _stroke_footprint(self, action: StrokeAction) -> np.ndarray:
-        # Distance from each pixel to the finite line segment.
-        ax, ay, bx, by = action.x0, action.y0, action.x1, action.y1
-        vx, vy = bx - ax, by - ay
-        denom = vx * vx + vy * vy + 1e-8
-        t = np.clip(((self._xx - ax) * vx + (self._yy - ay) * vy) / denom, 0.0, 1.0)
-        px = ax + t * vx
-        py = ay + t * vy
-        d2 = (self._xx - px) ** 2 + (self._yy - py) ** 2
+        d2 = squared_distance_to_mark_path(action, self._xx, self._yy)
         sigma = max(0.006, action.width / 2.355)
         return np.exp(-0.5 * d2 / (sigma * sigma)).astype(np.float32)
 

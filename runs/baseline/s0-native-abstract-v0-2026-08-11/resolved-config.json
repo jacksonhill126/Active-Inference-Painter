@@ -1,0 +1,83 @@
+{
+  "schema_version": "s0-baseline-resolved-config-v1",
+  "run_id": "s0-native-abstract-v0-2026-08-11T180953Z",
+  "command": [
+    "python",
+    "-m",
+    "active_painter.web_server",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8026",
+    "--canvas-size",
+    "256",
+    "--device",
+    "cpu",
+    "--driver-bootstrap-transitions",
+    "0",
+    "--driver-bootstrap-train-steps",
+    "0",
+    "--telemetry-max-samples",
+    "512",
+    "--telemetry-sample-hz",
+    "30"
+  ],
+  "runtime": {
+    "host": "127.0.0.1",
+    "port": 8026,
+    "capture_port_is_not_part_of_the_plant_contract": true,
+    "canvas_size_px": 256,
+    "speed": 1.0,
+    "planner_state_kind": "spatial_material",
+    "spatial_grid_size": 16,
+    "stroke_tone_prior": null,
+    "plant_backend": "native",
+    "plant_model": "native-abstract-v0",
+    "observation_access_mode": "sensor_equivalent",
+    "provisional_sensor_policy": false,
+    "agent_policy_inference_enabled": false,
+    "boundary_status": "expected_fail_closed",
+    "boundary_reason": "native backend has no sensor-conditioned body posterior/PlantBackend adapter; hidden simulator state remains denied",
+    "device": "cpu",
+    "restart_on_stop": false,
+    "save_every_paintings": 5,
+    "telemetry_max_samples": 512,
+    "telemetry_sample_hz": 30.0,
+    "driver_bootstrap_transitions": 0,
+    "driver_bootstrap_train_steps": 0,
+    "driver_bootstrap_generator": "motion_manifold",
+    "driver_bootstrap_composition_train_steps": 0,
+    "checkpoint_path": null,
+    "checkpoint_save_every_transitions": 10,
+    "proposal_diagnostic_interval_plans": 16
+  },
+  "planner_contract": {
+    "candidate_policies": 32,
+    "planning_horizon": 4,
+    "policy_precision_prior_mean": 0.35,
+    "spatial_transition_mode": "local_patch",
+    "terminal_coverage_target": 0.87,
+    "minimum_stop_coverage_prior_midpoint": 0.70,
+    "immediate_stop_always_in_support": true,
+    "learned_proposal_mixture": 0.0
+  },
+  "random_seeds": {
+    "native_process": 0,
+    "canvas_grain": 0,
+    "brush": 0,
+    "agent": 17
+  },
+  "capture": {
+    "warmup_after_ready_s": 2.0,
+    "state_endpoint": "/api/state",
+    "canvas_endpoint": "/api/canvas.png",
+    "telemetry_endpoint": "/api/telemetry.csv",
+    "frontend_assets": [
+      "/",
+      "/main.js",
+      "/style.css",
+      "/api/robot-model",
+      "/api/version"
+    ]
+  }
+}

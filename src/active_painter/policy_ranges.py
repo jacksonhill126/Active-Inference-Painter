@@ -190,6 +190,28 @@ def passage_stroke_count_range(config: PainterConfig) -> Interval:
     return Interval(float(min_strokes), float(max_strokes))
 
 
+def mark_curvature_proposal_parameters(
+    config: PainterConfig,
+) -> tuple[float, float, float]:
+    """Return ``(curve_mix, min_magnitude, max_magnitude)`` for mark proposals.
+
+    A zero-width nonzero branch would recreate the repeated fixed-curvature
+    atom this proposal is intended to remove. Treat that degenerate
+    configuration as straight-only, keeping sampling and density evaluation on
+    the same declared mixed measure.
+    """
+
+    curve_mix = float(min(max(float(config.curved_mark_proposal_mix), 0.0), 1.0))
+    max_magnitude = abs(float(config.mark_curvature_magnitude))
+    min_fraction = float(
+        min(max(float(config.mark_curvature_min_fraction), 0.0), 1.0)
+    )
+    min_magnitude = max_magnitude * min_fraction
+    if max_magnitude - min_magnitude <= 1e-12:
+        curve_mix = 0.0
+    return curve_mix, min_magnitude, max_magnitude
+
+
 def clip_to(value: float, interval: Interval) -> float:
     return float(min(max(float(value), interval.low), interval.high))
 

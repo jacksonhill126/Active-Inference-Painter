@@ -1,7 +1,7 @@
 {
   "schema_version": "sensor-access-ledger-v0",
   "accepted_date": "2026-07-24",
-  "updated_date": "2026-08-06",
+  "updated_date": "2026-08-10",
   "baseline": {
     "id": "baseline-oracle-v0",
     "observation_mode": "oracle_material_state",
@@ -36,7 +36,7 @@
     "model_access_blocked": false,
     "live_process_state_denied": true,
     "calibration_status": "provisional_simulation_only_not_hardware_calibrated",
-    "scope": "bounded repeated-stroke MuJoCo integration with initial camera/body gate, independent fixed model/context priors, eight candidates, temporal depth one, Cartesian IK only, and one forecast particle",
+    "scope": "bounded repeated-stroke MuJoCo integration with initial camera/body gate, independent fixed model/context priors, eight candidates, temporal depth one, neutral plus fixed +/-24 degree upper-arm-roll realizations, and one forecast particle",
     "prohibited_claims": [
       "hardware-calibrated sensor equivalence",
       "painting quality",
@@ -93,8 +93,11 @@
         "contact",
         "brushes",
         "_painting",
+        "_brush_in_contact",
+        "_previous_contact_world",
         "_previous_brush_world",
-        "_tip_lag_world"
+        "_tip_lag_world",
+        "_painting_point_world"
       ],
       "classification": "hidden_state",
       "consumers": ["state construction", "controller", "motor forecast", "online learning", "diagnostics"],
@@ -326,7 +329,21 @@
     {
       "id": "contact.exact_state",
       "source_type": "ContactState",
-      "values": ["on_canvas", "deflection", "force", "pressure", "brush_width_px", "brush_world"],
+      "values": [
+        "on_canvas",
+        "deflection",
+        "force",
+        "pressure",
+        "brush_width_px",
+        "brush_world",
+        "tangential_force",
+        "friction_coefficient",
+        "pull_alignment",
+        "sticking",
+        "stick_slip_transition",
+        "slip_fraction",
+        "bristle_deflection_xz"
+      ],
       "classification": "hidden_state",
       "consumers": ["contact controller", "hold and release controller", "motor forecast", "motion-reliability learning", "diagnostics"],
       "current_access": ["privileged controller input", "privileged learning input", "privileged forecast state"],
@@ -363,7 +380,9 @@
         "bristle_gains",
         "streak_phases",
         "wobble_phases",
-        "wobble_amps"
+        "wobble_amps",
+        "contact_deflection_xz",
+        "contact_sticking"
       ],
       "classification": "hidden_state",
       "consumers": ["paint process", "simulator diagnostics"],

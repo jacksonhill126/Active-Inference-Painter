@@ -1,0 +1,72 @@
+{
+  "schema_version": "experiment-manifest-v1",
+  "manifest_revision": 1,
+  "run": {
+    "run_id": "s0-native-abstract-v0-2026-08-11T180953Z",
+    "study_id": null,
+    "run_kind": "baseline_capture",
+    "evidence_level": "provisional_reference",
+    "status": "completed",
+    "started_at_utc": "2026-08-11T18:09:53Z",
+    "ended_at_utc": "2026-08-11T18:10:35Z",
+    "termination_reason": "capture_complete",
+    "stop_source": "capture_harness",
+    "failure_ids": []
+  },
+  "versions": {
+    "version_manifest": "version-manifest.json"
+  },
+  "configuration": {
+    "resolved_config_path": "resolved-config.json",
+    "planner_mode": "spatial_material",
+    "backend": "native",
+    "compute_device": "cpu",
+    "canvas": {
+      "width_px": 256,
+      "height_px": 256,
+      "mode": "L"
+    }
+  },
+  "sensor_access": {
+    "mode": "sensor_equivalent",
+    "policy_inference_status": "expected_fail_closed",
+    "live_process_state_denied": true,
+    "evaluation_only_process_truth": [
+      "native_joint_internal_state",
+      "canvas_material_arrays",
+      "contact_process_state"
+    ]
+  },
+  "random_seeds": {
+    "agent": 17,
+    "native_process": 0,
+    "brush": 0,
+    "canvas_grain": 0
+  },
+  "timing": {
+    "captured_sim_time_s": 1.8333333333333282,
+    "telemetry_samples": 56,
+    "telemetry_columns": 96
+  },
+  "approximations": [
+    {
+      "name": "native_abstract_plant",
+      "status": "accepted_S0_reference_only",
+      "decision_task": "T-101"
+    },
+    {
+      "name": "native_sensor_boundary_missing_body_adapter",
+      "status": "fail_closed",
+      "decision_task": "T-109"
+    }
+  ],
+  "artifacts": {
+    "state": "state.json",
+    "canvas": "canvas.png",
+    "telemetry": "telemetry.csv",
+    "frontend": "frontend.html",
+    "robot_model": "robot-model.json",
+    "test_summary": "test-summary.md",
+    "failure_log": "failure-log.jsonl"
+  }
+}

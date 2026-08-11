@@ -541,9 +541,22 @@ class HierarchicalCanvasModel(nn.Module):
 
         return self.canvas_elbo(fields) - self.baseline_log_likelihood(fields)
 
-    def training_loss(self, fields: torch.Tensor) -> torch.Tensor:
+    def training_loss(
+        self,
+        fields: torch.Tensor,
+        relational_observations: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         canvas_vfe = -self.canvas_elbo(fields, sample=True).mean()
-        observations = self.relational_observations(fields)
+        observations = (
+            self.relational_observations(fields)
+            if relational_observations is None
+            else relational_observations.to(fields.device, fields.dtype)
+        )
+        if observations.shape != (fields.shape[0], self.relational_dim):
+            raise ValueError(
+                "relational observations must have shape "
+                f"({fields.shape[0]}, {self.relational_dim})"
+            )
         mean, logvar = self.encode_relations(observations)
         latent = mean + torch.exp(0.5 * logvar) * torch.randn_like(mean)
         reconstruction_mean, reconstruction_logvar = self.decode_relations(latent)

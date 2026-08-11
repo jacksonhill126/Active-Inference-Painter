@@ -280,7 +280,7 @@ Notes:
 
 ### AI-106 Stress-test terminal coverage and stopping
 
-Status: `Ready`
+Status: `Done`
 Track: Preferences/Validation  
 Depends on: AI-105  
 Owner: Jackson/Codex  
@@ -298,9 +298,23 @@ Acceptance:
   learned discoveries.
 - Decide whether the current family is acceptable for M2 or must be replaced.
 
+Notes:
+
+- Closed 2026-08-11 in
+  `docs/TERMINAL_COVERAGE_STOPPING_ACCEPTANCE_2026-08-11.md` with 48 focused
+  tests passing.
+- The exact Beta--Beta KL agrees with direct Monte Carlo when the forecast is
+  Beta. A broad logit-normal alternative with the same measured first two
+  moments differs by 23.6 nats, and the near-blank interior-unimodal floor
+  changes represented variance by more than 500x.
+- Decision: retain the fixed terminal coverage preference and finite
+  always-admissible stop prior, but replace the single moment-matched Beta
+  forecast before M2 acceptance with a converged sample-based estimate or a
+  calibrated richer bounded family.
+
 ### AI-107 Calibrate transition and precision approximations
 
-Status: `Blocked`  
+Status: `Done`
 Track: Uncertainty  
 Depends on: AI-103, AI-108  
 Owner: Jackson/Codex  
@@ -319,9 +333,23 @@ Acceptance:
 - Stop calling fixed precision settings beliefs unless a posterior is inferred.
 - Define recalibration and failure thresholds for M2.
 
+Completion record (2026-08-11): trained CNN and conditional patch-cVAE
+ensembles were evaluated on AI-108's frozen validation/test trajectories.
+Validation-only scalar variance calibration did not repair interval shape:
+both nominal 90% intervals covered about 99.4% of held-out residuals. A CNN
+trained without dynamic roll increased ensemble disagreement only 1.087x on
+held-out dynamic-roll conditions versus the predeclared 1.50x gate. Requested
+strata are machine-reported, with wet-over-wet marked structurally unavailable
+and patch size marked single-bin. Learned likelihood, cVAE latent, ensemble,
+target posterior, fixed camera likelihood, fixed identity likelihood, and EFE
+precision terms are kept separate. All precision-ledger entries were
+unobserved declared priors. This closes the measurement task with a negative
+M2 calibration result; it does not accept either model as calibrated. See
+`docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md`.
+
 ### AI-108 Build a leakage-resistant baseline corpus
 
-Status: `Ready`
+Status: `Done`
 Track: Data/Validation  
 Depends on: AI-102, T-101, T-102  
 Owner: Jackson/Codex  
@@ -343,7 +371,7 @@ Acceptance:
 
 ### AI-109 Establish predictive learning curves
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Modeling/Validation  
 Depends on: AI-107, AI-108  
 Owner: Jackson/Codex  
@@ -358,6 +386,13 @@ Acceptance:
   overfitting before approving a capacity increase.
 - Record wall time, memory, model size, and optimizer steps.
 - Establish a baseline that later pretrained or larger models must beat.
+
+Ready record (2026-08-11): AI-107 and AI-108 are complete. Use the frozen
+AI-107 evaluator to vary data fraction, capacity, ensemble construction, and
+seed. The experiment must distinguish an ordinary data/capacity failure from
+the observed likelihood-shape failure and should include an explicit
+near-no-change plus continuous-consequence mixture likelihood as a tested
+hypothesis.
 
 ### AI-110 Resolve the composition-preference closed loop
 
@@ -382,7 +417,7 @@ Acceptance:
 
 ### AI-111 Separate proposal distributions from policy priors
 
-Status: `Answered (negative convergence result; M3 correction required)`
+Status: `Done`
 Track: Policy Inference  
 Depends on: AI-101, AI-105  
 Owner: Jackson/Codex  

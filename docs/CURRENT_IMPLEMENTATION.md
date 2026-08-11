@@ -48,11 +48,29 @@ decline within and across marks.
   state, not a controller paint gate: any positive-pressure canvas contact
   deposits, including press, lift, and unintended contact. The depletion
   calibration is provisional.
-- **Directional shape.** Each deposition step paints the disc swept from the
-  previous contact point, so travel elongates and connects the mark. The
-  cross-stroke radius is unchanged (round brush); only the along-travel extent
-  grows (`brush_directional_enabled`).
-- **Bristle furrows.** A round brush is a bundle of hairs; a fraction run dry
+- **Round-brush angle-dependent shape.** Canonical arm execution supplies the
+  round brush's end-effector/handle axis. The determinant is its acute angle to
+  the canvas plane: 90 degrees gives a circular patch, while smaller angles
+  elongate it along the handle projection, capped by
+  `brush_round_max_aspect_ratio`. The 0.5-inch envelope matches the canonical
+  12.7 mm MuJoCo bundle, but the contacting fraction starts near the tuft tip
+  and grows continuously with pressure toward that envelope; maximum pressure
+  can add 20% splay. Radial roll about an unchanged
+  handle axis has no effect because the tuft is axisymmetric
+  (`brush_round_angle_footprint_enabled`,
+  `brush_round_canvas_angle_elongation_gain`). The patch is swept along the aggregate
+  bristle-tip path. Direct `paint_at` calls without a supplied handle axis
+  retain the legacy circular footprint.
+- **Directional stick/slip.** A Baxter-inspired aggregate bristle-deflection
+  state sticks below a static-friction limit and releases to a lower kinetic
+  limit. Friction scales with normal force and frozen canvas tooth and is lower
+  when the handle leads the bristles. The resulting tip pauses/releases,
+  native-plant load, and material footprint are physical process consequences,
+  not a reward or direct preference (`brush_*friction*`,
+  `brush_tangential_stiffness_n_per_world_unit`). The parameters are
+  provisional and uncalibrated; see
+  `docs/BRUSH_ANISOTROPY_RESEARCH_2026-08-10.md`.
+- **Bristle furrows.** The brush is a bundle of hairs; a fraction run dry
   (`brush_bristle_gap_fraction`), carving lengthwise furrows that stay unpainted.
   Unlike a deposition-rate wobble these survive opacity build-up, so the mark
   reads as brushed (`brush_bristle_*`; set depth and gaps to 0 for smooth).
@@ -62,9 +80,12 @@ decline within and across marks.
   survives opacity because unreached valleys stay bare
   (`canvas_grain_strength`, `canvas_grain_reach_*`).
 - **Stroke-end taper.** Brush width ramps in/out over the ends of the paint
-  phase (`brush_taper_fraction`, `brush_taper_min_width`), so marks come to
-  points instead of round caps. Driven by the stroke controller's `flow`
-  envelope, below the policy boundary.
+  phase (`brush_taper_fraction`, `brush_taper_min_width`). At exit, Cartesian
+  contact depth and intended pressure unload through the same envelope before
+  tangential motion reaches zero (`brush_taper_end_pressure_fraction`), and
+  lift continues with zero taper flow. This prevents a stationary full-width
+  endpoint stamp while preserving positive deposition under any remaining
+  physical contact. This realization remains below the policy boundary.
 - **Wet blending (dirty brush).** Per deposition step the head skims a
   pressure-scaled fraction of the wet surface layer into a small held reservoir
   (volume plus pigment mass, exactly conserved against the canvas ledger), and
@@ -73,9 +94,10 @@ decline within and across marks.
   is the same cheap core used by ArtRage and Krita's color-smudge engine
   (`brush_pickup_*`, `brush_capacity_thickness`, `brush_release_fraction`,
   `brush_push_forward`). Every knob is calibratable from a few real strokes.
-- **Bristle-tip trailer dynamics.** The painting point is a damped follower of
-  the commanded contact point (`brush_tip_lag_seconds`), so entries hook and
-  curves flow like a pulled brush tip rather than a rigid stamp.
+- **Bristle-tip trailer dynamics.** The painting point combines aggregate
+  tangential bristle deflection/stick-slip with a damped follower of the rigid
+  contact point (`brush_tip_lag_seconds`), so entries hook, pushing can catch,
+  and curves flow like a deformable brush rather than a rigid stamp.
 
 The policy sampler also biases proposed strokes toward longer sweeps (a declared
 computational proposal bias), since a round brush over a short span reads as a
@@ -96,9 +118,12 @@ extract the per-mark deposition statistic needed to drive this separate brush-
 load update.
 
 This makes incidental contact a real predicted paint consequence while keeping
-paint preparation inside policy inference. Brush tilt relative to the canvas
-normal is not yet modeled in the 2-D deposition footprint; the round footprint
-is oriented only by travel direction.
+paint preparation inside policy inference. The 2-D round-brush footprint now
+depends provisionally on the angle between the end-effector axis and the canvas
+plane. Its elongation is aligned with the handle projection. Pressure determines
+how much of the 12.7 mm tuft envelope contacts the canvas and then adds bounded
+splay. The contact-fraction and angle laws are uncalibrated and are not yet a
+learned uncertain agent likelihood.
 
 ## Core expected-free-energy terms
 
@@ -335,6 +360,25 @@ EFE, not composition rewards.
   transition likelihood is `p(s_next | s, stroke, motor_realization)` rather
   than stroke-only. Hard joint/current/workspace limits remain external safety
   constraints, and no motor-ease reward is introduced.
+- **Curved mark geometry and fixed-roll realization.** `StrokeAction` now
+  carries signed quadratic curvature as an explicit painting-policy variable.
+  Deposition, spatial rasterization, feasibility, timing, and Cartesian
+  tracking share that path definition. Roll remains a separate conditional
+  bodily realization. The bounded sensor profile continuously proposes
+  shallow-to-strong bends of either sign alongside straight marks, rather than
+  repeating one fixed curvature atom. Proposed length is normalized as brush
+  travel across curve magnitudes, preventing curvature from winning terminal
+  coverage merely by hiding extra arclength in an equal endpoint chord. It
+  compares neutral IK with
+  fixed +24/-24 degree roll postures; the broader profile retains both roll
+  sweep directions. Curvature proposal density and motor-policy priors are
+  explicit, and neither curve nor roll receives an aesthetic reward.
+- **Non-canonical angled wrist-roll study.** The generated
+  `mujoco-robstride-angled-wrist-roll-exploration-v0` branch relocates the roll
+  axis downstream of the elbow and mounts the brush at a fixed angle. It is
+  neither a live plant nor a hardware selection. Its initial kinematic/load
+  comparison is documented in
+  `ANGLED_WRIST_ROLL_EXPLORATION_2026-08-07.md`.
 - **Learned motion reliability.** Per motor realization kind, the driver
   maintains an inverse-gamma precision belief over the squared ratio of
   realized to forecast tracking error (`motor_reliability_*`), updated after
@@ -489,6 +533,10 @@ The roll coordinate rotates the elbow hinge around the upper-arm axis. Two
 fixed-endpoint roll-sweep policies are inferred alongside the existing motor
 realizations; their start and end poses use exact fixed-roll IK, and their
 proprioceptive and canvas consequences enter the motor EFE posterior.
+The bounded camera-closed profile uses neutral and fixed ±24-degree roll
+postures instead of the sweeps, evaluated as independent 30 Hz MuJoCo
+counterfactuals. This is a simulation-throughput approximation, not a hardware
+control rate. Curved marks are declared separately by `StrokeAction.curvature`.
 The expensive embodied refinement is capped at the three best base-EFE canvas
 policies, keeping the default stochastic forecast count below the previous
 eight-policy, three-realization budget to account for richer fixed-roll IK,
@@ -508,23 +556,18 @@ inference core. Three.js builds the direct-drive robot body hierarchy from
 the arm, controls, telemetry, and the Python material image from
 `/api/canvas.png`. MuJoCo is not used as a paint renderer.
 
-The same XML now declares a provisional four-camera rig: opposing continuous
-oblique brush/contact views, a park-only deployed head-on inspection
-reference, and a continuous overhead brush-standoff profile.
+The same XML now declares a compact two-camera rig: matched continuous
+left/right IMX296 brush/contact views on one nominal crossbar.
 `/api/robot-model` exports their poses, roles, availability, grayscale
 channels, model-input sizes, sample rates, registrations, ideal
 FOV/resolution, incidence, axial canvas-depth range, and provisional
-calibration status. `active_painter.camera_geometry` maps the three surface
+calibration status. `active_painter.camera_geometry` maps both surface
 views to a shared top-left canvas UV frame with an ideal planar homography.
-The tangent standoff camera instead uses `canvas_edge_profile` and arbitrary
-world-point projection; it is intentionally excluded from homographic
-rectification.
 
 The reproducible 243-pose sweep in
 `active_painter.camera_pose_sweep` evaluates a 9 x 9 contact grid at -32, 0,
-and +32 degrees of upper-arm roll. The two continuous oblique views have 100%
-combined segmentation-based brush-tip visibility, and the overhead profile
-retains 100% visibility in the sampled workspace. Publication-ready frames,
+and +32 degrees of upper-arm roll. Each compact view independently has 100%
+sampled segmentation-based brush-tip visibility. Publication-ready frames,
 maps, CSVs, and interpretation are in
 `docs/CAMERA_OBSERVABILITY_BRIEF.md`.
 
@@ -535,14 +578,15 @@ and a weak lighting-residual specular approximation. Exact segmentation stays
 inside the generative process and is absent from agent-facing frames. The
 perfect `/api/canvas.png` remains diagnostic-only.
 
-The `provisional-multiview-v4` XML assigns the owned OM System OM-1/25 mm and
-Sony A7R II/35 mm to the opposing continuous oblique roles, with Super 35
-selected provisionally for the Sony. Nominal 16:9 vertical fields of view and
-active sensor widths are declared in the same XML pending physical
-calibration. It separates 3840 x 2160 physical acquisition, 512 x 512 global
-model input, 256 x 256 foveal output, and MuJoCo reference-render resolution.
-The additional head-on inspection and overhead global-shutter cameras remain
-planned.
+The `provisional-compact-dual-imx296-v1` XML assigns exactly two selected but
+not yet purchased Raspberry Pi Global Shutter Cameras (Sony IMX296) to the
+opposing continuous views. Both are 650 mm forward of the canvas plane, 300 mm
+to either side of canvas center, and 220 mm above it. The 4 mm CS lens,
+1456 x 1088 acquisition, 60 Hz rate, intrinsics, timing, noise, and compact
+housing are provisional pending purchase and calibration. The interface still
+separates physical acquisition, 512 x 512 global model input, 256 x 256 foveal
+output, and MuJoCo reference-render resolution. The baseline has no separate
+head-on inspection or overhead/profile camera.
 
 The `camera-observation-interface-v1` simulator process now retains each
 native grayscale exposure, derives the global view independently, and samples
@@ -574,7 +618,7 @@ MuJoCo segmentation. Camera VFE logs state and occlusion complexity separately
 from expected negative log likelihood. The per-camera uncertainty and inlier
 priors are explicit in the XML and marked provisional.
 
-Physical HDMI acquisition, physical lens/capture calibration, and a learned
+Physical CSI acquisition, physical lens/capture calibration, and a learned
 camera encoder are not implemented. Sensor-equivalent control still fails
 closed because belief-derived substrate/model and contact-compliance forecast
 construction, persistent brush history, and native sensor adaptation remain
@@ -608,7 +652,7 @@ sensor model, or evidence of painting quality.
 calibration tool: a metric 11 x 8-inner-corner target generator and native-
 frame Brown-Conrady intrinsic solver. It reports reprojection residuals,
 coverage, tilt diversity, and acceptance gates. This is tooling rather than a
-calibrated result; no measured OM-1 or A7R II frames have been supplied yet,
+calibrated result; no measured IMX296 frames have been supplied yet,
 and accepted intrinsics have not replaced the nominal XML geometry.
 
 The default `sensor_equivalent` observation mode currently fails closed:
@@ -764,17 +808,62 @@ Those mechanisms realize an inferred Cartesian/contact policy; they do not selec
 
 ## Next integration steps
 
+The affordable-training and calibration baseline now lives in six modules:
+
+- `trajectory_corpus.py`: whole-trajectory posterior shards and split manifests;
+- `parallel_collect.py`: isolated headless MuJoCo/camera workers;
+- `corpus_audit.py`: multi-root whole-trajectory splitting, condition counts,
+  provenance checks, and shard hashes;
+- `offline_train.py`: train-only patch extraction, centralized shared
+  parameter learning, and held-out NLL;
+- `parallel_benchmark.py`: measured 1/4/6/8-worker scaling;
+- `uncertainty_calibration.py`: validation-only variance scaling, frozen test
+  NLL/coverage/z-score decomposition, stratification, and OOD disagreement.
+
+AI-108's accepted simulation-only corpus contains 16 v2 trajectories and 256
+transitions split 10/3/3, with required material/action/reach and fixed/dynamic
+roll conditions present in every split. It is not a painting-capability result,
+hardware-calibrated evidence, or a terminal composition corpus. See
+`docs/PARALLEL_TRAINING_PIPELINE_2026-08-10.md` and
+`docs/AI108_CORPUS_TECHNICAL_2026-08-11.md`.
+
+The same trajectory-isolated corpus now supports a separate shadow conditional
+patch VAE through `conditional_patch_vae.py` and
+`conditional_vae_train.py`. New v2 shards carry the inferred compact
+pre-stroke brush posterior; v1 shards remain readable with brush context marked
+unavailable. The cVAE uses a standard beta-one negative ELBO and reports
+likelihood, latent-outcome, and bootstrap-member uncertainty separately. It is
+not loaded by `SpatialActiveInferencePainter`, is absent from EFE, and cannot
+change a painting policy. See
+`docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+
+AI-107 has now evaluated a 2,500-step CNN ensemble and 3,000-step shadow cVAE
+ensemble on the accepted held-out trajectories. Both failed the provisional
+M2 interval gate: nominal 90% intervals covered about 99.4% of residuals, and
+a fixed-condition CNN's disagreement rose only 1.087x on meaningful unseen
+dynamic-roll conditions versus the declared 1.50x gate. The cVAE's within-
+member latent variance was effectively collapsed and it did not improve test
+density or calibration over the CNN. All offline-checkpoint precision-ledger
+entries were unobserved declared priors, not inferred posteriors. See
+`docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md`.
+
 1. Profile passage planning and batch motor realizations across candidate
    policies without changing posterior semantics.
 2. Replace diagonal motor outcome covariance with structured joint/contact
    covariance and calibrate it against representative hardware data.
-3. Learn a conditional brush/contact likelihood whose pressure trajectory
+3. Run AI-109 data/capacity/seed learning curves comparing the shadow cVAE,
+   existing Gaussian CNN, and an explicit near-no-change plus continuous-
+   consequence likelihood hypothesis. Held-out calibration is now measured
+   and negative; do not admit the cVAE to policy inference without passing the
+   recorded likelihood, calibration, conditioning, out-of-support, and
+   sequential-rollout gates.
+4. Learn a conditional brush/contact likelihood whose pressure trajectory
    depends on stroke phase, speed, curvature, brush loading, and local wet paint.
-4. Stress-test long runs, checkpoint compatibility, and replay retention before
+5. Stress-test long runs, checkpoint compatibility, and replay retention before
    raising policy depth or candidate count.
-5. Add learned spatial/material latents only after pixel transition likelihoods
+6. Add learned spatial/material latents only after pixel transition likelihoods
    are calibrated; retain deterministic decoding to material fields.
-6. Replace the current deterministic composition ELBO approximation with an
+7. Replace the current deterministic composition ELBO approximation with an
    uncertainty-integrated higher-level latent model.
 
 See `docs/history/CODEX_CONTINUATION_BRIEF.md` for the historical continuation

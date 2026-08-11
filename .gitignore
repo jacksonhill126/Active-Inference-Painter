@@ -12,5 +12,11 @@ build/
 dist/
 htmlcov/
 outputs/
-runs/
+# Generated runs stay local by default. Narrowly admit named, accepted baseline
+# bundles whose manifests are referenced by the durable tracker/documentation.
+runs/*
+!runs/baseline/
+runs/baseline/*
+!runs/baseline/s0-native-abstract-v0-2026-08-11/
+!runs/baseline/s0-native-abstract-v0-2026-08-11/**
 src/*.egg-info/

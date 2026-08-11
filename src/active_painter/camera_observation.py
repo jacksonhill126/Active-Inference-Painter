@@ -306,6 +306,7 @@ class CameraObservationProcess:
         *,
         random_seed: int = 0,
         native_resolution_overrides: Mapping[str, tuple[int, int]] | None = None,
+        identity_canvas_appearance: bool = False,
     ) -> None:
         if mujoco is None:
             raise RuntimeError(
@@ -313,6 +314,11 @@ class CameraObservationProcess:
                 "install the project's mujoco extra"
             )
         self.model_path = Path(model_path)
+        # Bounded sensor-simulation profiles may opt into a photometrically
+        # matched canvas composite. Geometry/occlusion and acquisition noise
+        # remain in the camera process, but the canvas pixel intensity is the
+        # same superficial-gray quantity used by the declared likelihood.
+        self.identity_canvas_appearance = bool(identity_canvas_appearance)
         self.rig: CameraRigSpec = load_camera_rig(self.model_path)
         self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
         self.data = mujoco.MjData(self.model)
@@ -623,9 +629,10 @@ class CameraObservationProcess:
                 )
                 surface = _bilinear_sample_normalized(canvas, canvas_uv)
                 raw = scene_gray.copy()
-                raw[yy, xx] = self._surface_appearance(
-                    surface,
-                    scene_gray[yy, xx],
+                raw[yy, xx] = (
+                    surface
+                    if self.identity_canvas_appearance
+                    else self._surface_appearance(surface, scene_gray[yy, xx])
                 )
             else:
                 raw = scene_gray

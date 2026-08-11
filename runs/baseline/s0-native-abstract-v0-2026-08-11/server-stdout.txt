@@ -1,0 +1,5 @@
+Initializing Active-Inference Arm Painter (spatial_material, bootstrap=0/0, generator=motion_manifold, bootstrap-composition-steps=0)...
+Active inference disabled: the camera-conditioned painting posterior is connected, but sensor-conditioned body initialization and the action-conditioned observation loop are not; hidden simulator state remains denied.
+Planner device: cpu
+Active-Inference Arm Painter web viewer: http://127.0.0.1:8026
+Press Ctrl+C to stop.

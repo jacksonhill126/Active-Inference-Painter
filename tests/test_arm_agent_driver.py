@@ -232,6 +232,59 @@ def test_spatial_material_driver_reports_spatial_planner_state() -> None:
     )
 
 
+def test_evidence_only_proposal_diagnostic_is_decimated_but_gap_updates_each_plan(
+    monkeypatch,
+) -> None:
+    cfg = PainterConfig(
+        canvas_size=16,
+        planner_state_kind="spatial_material",
+        spatial_grid_size=8,
+        spatial_hidden_channels=4,
+        spatial_residual_blocks=1,
+        spatial_ensemble_size=1,
+        candidate_policies=2,
+        planning_horizon=1,
+        learned_proposal_diagnostic_interval_plans=3,
+    )
+    driver = oracle_driver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+    proposal_calls: list[int] = []
+    gap_calls: list[int] = []
+
+    def fake_gap(_agent) -> float:
+        gap_calls.append(len(gap_calls) + 1)
+        return 0.01 * len(gap_calls)
+
+    def fake_proposal_refresh(self: ArmActiveInferenceDriver) -> None:
+        proposal_calls.append(self._policy_proposal_diagnostic_plan_count)
+        self._cached_policy_proposal = {"divergenceNats": float(len(proposal_calls))}
+
+    monkeypatch.setattr(SpatialActiveInferencePainter, "belief_composition_gap", fake_gap)
+    monkeypatch.setattr(
+        ArmActiveInferenceDriver,
+        "_refresh_policy_proposal_diagnostics",
+        fake_proposal_refresh,
+    )
+
+    for _ in range(7):
+        driver._refresh_composition_diagnostics()
+
+    assert gap_calls == list(range(1, 8))
+    assert proposal_calls == [1, 4, 7]
+    proposal = driver.diagnostics()["policyProposal"]
+    assert proposal["diagnosticIntervalPlans"] == 3
+    assert proposal["diagnosticPlanCount"] == 7
+    assert proposal["diagnosticAgePlans"] == 0
+
+    driver._refresh_composition_diagnostics()
+    proposal = driver.diagnostics()["policyProposal"]
+    assert proposal_calls == [1, 4, 7]
+    assert proposal["diagnosticAgePlans"] == 1
+
+
 def test_driver_reports_motor_primitive_policy_latents_and_efe_terms() -> None:
     cfg = PainterConfig(
         canvas_size=32,
@@ -283,7 +336,7 @@ def test_summary_driver_replay_stores_selected_motor_realization_condition() -> 
 
     stored_action = driver.agent.replay.data[-1][1]
     assert stored_action.shape == (cfg.action_dim,)
-    assert np.allclose(stored_action[7:], [0.0, 0.0, 1.0, 0.0, 0.0])
+    assert np.allclose(stored_action[8:], [0.0, 0.0, 1.0, 0.0, 0.0])
 
 
 def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:

@@ -178,7 +178,7 @@ Notes:
 
 ### T-105 Capture baseline telemetry and web-runtime behavior
 
-Status: `Active`
+Status: `Done`
 Track: Web/Telemetry  
 Depends on: T-101, T-103  
 Owner: Jackson/Codex  
@@ -196,8 +196,10 @@ Notes:
 
 - Runtime endpoint, frontend-state, canvas-render, and telemetry-schema tests
   are implemented and passing.
-- A short versioned baseline CSV/canvas/config artifact still needs to be saved
-  under the T-107 bundle convention.
+- Accepted 2026-08-11 in
+  `runs/baseline/s0-native-abstract-v0-2026-08-11/`: the current default
+  fail-closed runtime capture includes state, canvas, telemetry, frontend,
+  config, version/provenance manifests, hashes, and validation summary.
 
 Baseline command:
 
@@ -207,7 +209,7 @@ python -m active_painter.web_server --driver-bootstrap-transitions 0 --driver-bo
 
 ### T-106 Document known simulator shortcuts and limitations
 
-Status: `Active`
+Status: `Done`
 Track: Documentation  
 Depends on: T-101, T-102, T-103  
 Owner: Jackson/Codex  
@@ -229,7 +231,10 @@ Notes:
 - Architecture, current-implementation, development-audit, sensor-ledger, and
   model documentation now identify the native forecast approximation,
   motor/contact assumptions, Python paint boundary, and uncalibrated fields.
-- A consolidated three-category acceptance table remains.
+- Accepted 2026-08-11 in
+  `docs/SIMULATOR_SHORTCUT_CLASSIFICATION_2026-08-11.md` with a consolidated
+  three-category table separating S0 reference acceptance, MuJoCo calibration,
+  and physical-hardware validation.
 
 Suggested sources:
 
@@ -239,7 +244,7 @@ Suggested sources:
 
 ### T-107 Define baseline artifact bundle
 
-Status: `Blocked`
+Status: `Done`
 Track: Research Ops  
 Depends on: T-003, T-104, T-105  
 Owner: Jackson/Codex  
@@ -253,9 +258,15 @@ Acceptance:
 - Bundle records code version, backend, planner mode, canvas size, and random
   seeds where available.
 
+Notes:
+
+- Accepted 2026-08-11 in
+  `docs/BASELINE_ARTIFACT_BUNDLE_CONVENTION_2026-08-11.md` and instantiated at
+  `runs/baseline/s0-native-abstract-v0-2026-08-11/`.
+
 ### T-108 S0 reference-contract decision
 
-Status: `Blocked`
+Status: `Ready`
 Track: Validation  
 Depends on: T-104, T-105, T-106, T-107  
 Owner: Jackson  
@@ -269,6 +280,14 @@ Acceptance:
 - List which fields are stable interfaces and which plant/controller details
   remain provisional.
 - Record any blocking issues as tracker tasks before moving to S1/S2.
+
+Notes:
+
+- All evidence dependencies are complete. The recommendation and exact owner
+  decision text are in
+  `docs/S0_REFERENCE_CONTRACT_ACCEPTANCE_CANDIDATE_2026-08-11.md`.
+- Jackson's explicit lock decision is still required. T-109 remains a declared
+  native sensor-boundary nonconformance and is not silently accepted by S0.
 
 ### T-109 Migrate native execution to `plant-interface-v1`
 

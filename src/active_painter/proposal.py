@@ -102,6 +102,7 @@ from .policy_ranges import (
     PROPOSAL_KINDS,
     PROPOSAL_SUPPORT,
     Interval,
+    mark_curvature_proposal_parameters,
     passage_stroke_count_range,
     proposal_support_for,
 )
@@ -210,6 +211,9 @@ class ProposalLatent:
     amount: float
     stroke_count: int
     tone: float
+    # Finite hand-written mark-path atom. The learned proposal currently has
+    # support only at zero; the sensor smoke profile keeps learned emission off.
+    curvature: float = 0.0
 
     def value(self, parameter: str) -> float:
         return float(getattr(self, parameter))
@@ -242,6 +246,7 @@ class ProposalFactorLogDensity:
     stroke_count: float
     kind: float
     tone: float
+    curvature: float
     latent_count: int
     in_support: bool
     approximation: str
@@ -449,6 +454,7 @@ def hand_written_log_density(
         "stroke_count": 0.0,
         "kind": 0.0,
         "tone": 0.0,
+        "curvature": 0.0,
     }
     in_support = True
     kind_log_probabilities = hand_written_kind_log_probabilities(config)
@@ -469,6 +475,28 @@ def hand_written_log_density(
             terms["tone"] += -math.log(float(len(tones)))
         else:
             terms["tone"] += PROPOSAL_LOG_DENSITY_FLOOR
+        if latent.family == "mark":
+            curve_mix, min_magnitude, max_magnitude = (
+                mark_curvature_proposal_parameters(config)
+            )
+            magnitude_width = max_magnitude - min_magnitude
+            if abs(float(latent.curvature)) <= 1e-12:
+                log_density = (
+                    math.log(1.0 - curve_mix)
+                    if curve_mix < 1.0
+                    else PROPOSAL_LOG_DENSITY_FLOOR
+                )
+            elif (
+                curve_mix > 0.0
+                and magnitude_width > 0.0
+                and min_magnitude <= abs(float(latent.curvature)) <= max_magnitude
+            ):
+                # Mixed base measure: the zero-curvature branch is one atom;
+                # each nonzero sign branch has a uniform Lebesgue density.
+                log_density = math.log(0.5 * curve_mix) - math.log(magnitude_width)
+            else:
+                log_density = PROPOSAL_LOG_DENSITY_FLOOR
+            terms["curvature"] += log_density
         if latent.family == "passage":
             terms["kind"] += kind_log_probabilities[latent.kind]
             if latent.kind == "polyline":
@@ -883,6 +911,7 @@ class PolicyProposalNetwork(nn.Module):
             "stroke_count": zero.clone(),
             "kind": zero.clone(),
             "tone": zero.clone(),
+            "curvature": zero.clone(),
         }
         kind_log_probabilities = _masked_log_softmax(heads.kind_logits, _kind_mask(config, device))
         count_log_probabilities = _masked_log_softmax(
@@ -932,6 +961,13 @@ class PolicyProposalNetwork(nn.Module):
                 # the declared policy setting, not something the learned head
                 # may round to a nearby binary value.
                 terms["tone"] = terms["tone"] + torch.full_like(zero, float("-inf"))
+            if family == "mark" and abs(float(latent.curvature)) > 1e-12:
+                # The learned proposal has no curvature head in this bounded
+                # first slice. Its exact support is the straight atom; curved
+                # sensor-profile candidates remain hand-proposed and attributed.
+                terms["curvature"] = terms["curvature"] + torch.full_like(
+                    zero, float("-inf")
+                )
             if family == "passage":
                 terms["kind"] = terms["kind"] + kind_log_probabilities[PROPOSAL_KINDS.index(kind)]
                 count = float(latent.stroke_count)

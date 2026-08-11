@@ -68,6 +68,41 @@ python -m pip install -e ".[dev,mujoco]"
 python -m active_painter.web_server --plant-backend mujoco
 ```
 
+For accelerated shared pretraining, collect independent headless
+MuJoCo/camera-posterior trajectories and then train centrally:
+
+```bash
+python -m active_painter.parallel_collect --workers 6 --trajectories 60 --output-dir runs/corpus
+python -m active_painter.offline_train --manifest runs/corpus/split_manifest.json --output-checkpoint runs/checkpoints/shared-pretraining.pt --device cuda
+```
+
+Workers keep their posteriors and histories isolated. Dataset assignment occurs
+by whole trajectory before local-patch extraction, and the output is labelled
+shared pretraining rather than one agent's individual development. See
+[`docs/PARALLEL_TRAINING_PIPELINE_2026-08-10.md`](docs/PARALLEL_TRAINING_PIPELINE_2026-08-10.md).
+The collector recycles the full runtime after each trajectory by default and
+retains/audits completed shards if another job fails. The accepted AI-108
+baseline combines bounded fixed-roll and opt-in `research_full_roll` batches;
+see its [technical record](docs/AI108_CORPUS_TECHNICAL_2026-08-11.md) and
+[owner brief](docs/AI108_CORPUS_OWNER_BRIEF_2026-08-11.md).
+AI-107's held-out calibration on that corpus is also complete, with a negative
+M2 result; see the
+[technical calibration record](docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md)
+and [owner brief](docs/AI107_UNCERTAINTY_CALIBRATION_OWNER_BRIEF_2026-08-11.md).
+
+An experimental conditional patch-transition VAE can be trained against the
+same whole-trajectory splits in shadow mode:
+
+```bash
+python -m active_painter.conditional_vae_train --manifest runs/corpus/split_manifest.json --output-checkpoint runs/checkpoints/conditional-patch-cvae.pt --device cuda
+```
+
+It has no policy influence. It predicts local material consequences and keeps
+latent outcome variation separate from ensemble disagreement; it is not the
+project's composition/order model. See the
+[technical record](docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md)
+and [owner brief](docs/CONDITIONAL_PATCH_VAE_OWNER_BRIEF_2026-08-11.md).
+
 Run the deterministic smoke suite:
 
 ```bash
@@ -229,6 +264,9 @@ that every planned feature will be built.
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): current evidence, known failures, and public progress log.
 - [`docs/BASELINE_TEST_RESULT_2026-07-24.md`](docs/BASELINE_TEST_RESULT_2026-07-24.md): latest complete-suite environment and result.
 - [`docs/RESEARCH_CHARTER.md`](docs/RESEARCH_CHARTER.md): scientific intent and scope.
+- [`docs/OWNER_CONTRIBUTION_BRIEF_2026-08-11.md`](docs/OWNER_CONTRIBUTION_BRIEF_2026-08-11.md): owner-facing account of the project's conceptual, architectural, and embodiment contributions.
+- [`docs/OWNER_STEERING_CATALOG_2026-08-11.md`](docs/OWNER_STEERING_CATALOG_2026-08-11.md): chronological catalog of 145 recoverable owner decisions, corrections, selections, deferrals, and meaningful steering actions since June 29.
+- [`docs/PROJECT_DECISION_PROVENANCE_2026-08-11.md`](docs/PROJECT_DECISION_PROVENANCE_2026-08-11.md): evidence-qualified owner/agent decision ledger for future project instances.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): long-form architecture brief.
 - [`docs/GENERATIVE_MODEL_SPEC.md`](docs/GENERATIVE_MODEL_SPEC.md): implemented probabilistic factorization, VFE/EFE map, and approximation register.
 - [`docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md`](docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md): AI-111 candidate-budget, horizon, seed, and mixture result.

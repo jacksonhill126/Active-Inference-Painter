@@ -545,8 +545,8 @@ def render_representative_plate(
     figure.text(
         0.5,
         0.006,
-        "Orange reticle: projected brush tip. Camera housings hidden because "
-        "mounts and inspection-camera stow geometry are not yet modeled.",
+        "Orange reticle: projected brush tip. Compact camera housings are "
+        "hidden so the plots describe optical observability, not mount CAD.",
         ha="center",
         fontsize=9,
         color="#44545a",
@@ -821,8 +821,8 @@ def _summary_payload(
         "cameras": cameras,
         "approximations": [
             "Camera and mount visual geoms are excluded from sensor rays.",
-            "The deployed inspection camera is evaluated during contact only "
-            "as a hypothetical optical reference; it is park-only.",
+            "Only the selected compact left/right views participate; no "
+            "inspection or overhead camera is assumed.",
             "MuJoCo grayscale shading does not include paint appearance, lens "
             "distortion, glare, blur, exposure dynamics, or sensor noise.",
             "Bristle visibility is segmentation-based at model input "

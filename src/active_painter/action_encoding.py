@@ -8,8 +8,8 @@ from .env import StrokeAction
 from .policies import MotorPrimitiveLatent
 
 
-BASE_STROKE_ACTION_DIM = 7
-BASE_SPATIAL_ACTION_CHANNELS = 6
+BASE_STROKE_ACTION_DIM = 8
+BASE_SPATIAL_ACTION_CHANNELS = 7
 DEFAULT_MOTOR_KINDS = (
     "cartesian_ik",
     "joint_spline",
@@ -69,7 +69,7 @@ def encoded_action_vector(
 
 
 def coerce_action_tensor(action: torch.Tensor, action_dim: int) -> torch.Tensor:
-    """Pad legacy 7-D actions to the model's configured action dimension."""
+    """Pad legacy actions to the model's configured action dimension."""
 
     current = int(action.shape[-1])
     target = int(action_dim)
@@ -83,7 +83,7 @@ def coerce_action_tensor(action: torch.Tensor, action_dim: int) -> torch.Tensor:
 
 
 def coerce_action_raster(action_raster: torch.Tensor, action_channels: int) -> torch.Tensor:
-    """Pad legacy 6-channel spatial actions to configured motor-conditioned channels."""
+    """Pad legacy spatial actions to configured motor-conditioned channels."""
 
     current = int(action_raster.shape[1])
     target = int(action_channels)

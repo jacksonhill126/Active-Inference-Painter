@@ -142,8 +142,12 @@ outcomes are considered. Examples here include:
 
 - immediate stopping being unlikely below roughly 70 percent coverage;
 - local continuation of an active passage being likely;
-- the proposal mixture that supplies ordinary marks, passages, and plans;
 - equal prior probability over enabled motor realization kinds.
+
+The mixture that supplies ordinary marks, passages, and plans is a
+computational proposal distribution, not a policy prior. It changes which
+finite candidates exist and is tracked separately because candidate-set bias
+remains unresolved.
 
 ### Precision
 
@@ -485,14 +489,17 @@ predicted material state.
 A painting-level `StrokeAction` contains:
 
 ```text
-x0, y0, x1, y1, width, amount, tone, stop
+x0, y0, x1, y1, width, amount, tone, curvature, stop
 ```
 
 Coordinates and width are normalized to the canvas. `amount` represents brush
 loading/material consequence, not a direct pressure command. `tone` is 0 for
-white and 1 for black.
+white and 1 for black. `curvature` is signed quadratic-Bezier midpoint
+deflection divided by endpoint chord length. Zero exactly recovers the
+historical straight segment. Curvature declares painting-policy geometry; it
+is not a roll command.
 
-For spatial dynamics, a stroke becomes an 11-channel raster:
+For spatial dynamics, a stroke becomes a 12-channel raster:
 
 1. stroke footprint;
 2. start-point blob;
@@ -500,7 +507,8 @@ For spatial dynamics, a stroke becomes an 11-channel raster:
 4. constant width field;
 5. constant amount field;
 6. constant tone field;
-7-11. one-hot motor realization fields.
+7. constant signed-curvature field;
+8-12. one-hot motor realization fields.
 
 The motor channels allow the learned transition likelihood to distinguish:
 
@@ -817,15 +825,17 @@ mark.
 
 ### 13.1 Individual-mark policies
 
-An unstructured policy contains one to four independently sampled straight
-marks. The proposal distribution favors:
+An unstructured policy contains one to four independently sampled marks. The
+hand proposal can emit straight or symmetric signed quadratic curves. The
+proposal distribution favors:
 
 - starting in low-coverage regions half of the time;
 - relatively long strokes;
 - log-uniform widths, producing many fine marks and fewer broad ones;
 - both white and black tone alternatives.
 
-These are computational proposal biases. They control what the finite
+The curve probability and magnitude are also proposal support, not aesthetic
+preferences. These are computational proposal biases. They control what the finite
 candidate set contains, but they are not normalized policy priors and are not
 learned aesthetic rewards.
 
@@ -1094,6 +1104,12 @@ The current motor kinds are:
 3. elbow-pivot trajectory;
 4. positive upper-arm roll sweep;
 5. negative upper-arm roll sweep.
+
+The bounded sensor-simulation profile instead compares three realizations for
+its one embodied-refined painting candidate: neutral Cartesian IK and fixed
++24/-24 degree upper-arm-roll postures. This directly exposes the useful
+sideways brush posture without enabling the less reliable dynamic sweeps in the
+repeated live loop.
 
 The roll sweeps move from approximately -32 to +32 degrees, or the reverse,
 while following the Cartesian mark.
@@ -1716,6 +1732,35 @@ Possible routes include:
 - use a learned surrogate only after checking that it preserves uncertainty
   and feasibility semantics.
 
+The first affordable parallel baseline is now implemented in
+`parallel_collect.py`, `trajectory_corpus.py`, and `offline_train.py`.
+Independent MuJoCo/camera workers emit camera-derived posterior trajectories;
+whole trajectories are split before local-patch extraction; and a central
+trainer updates shared likelihood parameters while keeping online beliefs and
+histories separate. This is conventional data/SGD infrastructure around the
+active-inference policy loop. AI-108 now supplies an accepted 16-trajectory,
+256-transition, trajectory-isolated simulation corpus with fixed and dynamic
+roll conditions in every split. AI-107 held-out calibration is now measured
+and negative: trained CNN and cVAE models produced about 99.4% empirical
+coverage for nominal 90% intervals, and a fixed-condition ensemble produced
+only a 1.087x disagreement increase on unseen dynamic-roll conditions. AI-109
+multi-size/capacity/seed learning curves remain to be measured. See
+`PARALLEL_TRAINING_PIPELINE_2026-08-10.md`,
+`AI108_CORPUS_TECHNICAL_2026-08-11.md`, and
+`AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md`.
+
+A separate `ConditionalPatchVAEEnsemble` now provides a shadow/offline learned
+likelihood experiment over those train-only patches. Its beta-one negative
+ELBO conditions on current posterior mean/log variance, rasterized mark and
+motor realization, and optional compact pre-stroke brush posterior. It reports
+decoder likelihood variance, within-member latent outcome variance, and
+between-member epistemic disagreement separately. It is not connected to EFE
+or live rollouts and must remain outside policy inference until the admission
+tests in `CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md` pass on a
+manifested live-scale corpus. Its 3,000-step AI-107 run did not pass those
+calibration/OOD gates and showed effectively collapsed within-member latent
+variance, so it remains shadow-only.
+
 ### Third: richer multiscale spatial dynamics
 
 A useful next hierarchy would combine:
@@ -1766,6 +1811,8 @@ only a per-kind scalar reliability inflation.
 | `spatial_state.py` | Material fields, pyramid, projection, and action rasterization |
 | `local_spatial.py` | Sparse patch geometry, replay, masking, and batching |
 | `models.py` | Summary and spatial transition ensembles |
+| `conditional_patch_vae.py` | Shadow conditional latent local-transition likelihood and uncertainty split |
+| `conditional_vae_train.py` | Offline cVAE training, held-out ablations, calibration, and isolated checkpoint |
 | `spatial_inference.py` | Pixel Gaussian posterior/VFE update |
 | `policies.py` | Mark, passage, polyline, passage-plan, and stop-policy definitions |
 | `policy_ranges.py` | Shared representational bounds and hand-written/learned proposal support |

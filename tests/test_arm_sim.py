@@ -2,7 +2,17 @@ import pytest
 import numpy as np
 
 from active_painter.arm_control import ik_pose_for_canvas_point
-from active_painter.arm_sim import Brush, ArmPainterSim, ArmPose, JointPlant, VerticalCanvas, clip_scalar, safe_home_pose
+from active_painter.arm_sim import (
+    ArmPainterSim,
+    ArmPose,
+    Brush,
+    JointPlant,
+    VerticalCanvas,
+    clip_scalar,
+    round_brush_canvas_angle_degrees,
+    round_brush_footprint_aspect,
+    safe_home_pose,
+)
 from active_painter.config import PainterConfig
 
 
@@ -331,6 +341,163 @@ def test_brush_travel_direction_elongates_the_footprint() -> None:
     assert x_span > y_span + 3  # swept along the travel (x) axis
 
 
+def _thickness_covariance(canvas: VerticalCanvas) -> np.ndarray:
+    yy, xx = np.indices(canvas.thickness.shape, dtype=np.float64)
+    weights = canvas.thickness.astype(np.float64)
+    total = float(weights.sum())
+    assert total > 0.0
+    mean_x = float((weights * xx).sum() / total)
+    mean_y = float((weights * yy).sum() / total)
+    centered = np.stack([xx - mean_x, yy - mean_y], axis=-1)
+    return np.einsum("ij,ija,ijb->ab", weights, centered, centered) / total
+
+
+def test_round_brush_footprint_is_circular_normal_and_elongates_with_tilt() -> None:
+    cfg = PainterConfig(
+        canvas_size=192,
+        canvas_grain_strength=0.0,
+        brush_edge_wobble=0.0,
+        brush_bristle_depth=0.0,
+        brush_bristle_gap_fraction=0.0,
+    )
+    point = np.asarray([0.0, 17.0, 0.0])
+    normal = VerticalCanvas(cfg)
+    horizontal = VerticalCanvas(cfg)
+    vertical = VerticalCanvas(cfg)
+    bn = Brush(cfg, np.random.default_rng(0)); bn.reload(1.0, 1.0)
+    bh = Brush(cfg, np.random.default_rng(0)); bh.reload(1.0, 1.0)
+    bv = Brush(cfg, np.random.default_rng(0)); bv.reload(1.0, 1.0)
+    normal.paint_at(
+        point,
+        0.7,
+        1.0,
+        1.0 / 90.0,
+        brush=bn,
+        brush_axis_world=np.asarray([0.0, 1.0, 0.0]),
+    )
+    horizontal.paint_at(
+        point,
+        0.7,
+        1.0,
+        1.0 / 90.0,
+        brush=bh,
+        brush_axis_world=np.asarray([0.8, 0.6, 0.0]),
+    )
+    vertical.paint_at(
+        point,
+        0.7,
+        1.0,
+        1.0 / 90.0,
+        brush=bv,
+        brush_axis_world=np.asarray([0.0, 0.6, 0.8]),
+    )
+
+    n_cov = _thickness_covariance(normal)
+    h_cov = _thickness_covariance(horizontal)
+    v_cov = _thickness_covariance(vertical)
+    assert n_cov[0, 0] == pytest.approx(n_cov[1, 1], rel=0.12)
+    assert h_cov[0, 0] > 1.6 * h_cov[1, 1]
+    assert v_cov[1, 1] > 1.6 * v_cov[0, 0]
+
+
+def test_round_brush_size_matches_bundle_and_canvas_plane_angle_contract() -> None:
+    cfg = PainterConfig()
+    canvas = VerticalCanvas(cfg)
+    perpendicular = np.asarray([0.0, 1.0, 0.0])
+    forty_five = np.asarray([np.sqrt(0.5), np.sqrt(0.5), 0.0])
+    thirty = np.asarray([np.cos(np.deg2rad(30.0)), np.sin(np.deg2rad(30.0)), 0.0])
+
+    assert 2.0 * canvas.brush_radius_world(0.0) == pytest.approx(0.06)
+    assert 2.0 * canvas.brush_radius_world(1.0) == pytest.approx(0.60)
+    assert canvas.brush_radius_world(0.5) < canvas.brush_radius_world(1.0)
+    assert round_brush_canvas_angle_degrees(perpendicular) == pytest.approx(90.0)
+    assert round_brush_canvas_angle_degrees(forty_five) == pytest.approx(45.0)
+    assert round_brush_canvas_angle_degrees(thirty) == pytest.approx(30.0)
+    assert round_brush_footprint_aspect(perpendicular, cfg) == pytest.approx(1.0)
+    assert round_brush_footprint_aspect(forty_five, cfg) == pytest.approx(1.35)
+    assert round_brush_footprint_aspect(thirty, cfg) > round_brush_footprint_aspect(
+        forty_five, cfg
+    )
+
+
+def test_canonical_upper_arm_roll_changes_round_brush_handle_projection() -> None:
+    kinematics = ArmPainterSim(PainterConfig()).kinematics
+    neutral_cross, neutral_pull = kinematics.brush_canvas_axes(
+        ArmPose(yaw=0.0, pitch=30.0, roll=0.0, elbow=60.0)
+    )
+    rolled_cross, rolled_pull = kinematics.brush_canvas_axes(
+        ArmPose(yaw=0.0, pitch=30.0, roll=32.0, elbow=60.0)
+    )
+
+    assert np.linalg.norm(neutral_cross) == pytest.approx(1.0)
+    assert np.linalg.norm(neutral_pull) == pytest.approx(1.0)
+    assert np.linalg.norm(rolled_cross) == pytest.approx(1.0)
+    assert np.linalg.norm(rolled_pull) == pytest.approx(1.0)
+    assert abs(float(np.dot(neutral_pull, rolled_pull))) < 0.95
+    assert np.dot(neutral_cross, neutral_pull) == pytest.approx(0.0, abs=1e-12)
+    assert np.dot(rolled_cross, rolled_pull) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_push_direction_has_stronger_and_more_irregular_stick_slip_than_pull() -> None:
+    cfg = PainterConfig(brush_tooth_friction_modulation=0.0)
+
+    def trace(step: float) -> tuple[np.ndarray, np.ndarray, int]:
+        brush = Brush(cfg, np.random.default_rng(0))
+        brush.reload(1.0, 1.0)
+        handle = 0.0
+        painting_points: list[float] = []
+        forces: list[float] = []
+        transitions = 0
+        for _ in range(60):
+            response = brush.update_contact_dynamics(
+                np.asarray([step, 0.0]),
+                1.0 / 90.0,
+                normal_force=15.0,
+                pull_direction_xz=np.asarray([1.0, 0.0]),
+                surface_tooth=0.5,
+            )
+            handle += step
+            painting_points.append(handle - response.bristle_deflection_xz[0])
+            forces.append(response.tangential_force)
+            transitions += int(response.stick_slip_transition)
+        return np.asarray(painting_points), np.asarray(forces), transitions
+
+    pull_points, pull_forces, pull_transitions = trace(0.05)
+    push_points, push_forces, push_transitions = trace(-0.05)
+    assert push_forces.max() > 2.0 * pull_forces.max()
+    assert np.std(np.diff(push_points)) > 1.5 * np.std(np.diff(pull_points))
+    assert push_transitions > 0
+    assert pull_transitions > 0
+
+
+def test_bristle_friction_depends_on_normal_force_direction_and_canvas_tooth() -> None:
+    cfg = PainterConfig()
+
+    def release(motion: float, normal: float, tooth: float):
+        brush = Brush(cfg, np.random.default_rng(0))
+        brush.reload(1.0, 1.0)
+        return brush.update_contact_dynamics(
+            np.asarray([motion, 0.0]),
+            1.0 / 90.0,
+            normal_force=normal,
+            pull_direction_xz=np.asarray([1.0, 0.0]),
+            surface_tooth=tooth,
+        )
+
+    pull = release(2.0, 15.0, 0.5)
+    push = release(-2.0, 15.0, 0.5)
+    raised_tooth = release(-2.0, 15.0, 1.0)
+    low_tooth = release(-2.0, 15.0, 0.0)
+    no_contact = release(-2.0, 0.0, 1.0)
+
+    assert pull.pull_alignment == pytest.approx(1.0)
+    assert push.pull_alignment == pytest.approx(-1.0)
+    assert push.tangential_force > pull.tangential_force
+    assert raised_tooth.tangential_force > low_tooth.tangential_force
+    assert no_contact.tangential_force == 0.0
+    assert np.array_equal(no_contact.bristle_deflection_xz, np.zeros(2))
+
+
 def test_brush_bristles_streak_across_the_stroke_width() -> None:
     cfg = PainterConfig(canvas_size=96)
     canvas = VerticalCanvas(cfg)
@@ -346,7 +513,15 @@ def test_brush_bristles_streak_across_the_stroke_width() -> None:
 
 def test_brush_flow_taper_narrows_the_mark_toward_stroke_ends() -> None:
     # A low flow (stroke end) must lay a narrower mark than full flow (middle).
-    cfg = PainterConfig(canvas_size=96)
+    # Use enough pixels across the canonical 0.5-inch bundle that the tapered
+    # and full diameters do not quantize to the same three-pixel support.
+    cfg = PainterConfig(
+        canvas_size=256,
+        canvas_grain_strength=0.0,
+        brush_edge_wobble=0.0,
+        brush_bristle_depth=0.0,
+        brush_bristle_gap_fraction=0.0,
+    )
     point = np.asarray([0.0, 17.0, 0.0])
     full = VerticalCanvas(cfg)
     tip = VerticalCanvas(cfg)
@@ -413,7 +588,10 @@ def test_brush_dab_is_not_a_perfect_circle() -> None:
     for _ in range(30):
         wobbled.paint_at(point, 0.8, 1.0, 1.0 / 90.0, brush=bw)
         perfect.paint_at(point, 0.8, 1.0, 1.0 / 90.0, brush=bp)
-    assert not np.array_equal(wobbled.thickness > 0, perfect.thickness > 0)
+    # With the hardware-aligned contact diameter the wobble can remain within
+    # the same discrete support pixels, but it must still alter the subpixel
+    # edge/deposition profile.
+    assert float(np.abs(wobbled.thickness - perfect.thickness).max()) > 1e-3
 
 
 def test_stroke_sampler_never_collapses_edge_strokes_into_dabs() -> None:

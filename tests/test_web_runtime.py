@@ -74,6 +74,31 @@ def test_web_runtime_defaults_to_fail_closed_sensor_boundary() -> None:
     assert "fail-closed" in result["error"]
 
 
+def test_web_runtime_preserves_historical_default_seeds_and_isolates_explicit_workers() -> None:
+    default = WebSimRuntime(
+        canvas_size=16,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+    )
+    worker = WebSimRuntime(
+        canvas_size=16,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+        seed=1000,
+    )
+
+    assert default.sim.config.canvas_grain_seed == 0
+    assert default.sim.config.brush_seed == 0
+    assert default.agent_driver.config.canvas_grain_seed == 0
+    assert default.agent_driver.config.brush_seed == 0
+    assert default.agent_driver.seed == 17
+    assert worker.sim.config.canvas_grain_seed == 1101
+    assert worker.sim.config.brush_seed == 1211
+    assert worker.agent_driver.config.canvas_grain_seed == 1307
+    assert worker.agent_driver.config.brush_seed == 1401
+    assert worker.agent_driver.seed == 1503
+
+
 def test_provisional_sensor_runtime_uses_independent_mujoco_forecast_context() -> None:
     pytest.importorskip("mujoco")
     from active_painter.camera_observation import CameraObservationProcess
@@ -85,11 +110,10 @@ def test_provisional_sensor_runtime_uses_independent_mujoco_forecast_context() -
     )
     runtime._camera_process = CameraObservationProcess(
         native_resolution_overrides={
-            "canvas_right_oblique": (640, 360),
-            "canvas_left_oblique": (640, 360),
-            "canvas_inspection_deployed": (640, 360),
-            "brush_standoff_overhead": (320, 240),
-        }
+            "canvas_right_oblique": (640, 480),
+            "canvas_left_oblique": (640, 480),
+        },
+        identity_canvas_appearance=True,
     )
     try:
         driver = runtime.agent_driver
@@ -101,6 +125,13 @@ def test_provisional_sensor_runtime_uses_independent_mujoco_forecast_context() -
         assert template.config.canvas_grain_seed != runtime.sim.config.canvas_grain_seed
         assert driver.observation_boundary_blocked is False
         assert driver.trained_transitions == 0
+        assert driver.config.curved_mark_proposal_mix == pytest.approx(2.0 / 3.0)
+        assert driver.config.mark_curvature_magnitude == pytest.approx(0.24)
+        assert driver.config.mark_curvature_min_fraction == pytest.approx(0.10)
+        assert driver.config.brush_reload_policy_prior == pytest.approx(0.50)
+        assert driver.config.motor_realization_candidate_limit == 3
+        assert driver.config.motor_forecast_workers == 3
+        assert driver.config.motor_forecast_hz == pytest.approx(30.0)
         assert driver.provisional_sensor_ready is False
         assert runtime._initial_sensor_camera_pending is True
         with pytest.raises(PrivilegedStateAccessError, match="denied"):
@@ -114,6 +145,9 @@ def test_provisional_sensor_runtime_uses_independent_mujoco_forecast_context() -
 
         assert runtime._initial_sensor_camera_pending is False
         assert driver.provisional_sensor_ready is True
+        assert driver.belief.material_coverage_mean(
+            driver.config.paint_presence_threshold
+        ) < 0.10
         boundary = driver.diagnostics()["observationBoundary"]
         assert boundary["liveProcessStateDenied"] is True
         assert boundary["provisionalSensorSimulation"]["ready"] is True
@@ -139,11 +173,10 @@ def test_provisional_sensor_runtime_repeats_camera_closed_strokes() -> None:
     )
     runtime._camera_process = CameraObservationProcess(
         native_resolution_overrides={
-            "canvas_right_oblique": (320, 180),
-            "canvas_left_oblique": (320, 180),
-            "canvas_inspection_deployed": (320, 180),
-            "brush_standoff_overhead": (160, 120),
-        }
+            "canvas_right_oblique": (320, 240),
+            "canvas_left_oblique": (320, 240),
+        },
+        identity_canvas_appearance=True,
     )
     try:
         backend = runtime.sim.plant.backend
@@ -174,7 +207,10 @@ def test_provisional_sensor_runtime_repeats_camera_closed_strokes() -> None:
 
         assert driver.stroke_count == 2
         assert driver.action_camera_update_count == 2
-        assert len(driver.agent.replay) == 2
+        # A curved footprint can be partitioned into more than one bounded
+        # local-patch replay item; every completed camera update must still
+        # contribute transition evidence.
+        assert len(driver.agent.replay) >= driver.action_camera_update_count
         assert runtime.sim.canvas.material_coverage() > 0.0
         assert driver.last_execution_forecast is not None
         assert "no live ArmPainterSim state copied" in (
@@ -186,6 +222,9 @@ def test_provisional_sensor_runtime_repeats_camera_closed_strokes() -> None:
         assert runtime.body_estimator.posterior.monotonic_time_s == pytest.approx(
             runtime.sim.plant.backend.data.time
         )
+        # Browser clients require strict JSON, unlike Python's permissive
+        # default encoder for IEEE NaN/Infinity.
+        json.dumps(runtime.state(), allow_nan=False)
     finally:
         runtime.stop()
 
@@ -298,10 +337,8 @@ def test_mujoco_runtime_exposes_lazy_model_facing_camera_png() -> None:
     )
     runtime._camera_process = CameraObservationProcess(
         native_resolution_overrides={
-            "canvas_right_oblique": (640, 360),
-            "canvas_left_oblique": (640, 360),
-            "canvas_inspection_deployed": (640, 360),
-            "brush_standoff_overhead": (320, 240),
+            "canvas_right_oblique": (640, 480),
+            "canvas_left_oblique": (640, 480),
         }
     )
     try:
@@ -349,15 +386,8 @@ def test_mujoco_runtime_exposes_lazy_model_facing_camera_png() -> None:
         foveation = runtime.state()["cameraObservation"]["foveation"]
         assert foveation["active"]["centerCanvasUv"] == pytest.approx([0.3, 0.7])
         assert foveation["active"]["selectionBasis"] == "operator_diagnostic"
-        with pytest.raises(RuntimeError, match="camera_clear_park"):
+        with pytest.raises(KeyError, match="canvas_inspection_deployed"):
             runtime.camera_png("canvas_inspection_deployed")
-        park_qpos = backend.keyframe_qpos("camera_clear_park")
-        backend.set_state(park_qpos[:4], control_rad=park_qpos[:4])
-        inspection = Image.open(
-            io.BytesIO(runtime.camera_png("canvas_inspection_deployed"))
-        )
-        assert inspection.mode == "L"
-        assert inspection.size == (512, 512)
     finally:
         runtime.stop()
 
@@ -375,10 +405,8 @@ def test_mujoco_runtime_automatically_delivers_post_action_camera_update() -> No
     )
     runtime._camera_process = CameraObservationProcess(
         native_resolution_overrides={
-            "canvas_right_oblique": (640, 360),
-            "canvas_left_oblique": (640, 360),
-            "canvas_inspection_deployed": (640, 360),
-            "brush_standoff_overhead": (320, 240),
+            "canvas_right_oblique": (640, 480),
+            "canvas_left_oblique": (640, 480),
         }
     )
     try:
@@ -712,6 +740,28 @@ def test_web_runtime_state_consumes_stopped_episode_before_reporting() -> None:
     assert state["canvas"]["coverage"] == 0.0
 
 
+def test_interactive_runtime_preserves_terminal_canvas_until_reset() -> None:
+    runtime = oracle_runtime(canvas_size=32, restart_on_stop=False)
+    runtime.sim.canvas.paint_at(
+        np.asarray([0.0, runtime.sim.canvas.distance, 0.0]),
+        pressure=0.8,
+        tone=1.0,
+        dt=0.2,
+    )
+    coverage_before = runtime.sim.canvas.material_coverage()
+    runtime.agent_driver._pending_stopped = True
+    runtime.agent_driver._pending_ranked = []
+
+    runtime.agent_driver.step(runtime.sim, 1.0 / 240.0)
+    state = runtime.state()
+
+    assert state["paintingCount"] == 1
+    assert state["restartOnStop"] is False
+    assert state["paused"] is True
+    assert state["agent"]["stopped"] is True
+    assert state["canvas"]["coverage"] == pytest.approx(coverage_before)
+
+
 def test_web_visualizer_has_no_scene_grid_and_uses_runtime_version_slot() -> None:
     main_js = Path("web/main.js").read_text(encoding="utf-8")
     index_html = Path("web/index.html").read_text(encoding="utf-8")
@@ -767,7 +817,7 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
     assert model["kinematics"]["upperArmLength"] == pytest.approx(0.3302)
     assert model["kinematics"]["lowerArmLength"] == pytest.approx(0.3302)
     assert model["canvas"]["center"] == pytest.approx([0.075, 0.4826, 0.350])
-    assert model["cameraRig"]["version"] == "provisional-multiview-v4"
+    assert model["cameraRig"]["version"] == "provisional-compact-dual-imx296-v1"
     assert model["cameraRig"]["normalization"] == "role_dependent_v1"
     assert model["cameraRig"]["calibrationStatus"] == (
         "nominal_lens_geometry_pending_physical_calibration"
@@ -776,7 +826,7 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         "linear_grayscale_float32_normalized_0_1"
     )
     assert model["cameraRig"]["shutterModel"] == (
-        "heterogeneous_per_camera_v1"
+        "global_pair_pending_time_sync_v1"
     )
     assert model["cameraRig"]["observationModel"] == (
         "mujoco_native_global_foveal_composite_v1"
@@ -804,26 +854,20 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         camera["name"]: camera for camera in model["cameraRig"]["cameras"]
     }
     assert cameras["canvas_right_oblique"]["likelihoodModelErrorStd"] == pytest.approx(
-        0.035
+        0.040
     )
     assert cameras["canvas_right_oblique"]["likelihoodInlierProbability"] == pytest.approx(
-        0.96
+        0.95
     )
     assert set(cameras) == {
         "canvas_right_oblique",
         "canvas_left_oblique",
-        "canvas_inspection_deployed",
-        "brush_standoff_overhead",
     }
     assert cameras["canvas_right_oblique"]["incidenceDeg"] == pytest.approx(
-        31.7548481366
+        29.7842659632
     )
     assert cameras["canvas_left_oblique"]["incidenceDeg"] == pytest.approx(
-        32.5724697676
-    )
-    assert cameras["canvas_inspection_deployed"]["availability"] == "park_only"
-    assert cameras["canvas_inspection_deployed"]["incidenceDeg"] == pytest.approx(
-        0.0
+        29.7842659632
     )
     assert cameras["canvas_right_oblique"]["channels"] == "grayscale"
     assert cameras["canvas_right_oblique"]["registration"] == (
@@ -834,64 +878,52 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         512,
     ]
     assert cameras["canvas_right_oblique"]["hardwareBaseline"] == (
-        "OM_SYSTEM_OM-1"
+        "Raspberry_Pi_Global_Shutter_Camera_IMX296"
     )
-    assert cameras["canvas_right_oblique"]["hardwareStatus"] == "owned"
+    assert cameras["canvas_right_oblique"]["hardwareStatus"] == "selected_not_purchased"
     assert cameras["canvas_right_oblique"]["lensStatus"] == (
-        "confirmed_focal_length"
+        "provisional_4mm_CS_mount"
     )
     assert cameras["canvas_right_oblique"]["captureMode"] == (
-        "MFT_full_width_16x9"
+        "IMX296_full_1456x1088"
     )
     assert cameras["canvas_right_oblique"]["focalLengthMm"] == pytest.approx(
-        25.0
+        4.0
     )
     assert cameras["canvas_right_oblique"]["activeSensorWidthMm"] == (
-        pytest.approx(17.3)
+        pytest.approx(5.0232)
     )
     assert cameras["canvas_right_oblique"][
         "fullFrameEquivalentFocalLengthMm"
-    ] == pytest.approx(50.0)
-    assert cameras["canvas_right_oblique"]["shutterModel"] == "rolling"
+    ] == pytest.approx(28.666985188724)
+    assert cameras["canvas_right_oblique"]["shutterModel"] == "global"
     assert cameras["canvas_right_oblique"]["acquisitionResolutionPx"] == [
-        3840,
-        2160,
+        1456,
+        1088,
     ]
     assert cameras["canvas_right_oblique"]["fovealResolutionPx"] == [256, 256]
     assert cameras["canvas_left_oblique"]["hardwareBaseline"] == (
-        "Sony_ILCE-7RM2"
+        "Raspberry_Pi_Global_Shutter_Camera_IMX296"
     )
     assert cameras["canvas_left_oblique"]["captureMode"] == (
-        "Super35_full_width_16x9"
+        "IMX296_full_1456x1088"
     )
     assert cameras["canvas_left_oblique"]["focalLengthMm"] == pytest.approx(
-        35.0
+        4.0
     )
     assert cameras["canvas_left_oblique"][
         "fullFrameEquivalentFocalLengthMm"
-    ] == pytest.approx(52.5)
+    ] == pytest.approx(28.666985188724)
     assert cameras["canvas_left_oblique"]["transport"] == (
-        "clean_HDMI_capture"
+        "CSI-2"
     )
     assert cameras["canvas_right_oblique"]["sampleRateHz"] == pytest.approx(
-        30.0
-    )
-    assert cameras["canvas_right_oblique"]["latencyS"] == pytest.approx(
-        1.0 / 30.0
-    )
-    assert cameras["canvas_right_oblique"]["quantizationBits"] == 8
-    assert cameras["brush_standoff_overhead"]["role"] == "brush_standoff"
-    assert cameras["brush_standoff_overhead"]["registration"] == (
-        "canvas_edge_profile"
-    )
-    assert cameras["brush_standoff_overhead"]["modelInputResolutionPx"] == [
-        640,
-        480,
-    ]
-    assert cameras["brush_standoff_overhead"]["fovealResolutionPx"] is None
-    assert cameras["brush_standoff_overhead"]["sampleRateHz"] == pytest.approx(
         60.0
     )
+    assert cameras["canvas_right_oblique"]["latencyS"] == pytest.approx(
+        1.0 / 60.0
+    )
+    assert cameras["canvas_right_oblique"]["quantizationBits"] == 10
     assert model["brush"]["diameter"] == pytest.approx(0.0127)
     assert model["brush"]["bendRangeRad"] == pytest.approx(
         [-0.349065850399, 0.349065850399]
@@ -924,30 +956,19 @@ def test_web_robot_model_is_derived_from_the_mjcf_geometry() -> None:
         "canvas",
         "canvas_right_camera_housing",
         "canvas_left_camera_housing",
-        "canvas_inspection_camera_housing",
-        "brush_standoff_camera_housing",
         "base",
     }
+    assert "canvas_inspection_camera_housing" not in world_bodies
     assert world_bodies["canvas_right_camera_housing"]["xyAxes"] == pytest.approx(
         [
-            0.880865989267,
-            0.473365724311,
+            0.907959384500,
+            0.419058177462,
             0.0,
-            -0.123600957574,
-            0.230003724765,
-            0.965308805451,
+            -0.123098930765,
+            0.266714349990,
+            0.955881848742,
         ]
     )
-    assert {
-        geom["name"]
-        for geom in world_bodies["canvas_inspection_camera_housing"]["geoms"]
-    } == {
-        "canvas_inspection_camera_body",
-        "canvas_inspection_camera_barrel",
-        "canvas_inspection_camera_glass",
-    }
-
-
 def test_web_robot_payload_tracks_physical_xml_edits() -> None:
     source = Path("models/active_inference_painter.xml")
     root_dir = Path("runs/test_web_robot_payload")
@@ -1108,6 +1129,42 @@ def test_web_runtime_max_speed_releases_state_lock_between_physics_steps() -> No
 
     assert state["maxSpeed"]
     assert elapsed < 0.5
+
+
+def test_web_runtime_closes_thread_owned_camera_on_the_runtime_thread(
+    monkeypatch,
+) -> None:
+    runtime = WebSimRuntime(
+        canvas_size=16,
+        driver_bootstrap_transitions=0,
+        driver_bootstrap_train_steps=0,
+        telemetry_sample_period=0.0,
+    )
+    closed_on: list[int] = []
+
+    class DummyCameraProcess:
+        def close(self) -> None:
+            closed_on.append(threading.get_ident())
+
+    owner_threads: list[int] = []
+
+    def install_camera_and_stop(self: WebSimRuntime, fixed_dt: float) -> None:
+        owner = threading.get_ident()
+        owner_threads.append(owner)
+        self._camera_process = DummyCameraProcess()
+        self._camera_owner_thread_id = owner
+        self._stop.set()
+
+    monkeypatch.setattr(WebSimRuntime, "_advance_one_step", install_camera_and_stop)
+    runtime.start()
+    assert runtime._thread is not None
+    runtime._thread.join(timeout=2.0)
+
+    assert owner_threads
+    assert closed_on == owner_threads
+    assert closed_on[0] != threading.get_ident()
+    assert runtime._camera_process is None
+    runtime.stop()
 
 
 def test_spatial_replay_capacity_is_bounded_for_long_runs() -> None:

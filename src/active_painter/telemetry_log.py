@@ -111,6 +111,11 @@ class ArmTelemetryLog:
             "contact_on_canvas": bool(sim.contact.on_canvas),
             "contact_pressure": float(sim.contact.pressure),
             "contact_force_n": float(sim.contact.force),
+            "brush_tangential_force_n": float(sim.contact.tangential_force),
+            "brush_pull_alignment": float(sim.contact.pull_alignment),
+            "brush_sticking": bool(sim.contact.sticking),
+            "brush_stick_slip_transition": bool(sim.contact.stick_slip_transition),
+            "brush_slip_fraction": float(sim.contact.slip_fraction),
             "canvas_coverage": float(sim.canvas.material_coverage()),
             "tip_x": float(tip[0]),
             "tip_y": float(tip[1]),
@@ -121,6 +126,9 @@ class ArmTelemetryLog:
             "brush_x": float(sim.contact.brush_world[0]),
             "brush_y": float(sim.contact.brush_world[1]),
             "brush_z": float(sim.contact.brush_world[2]),
+            "painting_point_x": float(sim.painting_point_world[0]),
+            "painting_point_y": float(sim.painting_point_world[1]),
+            "painting_point_z": float(sim.painting_point_world[2]),
             "max_joint_target_error_deg": float(max_target_error),
         }
         for name in JOINT_NAMES:

@@ -431,6 +431,25 @@ approximation.
 `dense_grid` remains a compatibility mode that evaluates the learned spatial
 transition over the planner grid.
 
+### 5.2.1 Shadow conditional latent transition
+
+`ConditionalPatchVAEEnsemble` implements the experimental likelihood
+
+```math
+p_{\theta_e}(s^P_{t+1}\mid s^P_t,\log\sigma^{2,P}_t,
+  a^P_t,b_t,m_t,z_t),\qquad z_t\sim N(0,I),
+```
+
+with recognition density conditioned on both current and next posterior mean
+and log variance. Training minimizes the beta-one negative ELBO and logs
+reconstruction NLL separately from latent KL. Its bootstrap prior predictive
+separates decoder likelihood variance, within-member latent variation, and
+between-member disagreement. This factor is currently shadow/offline only: it
+is not called by `SpatialExpectedFreeEnergy`, does not alter policy inference,
+and must not be described as the implemented composition model. Full boundary
+and admission tests are recorded in
+`CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+
 ### 5.3 Material support projection
 
 After each learned spatial transition:
@@ -998,6 +1017,8 @@ gradient exactly `0.0` -- a degenerate no-op dressed as a fixed point.
 Online learning currently consists of:
 
 - Gaussian NLL training of local/summary transition ensembles;
+- offline/shadow beta-one negative-ELBO training of the conditional local
+  patch VAE ensemble; it is not used by the online policy loop;
 - variational-autoencoder-style hierarchy training;
 - Gaussian NLL training of aggregate and passage-step latent transitions;
 - posterior-weighted maximum-likelihood training of the provisional amortized
@@ -1021,9 +1042,11 @@ research claims.
 | --- | --- | --- | --- | --- |
 | GP-BODY | Generative process | `p(x_body_tau+1|x_body_tau,u_tau)` | `arm_sim.JointPlant`, `ArmPainterSim` | Representative, uncalibrated |
 | GP-MATERIAL | Generative process | wet material and brush transfer | `arm_sim.VerticalCanvas.paint_at`, `Brush` | Hand-designed process |
+| GP-BRUSH-CONTACT | Generative process | round footprint conditioned on handle incidence plus `p(z_brush,t+1, f_tangent | z_brush,t, delta_x, N, body_pose, tooth)` | `arm_sim.VerticalCanvas.paint_at`, `Brush.update_contact_dynamics`, `ArmKinematics.brush_axis_world` | Axisymmetric angle-dependent footprint plus Baxter-inspired aggregate stop/play approximation; uncalibrated |
 | GP-CAMERA | Generative process | native/global/requested-foveal grayscale products | `camera_observation.CameraObservationProcess` | Simulated, uncalibrated |
 | GM-SUM-TRANS | Transition likelihood | `p_theta(s_t+1|s_t,a_t,m_t)` | `models.DynamicsEnsemble` | Obsolete compatibility fixture |
 | GM-PIX-TRANS | Transition likelihood | local `p_theta(s^P_t+1|s^P_t,a^P_t,m_t)` | `models.LocalSpatialDynamicsEnsemble`, `local_spatial.py` | Learned sparse approximation; bootstrap evidence from `motion_manifold` (declared flag) or the retained iid source |
+| GM-PIX-CVAE-SHADOW | Candidate transition likelihood | local `p_theta(s^P_t+1|s^P_t,logvar^P_t,a^P_t,b_t,m_t,z_t)` with `z_t~N(0,I)` | `conditional_patch_vae.ConditionalPatchVAEEnsemble`, `conditional_vae_train.py` | Implemented offline/shadow only; no policy influence; live-scale likelihood, conditioning, calibration, and sequential-rollout gates not yet passed |
 | GM-SUM-OBS | Observation likelihood | `p(o_t|s_t)` | `models.ObservationModel` | Obsolete oracle compatibility fixture |
 | GM-PIX-OBS | Observation likelihood | `p(o^pixel_t|s^pixel_t)` | `spatial_inference.py` | Oracle material, provisional |
 | GM-CAMERA-OBS | Observation likelihood | `p(o^gray_t,z^inlier_t|s^pixel_t)` | `camera_inference.CameraSpatialLikelihood` | Analytic occlusion mixture, uncalibrated |
@@ -1034,6 +1057,7 @@ research claims.
 | Q-PASSAGE | Slow posterior | `q(z_passage)` | `passage_inference.PassageBelief` | Mixed pseudo-likelihood |
 | Q-BRUSH | Material posterior | `q(load_t)q(black_fraction_t)` per dedicated brush | `brush_loading.BrushLoadingModel` | Compact bounded Gaussian moments; image-derived mark statistic not wired |
 | TRANS-BRUSH | Transition likelihood | preserve depletion/uncertainty or pure full reload | `brush_loading.py`, `arm_sim.Brush` | Explicit provisional approximation |
+| GM-BRUSH-CONTACT | Required transition/observation likelihood | stochastic posterior and counterfactual over latent tuft deflection, slip, tangential load, and footprint | not yet separated from process | Independent rollouts reuse GP-BRUSH-CONTACT equations; logged process fields are training/evaluation labels, not observations |
 | TRANS-ACTION-CAMERA | Inference schedule | `q^-(s_t+1)=Integral p_theta(s_t+1|s_t,a_t,m_t)q(s_t) ds_t`; then `q(s_t+1)` from a causally later camera likelihood | `spatial_inference.predict`, `arm_agent_driver.PendingActionCameraUpdate`, `web_runtime.py` | Mean-evaluated diagonal transition; post-physics capture gate rejects older frames; camera VFE logged separately |
 | MODE-PROVISIONAL-SENSOR | Integration profile | registered `q(s_t)`, `q(x_body,t)`, and `q(b_t)` initialize an independently instantiated fixed-prior MuJoCo/material model before EFE rescoring | `arm_agent_driver._planning_context`, `web_runtime.py` | Opt-in simulation-only: 8 candidates, depth 1, Cartesian IK support, 1 particle; exact live planner state denied; fixed grain/model/compliance priors are uncalibrated |
 | PREF-COVERAGE | Prior preference | `p*(C_T|stop)` | `preferences.py`, `efe_common.py` | Explicit terminal Beta |
@@ -1099,6 +1123,12 @@ details:
     measured against the declared preference scale, not in absolute nats, so it
     is not the reference implementation's ambiguity term and is logged rather
     than summed into `G`.
+    Brush-contact prediction has the same limitation: independent rollout
+    state prevents live-state/RNG leakage, but the rollout still invokes the
+    same reduced contact equations as the process. A learned/calibrated
+    stochastic `GM-BRUSH-CONTACT` must replace that reuse; exact deflection,
+    stick/slip, tooth, and tangential-force fields remain labels rather than
+    agent observations.
 13. Motor refinement covers only a finite subset of base painting candidates.
 14. Neural parameter learning is SGD, not exact variational parameter
     inference.
@@ -1381,7 +1411,17 @@ This specification records the following current decision state:
   is assigned to AI-106; the unnormalized self-trained composition preference
   remains explicitly deferred to AI-110 rather than being accepted here;
 
-- `AI-107`: whether predictive variances are calibrated;
+- `AI-107`: ANSWERED FOR THE CURRENT LOCAL LIKELIHOODS, WITH A NEGATIVE M2
+  CALIBRATION RESULT. Validation-only scalar variance scaling left both CNN
+  and cVAE nominal 90% intervals at about 99.4% empirical coverage; an action-
+  footprint-only diagnostic confirmed the failure. A fixed-condition CNN's
+  ensemble disagreement increased only 1.087x on held-out dynamic-roll
+  conditions versus the declared 1.50x gate. Learned likelihood, cVAE latent,
+  ensemble, target-posterior, fixed camera likelihood, fixed identity
+  likelihood, and EFE precision terms are reported separately. All offline
+  precision-ledger entries were unobserved declared priors. AI-109 must now
+  determine whether the result is data/capacity limited or requires a richer
+  local consequence likelihood;
 - `AI-110`: whether the composition preference can be retained;
 - `AI-111`: ANSWERED FOR THE CURRENT M1 BASELINE, WITH A NEGATIVE CONVERGENCE
   RESULT. Hand-written and learned proposals are explicitly separate from

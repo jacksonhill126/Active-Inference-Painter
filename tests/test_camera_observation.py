@@ -7,7 +7,6 @@ import pytest
 pytest.importorskip("mujoco")
 
 from active_painter.camera_observation import (  # noqa: E402
-    EDGE_PROFILE_PRODUCT,
     FOVEA_CANVAS_PRODUCT,
     GLOBAL_CANVAS_PRODUCT,
     NATIVE_SENSOR_PRODUCT,
@@ -21,10 +20,8 @@ from active_painter.camera_geometry import project_canvas_uv  # noqa: E402
 
 MODEL_PATH = Path(__file__).parents[1] / "models" / "active_inference_painter.xml"
 TEST_NATIVE_RESOLUTIONS = {
-    "canvas_right_oblique": (640, 360),
-    "canvas_left_oblique": (640, 360),
-    "canvas_inspection_deployed": (640, 360),
-    "brush_standoff_overhead": (320, 240),
+    "canvas_right_oblique": (640, 480),
+    "canvas_left_oblique": (640, 480),
 }
 
 
@@ -145,9 +142,9 @@ def test_native_global_and_requested_fovea_share_one_capture() -> None:
     native = by_kind[NATIVE_SENSOR_PRODUCT]
     global_view = by_kind[GLOBAL_CANVAS_PRODUCT]
     fovea = by_kind[FOVEA_CANVAS_PRODUCT]
-    assert native.grayscale.shape == (360, 640)
-    assert native.source_resolution_px == (640, 360)
-    assert native.declared_acquisition_resolution_px == (3840, 2160)
+    assert native.grayscale.shape == (480, 640)
+    assert native.source_resolution_px == (640, 480)
+    assert native.declared_acquisition_resolution_px == (1456, 1088)
     assert global_view.grayscale.shape == (512, 512)
     assert fovea.grayscale.shape == (256, 256)
     assert fovea.fovea_request_id == "look-1"
@@ -156,7 +153,7 @@ def test_native_global_and_requested_fovea_share_one_capture() -> None:
     assert fovea.sampling_kind == "native_to_requested_canvas_uv"
     assert {product.sequence for product in products} == {0}
     assert {product.capture_time_s for product in products} == {0.0}
-    assert {product.source_resolution_px for product in products} == {(640, 360)}
+    assert {product.source_resolution_px for product in products} == {(640, 480)}
 
 
 def test_no_fovea_is_created_without_an_explicit_request() -> None:
@@ -296,7 +293,7 @@ def test_multirate_delivery_groups_native_and_derived_products(
             dtype=np.float32,
         ),
     )
-    qpos = _keyframe_qpos(process, "camera_clear_park")
+    qpos = _keyframe_qpos(process, "safe_home")
     canvas = np.ones((16, 16), dtype=np.float64)
     try:
         assert process.observe(
@@ -317,58 +314,12 @@ def test_multirate_delivery_groups_native_and_derived_products(
             (frame.camera_name, frame.product_kind)
             for frame in first_delivery.frames
         } == {
-            ("brush_standoff_overhead", NATIVE_SENSOR_PRODUCT),
-            ("brush_standoff_overhead", EDGE_PROFILE_PRODUCT),
+            ("canvas_right_oblique", NATIVE_SENSOR_PRODUCT),
+            ("canvas_right_oblique", GLOBAL_CANVAS_PRODUCT),
+            ("canvas_right_oblique", FOVEA_CANVAS_PRODUCT),
+            ("canvas_left_oblique", NATIVE_SENSOR_PRODUCT),
+            ("canvas_left_oblique", GLOBAL_CANVAS_PRODUCT),
         }
-
-        second_delivery = process.observe(
-            1.0 / 30.0,
-            qpos=qpos,
-            canvas_grayscale=canvas,
-            inspection_available=False,
-        )
-        kinds_by_camera = {
-            camera_name: {
-                frame.product_kind
-                for frame in second_delivery.frames
-                if frame.camera_name == camera_name
-            }
-            for camera_name in {
-                frame.camera_name for frame in second_delivery.frames
-            }
-        }
-        assert kinds_by_camera["canvas_right_oblique"] == {
-            NATIVE_SENSOR_PRODUCT,
-            GLOBAL_CANVAS_PRODUCT,
-            FOVEA_CANVAS_PRODUCT,
-        }
-        assert kinds_by_camera["canvas_left_oblique"] == {
-            NATIVE_SENSOR_PRODUCT,
-            GLOBAL_CANVAS_PRODUCT,
-        }
-        assert kinds_by_camera["brush_standoff_overhead"] == {
-            NATIVE_SENSOR_PRODUCT,
-            EDGE_PROFILE_PRODUCT,
-        }
-
-        process.reset()
-        process.observe(
-            0.0,
-            qpos=qpos,
-            canvas_grayscale=canvas,
-            inspection_available=True,
-        )
-        inspection_delivery = process.observe(
-            0.2,
-            qpos=qpos,
-            canvas_grayscale=canvas,
-            inspection_available=False,
-        )
-        assert {
-            frame.product_kind
-            for frame in inspection_delivery.frames
-            if frame.camera_name == "canvas_inspection_deployed"
-        } == {NATIVE_SENSOR_PRODUCT, GLOBAL_CANVAS_PRODUCT}
     finally:
         process.close()
 

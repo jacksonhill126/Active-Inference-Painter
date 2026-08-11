@@ -7,12 +7,13 @@ import numpy as np
 import torch
 
 from .config import PainterConfig
-from .env import StrokeAction
+from .env import StrokeAction, bounded_mark_curvature, mark_path_length
 from .policy_ranges import (
     CANVAS_MARGIN,
     MARK_ACTION_RANGES,
     PROPOSAL_SUPPORT,
     latent_ranges_for_kind,
+    mark_curvature_proposal_parameters,
     passage_stroke_count_range,
 )
 from .precision_beliefs import GapIncrementBelief
@@ -80,6 +81,7 @@ class _MarkDraw:
     length: float
     width: float
     amount: float
+    curvature: float
     tone: float
 
 
@@ -480,6 +482,15 @@ class PolicySampler:
         width_support = PROPOSAL_SUPPORT["mark_width"]
         width = float(np.exp(self.rng.uniform(np.log(width_support.low), np.log(width_support.high))))
         amount = self.rng.uniform(*PROPOSAL_SUPPORT["mark_amount"])
+        curvature = 0.0
+        curve_mix, min_magnitude, max_magnitude = mark_curvature_proposal_parameters(
+            self.cfg
+        )
+        if curve_mix > 0.0 and self.rng.uniform() < curve_mix:
+            direction = 1.0 if self.rng.uniform() < 0.5 else -1.0
+            curvature = direction * float(
+                self.rng.uniform(min_magnitude, max_magnitude)
+            )
         tone = self._tone()
         return _MarkDraw(
             float(x0),
@@ -488,6 +499,7 @@ class PolicySampler:
             float(length),
             float(width),
             float(amount),
+            float(curvature),
             float(tone),
         )
 
@@ -497,15 +509,34 @@ class PolicySampler:
 
         x_bounds = MARK_ACTION_RANGES["x"]
         y_bounds = MARK_ACTION_RANGES["y"]
-        dxv = draw.length * np.cos(draw.angle)
-        dyv = draw.length * np.sin(draw.angle)
+        # `draw.length` is proposed brush travel, not endpoint chord. Without
+        # this normalization a curved candidate covers a longer path than a
+        # straight candidate carrying the same sampled length, allowing the
+        # terminal coverage preference to select curvature merely as a hidden
+        # arclength bonus. Quadratic shape is scale invariant, so the arclength
+        # factor can be measured once on a unit chord.
+        chord_length = float(draw.length)
+        if abs(float(draw.curvature)) > 1e-12:
+            unit_curve = StrokeAction(
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                float(draw.width),
+                float(draw.amount),
+                float(draw.tone),
+                curvature=float(draw.curvature),
+            )
+            chord_length /= max(1.0, mark_path_length(unit_curve))
+        dxv = chord_length * np.cos(draw.angle)
+        dyv = chord_length * np.sin(draw.angle)
         # Shift the start inward so the full length fits on canvas; clipping the
         # endpoint instead collapses edge strokes into dwell-dabs (solid discs).
         x0 = float(np.clip(draw.x0, x_bounds.low + max(0.0, -dxv), x_bounds.high - max(0.0, dxv)))
         y0 = float(np.clip(draw.y0, y_bounds.low + max(0.0, -dyv), y_bounds.high - max(0.0, dyv)))
         x1 = np.clip(x0 + dxv, *x_bounds)
         y1 = np.clip(y0 + dyv, *y_bounds)
-        return StrokeAction(
+        straight = StrokeAction(
             float(x0),
             float(y0),
             float(x1),
@@ -513,6 +544,14 @@ class PolicySampler:
             float(draw.width),
             float(draw.amount),
             draw.tone,
+        )
+        return replace(
+            straight,
+            curvature=bounded_mark_curvature(
+                straight,
+                draw.curvature,
+                margin=float(CANVAS_MARGIN),
+            ),
         )
 
     def _stroke(self, coverage_field: np.ndarray | None = None) -> StrokeAction:
@@ -720,6 +759,7 @@ class PolicySampler:
                     amount=draw.amount,
                     stroke_count=1,
                     tone=draw.tone,
+                    curvature=draw.curvature,
                 )
                 for draw in draws
             ),
@@ -783,6 +823,7 @@ class PolicySampler:
                 latent.length,
                 latent.width,
                 latent.amount,
+                0.0,
                 # D4: the learned tone draw is scored but never emitted.
                 self._tone(),
             )

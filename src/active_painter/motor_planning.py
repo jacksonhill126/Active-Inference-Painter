@@ -335,6 +335,15 @@ def _motor_primitive(kind: str, config: PainterConfig) -> MotorPrimitiveLatent:
         roll_start = -direction * sweep
         roll_end = direction * sweep
         description = "contact-aware upper-arm-axis roll sweep along the Cartesian mark path"
+    elif kind in {"upper_arm_fixed_roll_positive", "upper_arm_fixed_roll_negative"}:
+        pivot = "roll"
+        magnitude = abs(float(config.motor_fixed_roll_degrees))
+        direction = 1.0 if kind == "upper_arm_fixed_roll_positive" else -1.0
+        roll_start = direction * magnitude
+        roll_end = direction * magnitude
+        description = (
+            "contact-aware fixed upper-arm-axis roll posture along the declared mark path"
+        )
     return MotorPrimitiveLatent(
         kind=kind,
         pivot_joint=pivot,

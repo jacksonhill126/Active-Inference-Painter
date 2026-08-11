@@ -90,7 +90,14 @@ class PainterRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        self._send_bytes(json.dumps(data).encode("utf-8"), "application/json", status)
+        # Browsers reject the non-standard NaN/Infinity tokens Python accepts
+        # by default. Diagnostics must be finite (or explicit null) before
+        # reaching this boundary.
+        self._send_bytes(
+            json.dumps(data, allow_nan=False).encode("utf-8"),
+            "application/json",
+            status,
+        )
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -187,6 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--spatial-grid-size", type=int, default=16)
     parser.add_argument("--stroke-tone-prior", choices=("black", "white", "random"), default="random")
     parser.add_argument("--save-every-paintings", type=int, default=5)
+    parser.add_argument(
+        "--restart-on-stop",
+        action="store_true",
+        help="clear the canvas and automatically begin another episode after terminal stop",
+    )
     parser.add_argument("--archive-dir", default="runs/web")
     parser.add_argument("--telemetry-max-samples", type=int, default=54_000)
     parser.add_argument("--telemetry-sample-hz", type=float, default=15.0)
@@ -214,6 +226,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--checkpoint-path", default=None)
     parser.add_argument("--checkpoint-save-every-transitions", type=int, default=10)
+    parser.add_argument(
+        "--proposal-diagnostic-interval-plans",
+        type=int,
+        default=16,
+        help=(
+            "recompute the evidence-only learned-vs-hand-written proposal "
+            "diagnostic every N plans; policy inference is unchanged"
+        ),
+    )
     parser.add_argument("--device", default=None, help="torch device for the planner, e.g. cuda, cuda:0, cpu (default: cuda if available)")
     parser.add_argument(
         "--plant-backend",
@@ -294,6 +315,7 @@ def main() -> None:
         spatial_grid_size=args.spatial_grid_size,
         stroke_tone_prior=stroke_tone_prior,
         save_every_paintings=args.save_every_paintings,
+        restart_on_stop=args.restart_on_stop,
         archive_dir=args.archive_dir,
         telemetry_max_samples=args.telemetry_max_samples,
         telemetry_sample_period=1.0 / args.telemetry_sample_hz if args.telemetry_sample_hz > 0 else 0.0,
@@ -303,6 +325,9 @@ def main() -> None:
         driver_bootstrap_composition_train_steps=args.driver_bootstrap_composition_train_steps,
         checkpoint_path=args.checkpoint_path,
         checkpoint_save_every_transitions=args.checkpoint_save_every_transitions,
+        proposal_diagnostic_interval_plans=max(
+            1, args.proposal_diagnostic_interval_plans
+        ),
         device=args.device,
         plant_backend=args.plant_backend,
         observation_access_mode=args.observation_mode,

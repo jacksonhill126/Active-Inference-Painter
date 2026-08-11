@@ -4,17 +4,32 @@ This is the compact index for project milestones and simulation-support
 milestones. Detailed task state remains authoritative in
 `planning/PROJECT_TRACKER.md`; this file summarizes milestone-level readiness.
 
-Status snapshot: 2026-08-04.
+Status snapshot: 2026-08-11.
 
-AI-104/AI-105 reference verification is accepted, and AI-106 terminal/stopping
-validation is now ready. Bounded M2 camera/body components remain under active
-development, but neither changes the gate ordering below. AI-111 has a negative
-proposal-convergence decision: the posterior is conditional on its sampled
-candidate set and M3 needs a correction. M1 remains active until terminal
-validation, held-out calibration, the composition decision, inheritance
-semantics, reproducible replicas, and the AI-115 lock are accepted. M2
-implementation performed ahead of that lock is provisional and does not make
-the M2 milestone active.
+AI-104/AI-105 reference verification is accepted, AI-111 is closed with a
+negative proposal-convergence decision, and AI-106 terminal/stopping validation
+is closed with a required M2 forecast-family replacement. The posterior remains
+conditional on its sampled candidate set and AI-306 must correct finite-
+proposal inference before broader claims. M1 remains active until held-out
+calibration/learning curves, the composition decision,
+inheritance semantics, reproducible replicas, and the AI-115 lock are accepted.
+Bounded M2 camera/body, corpus, parallel-training, and conditional patch-cVAE
+components were implemented ahead of M1 as explicit provisional experiments;
+they do not make M2 active or satisfy their scientific acceptance gates.
+
+AI-108's live-scale leakage-resistant corpus was accepted on 2026-08-11.
+AI-107 calibration is also complete, with a negative M2 result: nominal 90%
+intervals covered about 99.4% and meaningful dynamic-roll OOD disagreement rose
+only 1.087x. The current critical-path task is AI-109 learning curves and
+likelihood-family diagnosis.
+
+Current physical-design records are aligned to the fixed RobStride assignment
+(03 yaw/pitch, 02 upper-arm roll/elbow) and the selected-but-not-purchased
+`provisional-compact-dual-imx296-v1` two-camera rig. Neither plant nor camera
+path is hardware calibrated. The 2026-08-11 conditional patch cVAE remains an
+offline/shadow material-transition likelihood with no painting-policy
+influence. Its 3,000-step AI-107 result did not improve held-out calibration
+over the CNN and showed effectively collapsed within-member latent variance.
 
 ## Research And Delivery Milestones
 
@@ -61,6 +76,11 @@ This diagram is deliberately not a claim that every milestone must finish
 before the next begins:
 
 - M1 and S0 may begin together after M0.
+- S0 evidence T-101 through T-107 is complete. The default fail-closed web/
+  telemetry bundle and consolidated shortcut classification were captured on
+  2026-08-11; T-108 is ready for Jackson's explicit reference-contract lock.
+  T-109 remains a declared native sensor-adapter nonconformance rather than a
+  hidden sensor-equivalence claim.
 - S1 began from T-101 but deliberately evolved from an exact abstract clone
   into a versioned physical draft with a named logical retarget. T-209 remains
   open until the viewer inspection and contract are accepted.

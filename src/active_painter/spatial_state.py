@@ -7,7 +7,7 @@ import numpy as np
 from .action_encoding import BASE_SPATIAL_ACTION_CHANNELS, DEFAULT_MOTOR_KINDS, motor_condition_raster
 from .arm_sim import ArmPainterSim, VerticalCanvas
 from .config import PainterConfig
-from .env import StrokeAction
+from .env import StrokeAction, squared_distance_to_mark_path
 from .policies import MotorPrimitiveLatent
 
 
@@ -21,6 +21,7 @@ ACTION_CHANNELS = (
     "width",
     "amount",
     "tone",
+    "curvature",
     *(f"motor_{kind}" for kind in DEFAULT_MOTOR_KINDS),
 )
 
@@ -285,12 +286,7 @@ def rasterize_stroke_action(
 
     ax, ay = float(action.x0), float(action.y0)
     bx, by = float(action.x1), float(action.y1)
-    vx, vy = bx - ax, by - ay
-    denom = vx * vx + vy * vy + 1e-8
-    t = np.clip(((x - ax) * vx + (y - ay) * vy) / denom, 0.0, 1.0)
-    px = ax + t * vx
-    py = ay + t * vy
-    d2 = (x - px) ** 2 + (y - py) ** 2
+    d2 = squared_distance_to_mark_path(action, x, y)
     sigma = max(0.006, float(action.width) / 2.355)
     footprint = np.exp(-0.5 * d2 / (sigma * sigma)).astype(np.float32)
     footprint[footprint < 1e-4] = 0.0
@@ -309,6 +305,7 @@ def rasterize_stroke_action(
             np.full_like(footprint, float(action.width), dtype=np.float32),
             np.full_like(footprint, float(action.amount), dtype=np.float32),
             np.full_like(footprint, float(action.tone), dtype=np.float32),
+            np.full_like(footprint, float(action.curvature), dtype=np.float32),
         ],
         axis=0,
     ).astype(np.float32)

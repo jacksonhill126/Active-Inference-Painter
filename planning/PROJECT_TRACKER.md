@@ -190,39 +190,104 @@ Notes: Accepted 2026-08-04 in `docs/REFERENCE_MODEL_ACCEPTANCE_2026-08-04.md`. T
 
 ### AI-106 Stress-test terminal coverage and stopping
 
-Status: `Ready`
+Status: `Done`
 Track: Preferences/Validation  
 Depends on: AI-105  
 Owner: Jackson/Codex  
 Estimate: 1-2 days  
 Acceptance: Beta moment matching, clamps, alternatives, terminal-only application, and immediate-stop support have a documented decision.
+Notes: Closed 2026-08-11 in
+`docs/TERMINAL_COVERAGE_STOPPING_ACCEPTANCE_2026-08-11.md`. Direct Monte Carlo
+agrees with the analytic Beta--Beta KL when the forecast is actually Beta, but
+a broad bounded logit-normal with the same measured mean/variance differs by
+23.6 nats. The near-blank concentration floor preserves mean while reducing
+represented variance by more than 500x and changing risk from 53,248 to 892
+nats. Terminal-only application, finite always-admissible immediate stop, and
+declared-not-learned preference parameters pass. Decision: retain the terminal
+coverage preference and stop prior, but replace the single moment-matched Beta
+forecast before M2 acceptance with a converged sample-based estimate or a
+calibrated richer bounded family. Focused result: 48 tests passed.
 
 ### AI-108 Build a leakage-resistant baseline corpus
 
-Status: `Ready`
+Status: `Done`
 Track: Data/Validation  
 Depends on: AI-102, T-101, T-102  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Live-scale train/validation/test transitions are split by trajectory before patch extraction and stratified by material, action, reach, and motor conditions.
+Notes: The 2026-08-07 action-space correction adds continuously sampled signed
+quadratic curvature and fixed/swept roll realization conditions. Corpus strata
+must explicitly cover straight and several positive/negative curvature bands,
+vertical direction, neutral/fixed
+±roll, and both roll-sweep directions; splitting must occur before patch
+extraction so neighboring samples from one physical curve cannot leak across
+train/validation/test.
+Implementation baseline 2026-08-10: `trajectory-posterior-corpus-v1` records
+full camera-derived posterior trajectories before patch extraction;
+`split_manifest.json` assigns whole trajectories with best-effort tone,
+curvature, region, motor-realization, and coverage stratification. Synthetic
+round-trip and no-overlap tests pass. On 2026-08-11 the schema advanced to
+`trajectory-posterior-corpus-v2`: trajectory records may also carry frozen
+compact brush-load belief moments, and train-only patch materialization can
+feed the shadow `conditional-local-material-transition-cvae-v0`. Neither the
+schema nor the cVAE admits exact simulator material state to live inference.
+Accepted 2026-08-11. The canonical manifest
+`runs/corpus-ai108-combined-20260811/split_manifest.json` contains 16
+provenance-complete v2 trajectories and 256 transitions split 10/3/3 before
+patch extraction. Every split contains both tones, blank/existing material,
+fresh/overlap, interior/edge, narrow/broad, short/long, five signed curvature
+bands, vertical direction, center/outer reach, neutral IK, fixed +/-roll, and
+dynamic +/-roll sweeps. All transitions carry compact brush context, deny
+process-truth training input, and attest a 256 process canvas separately from
+the reduced 64 inference/acquisition approximation and 16x16 posterior grid.
+The multi-root manifest passes a cVAE consumer smoke. Bulk wetness remains
+structurally unobserved by the camera likelihood, and all trajectories are
+fixed-horizon truncations rather than genuine stops; those are explicit
+downstream gaps, not manufactured corpus labels. See
+`docs/AI108_CORPUS_TECHNICAL_2026-08-11.md` and
+`docs/AI108_CORPUS_OWNER_BRIEF_2026-08-11.md`.
 
 ### AI-107 Calibrate transition and precision approximations
 
-Status: `Blocked`  
+Status: `Done`
 Track: Uncertainty  
 Depends on: AI-103, AI-108  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Held-out NLL, interval coverage, z-scores, and OOD disagreement distinguish aleatoric, ensemble, likelihood, and fixed-precision terms.
+Notes: Completed 2026-08-11 on AI-108's trajectory-isolated 160/48/48
+train/validation/test transition corpus. Substantial CNN (2,500 steps),
+fixed-condition CNN (2,500 steps), and shadow cVAE (3,000 steps) checkpoints
+were evaluated with validation-only variance scaling and a frozen test set.
+Both models failed the provisional M2 interval gate: nominal 90% intervals
+covered about 99.4% of test residuals, including an action-footprint-only
+diagnostic. The meaningful fixed-to-dynamic-roll OOD disagreement ratio was
+1.087 versus a declared 1.50 requirement. cVAE latent variance was effectively
+collapsed and did not outperform the CNN. All checkpoint precision entries
+had zero observations and are reported as declared unobserved priors, not
+inferred posteriors. Wet-over-wet remains structurally unavailable to the
+camera likelihood, and all patches occupy one size bin. AI-107 is complete as
+an evidence task; its negative calibration result blocks any M2 calibrated-
+model claim and makes AI-109 the next modeling task. See
+`docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md` and the owner
+brief.
 
 ### AI-109 Establish predictive learning curves
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Modeling/Validation  
 Depends on: AI-107, AI-108  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Data/capacity curves determine whether current local and hierarchy models are underfitting, data-limited, or overfitting.
+Notes: AI-107 and AI-108 are complete. AI-107 found real held-out density
+improvement but failed interval-shape and meaningful motor-OOD gates. Learning
+curves must now separate data limitation, capacity limitation, seed variance,
+and likelihood-family misspecification. The frozen AI-107 evaluator provides
+the comparison protocol; include the current CNN/cVAE and test an explicit
+near-no-change plus continuous-consequence likelihood as a hypothesis, not an
+assumed replacement.
 
 ### AI-110 Resolve the composition-preference closed loop
 
@@ -231,26 +296,57 @@ Track: Active Inference/Preferences
 Depends on: AI-101, AI-105, AI-109  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
-Acceptance: Compression gap is formally approved with frozen/cross-fitted safeguards or disabled as a preference.
+Acceptance: A painting-level structural preference is formally approved under
+frozen/cross-fitted safeguards or disabled. The candidate formulation selects
+patches whose observations are locally difficult to explain or incompatible
+with slower painting structure, then prefers predicted outcomes that reduce
+that posterior predictive mismatch. The material-transition predictor may
+forecast mark consequences but is not itself the painting objective.
+Notes: The older scalar compression-gap implementation remains provisional and
+must not be treated as acceptance of this broader formulation. The 2026-08-11
+conditional patch cVAE is a shadow low-level material likelihood only; it is
+not a contour/composition layer and does not influence policy selection.
 
 ### AI-111 Separate proposal distributions from policy priors
 
-Status: `Answered (negative convergence result; M3 correction required)`
+Status: `Done`
 Track: Policy Inference  
 Depends on: AI-101, AI-105  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Candidate frequency, intended policy prior, proposal density, and finite-budget bias have explicit semantics and convergence tests.
-Notes: A bounded implementation experiment proceeded ahead of AI-105 acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage proposal trained toward the existing base-EFE posterior and mixed with the hand-written sampler; its emission mix defaults to zero and it never enters EFE, VFE, preferences, or the normalized policy posterior. It does not correct finite-candidate bias. `tests/test_proposal.py` covers normalized/support-bounded densities, empirical hand-sampler agreement, exact zero-mixture/RNG parity, mixed-source attribution, posterior-only training, checkpoint continuation, and unchanged EFE under the default gate. `tests/test_proposal_convergence.py` plus `docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md` add an equal-EFE control and a 360-cell candidate-count/horizon/seed/mixture audit. The result is negative: stop mass and deep-horizon winning geometry do not converge under the tested budgets. The current posterior is accepted only as `Q(pi | sampled candidate set S)`; mixtures are computational budget splits, learned emission remains zero, and M3 requires a complete base-measure/prior/proposal correction before proposal-invariant claims.
+Notes: Closed 2026-08-04 with a negative convergence result; a negative result
+is the documented decision required by this audit task, not an unfinished
+status. A bounded implementation experiment proceeded ahead of AI-105
+acceptance. `proposal.py` adds an amortized belief-conditioned mark/passage
+proposal trained toward the existing base-EFE posterior and mixed with the
+hand-written sampler; its emission mix defaults to zero and it never enters
+EFE, VFE, preferences, or the normalized policy posterior. It does not correct
+finite-candidate bias. `tests/test_proposal.py` covers normalized/support-
+bounded densities, empirical hand-sampler agreement, exact zero-mixture/RNG
+parity, mixed-source attribution, posterior-only training, checkpoint
+continuation, and unchanged EFE under the default gate.
+`tests/test_proposal_convergence.py` plus
+`docs/PROPOSAL_CONVERGENCE_RESULT_2026-08-04.md` add an equal-EFE control and a
+360-cell candidate-count/horizon/seed/mixture audit. Stop mass and deep-horizon
+winning geometry do not converge under the tested budgets. The current
+posterior is accepted only as `Q(pi | sampled candidate set S)`; mixtures are
+computational budget splits, learned emission remains zero, and AI-306 requires
+a complete base-measure/prior/proposal correction before proposal-invariant
+claims.
 
 ### AI-112 Define online learning and inheritance semantics
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Continual Learning/Research Ops  
 Depends on: AI-101, AI-108  
 Owner: Jackson/Codex  
 Estimate: 1-2 days  
 Acceptance: Shared parameters, optimizer, replay, calibration, episodic beliefs, and canvas history have separate persistence and reporting rules.
+Notes: Parallel corpus/training manifests now distinguish shared pretraining
+from individual runtime history and record corpus/checkpoint provenance. The
+full inheritance/reset matrix and developmental interpretation tests remain
+undefined. AI-108 is complete, so this task is ready for that semantic work.
 
 ### AI-113 Profile inference, rollout, and learning separately
 
@@ -260,6 +356,10 @@ Depends on: AI-109
 Owner: Jackson/Codex  
 Estimate: 1 day  
 Acceptance: State inference, EFE, motor forecasting, hierarchy, training, serialization, and rendering have separate timings and a ranked optimization plan.
+Notes: Phase timers and a 1/4/6/8-worker collection benchmark harness now exist,
+but a representative measured profile and ranked optimization decision do not.
+The task remains blocked on AI-109 rather than being inferred complete from
+parallelization code.
 
 ### AI-114 Capture reproducible baseline replicas
 
@@ -321,6 +421,14 @@ provisional until checkerboard calibration of the actual HDMI streams. The
 metric A3 target generator and native-frame Brown-Conrady solver now exist in
 `active_painter.camera_calibration`, with residual, coverage, tilt-diversity,
 and minimum-view acceptance gates. Physical image capture is still pending.
+The current selected design baseline supersedes those historical camera drafts:
+`provisional-compact-dual-imx296-v1` is exactly two selected-but-not-yet-
+purchased Raspberry Pi Global Shutter Cameras (Sony IMX296), left/right on one
+rigid crossbar, with provisional 4 mm CS lenses. Camera centers are 650 mm
+forward of the canvas, 300 mm to either side, and 220 mm above canvas center.
+There is no initial inspection, overhead, or profile camera. Intrinsics, noise,
+timing, 60 Hz rate, synchronization, housings, and mounts remain uncalibrated
+simulation/design assumptions, so AI-201 remains active rather than accepted.
 
 ### AI-202 Implement the fixed-view observation generative process
 
@@ -360,6 +468,11 @@ AI-202 remains not accepted: physical capture and calibration are absent and
 the photometric parameters are uncalibrated. A provisional analytic likelihood
 now consumes these products, but no learned encoder or physical-camera
 validation exists yet.
+The 2026-08-07 compact-rig correction removes the old inspection/overhead/
+profile products from the initial baseline and makes the two IMX296 oblique
+views the only camera products. MJCF, runtime metadata, pose-sweep evidence,
+tests, and support documentation now use `provisional-compact-dual-imx296-v1`.
+This is still a provisional simulation process, not sensor-equivalent evidence.
 
 ### AI-203 Specify and implement the observation likelihood
 
@@ -432,13 +545,21 @@ the camera-derived local mark statistic needed by its likelihood. Later on
 2026-08-06, `provisional-sensor-simulation-v0` supplied a bounded opt-in
 integration path: initial camera/body gating, a separately constructed MuJoCo
 and material forecast template with independent grain/brush seeds, frozen
-posterior initialization, 8 candidates, depth 1, Cartesian IK only, and one
-forecast particle. `_planner_state` and oracle bootstrap remain forbidden.
+posterior initialization, 8 candidates, depth 1, one forecast particle, and
+three conditional motor realizations: neutral Cartesian IK plus fixed
+upper-arm roll at approximately +24 and -24 degrees. `_planner_state` and
+oracle bootstrap remain forbidden.
 The repeated-stroke integration test closes two action/camera cycles and uses
 exact process coverage only as an evaluation assertion. This makes AI-204
 runnable for data collection but does not accept it: the transition model has
 no approved sensor corpus/checkpoint, the brush likelihood remains prior-only,
-and the fixed context/compliance priors are uncalibrated. On 2026-07-29 the
+and the fixed context/compliance priors are uncalibrated. The 2026-08-10
+anisotropic round-brush process adds exact aggregate deflection,
+stick/slip, tangential-load, and angle-dependent-footprint labels. They are useful
+training/evaluation targets but are not agent observations. Counterfactuals
+still reuse those process equations under independently initialized state;
+the missing stochastic brush-contact posterior and transition/observation
+likelihood remain part of AI-204/AI-205 acceptance. On 2026-07-29 the
 six-aggregate summary planner was formally marked
 `obsolete_compatibility_fixture`; it is not an acceptable compact posterior
 for AI-204.
@@ -451,6 +572,11 @@ Depends on: AI-108, AI-202
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Corpus and live execution share physical pixel scale, support geometry, and held-out calibration.
+Notes: The 2026-08-11 `conditional-local-material-transition-cvae-v0` can be
+trained offline on train-only v2 trajectory patches and reports held-out
+metrics beside the CNN baseline. It remains shadow-only and has not been
+admitted to live/counterfactual dynamics; physical pixel-scale equivalence and
+held-out calibration are still absent.
 
 ### AI-206 Validate multi-step material prediction
 
@@ -526,12 +652,22 @@ Acceptance: Shared low-level parameters may pool data while every agent retains 
 
 ### AI-213 Build the affordable parallel data and training path
 
-Status: `Blocked`  
+Status: `Blocked`
 Track: Performance/Data  
 Depends on: AI-113, AI-205, AI-212  
 Owner: Jackson/Codex  
 Estimate: 3-5 days  
 Acceptance: Parallel lower-level experience and batched training improve throughput without contaminating test data or canonical development.
+Notes: Implementation proceeded ahead of its dependencies as a bounded support
+experiment. The 2026-08-10 baseline adds independent spawned MuJoCo/camera workers,
+atomic trajectory shards, train-only post-split patch materialization, central
+batched training, held-out NLL reporting, shared-pretraining provenance, and a
+1/4/6/8-worker benchmark harness. Unit smoke tests pass. The dependency-level
+scientific acceptance remains blocked on its declared dependencies and the
+AI-212 developmental interpretation tests. AI-108 now contributes a
+provenance-complete 256-transition corpus and measured three-way versus
+five-way motor-profile throughput, but that bounded evidence does not close
+AI-213 by itself.
 
 ### AI-214 Evaluate model size and pretrained readiness
 
@@ -550,6 +686,10 @@ Depends on: AI-203, AI-204, AI-206, AI-208, AI-209, AI-210, AI-211, AI-212
 Owner: Jackson/Codex  
 Estimate: 3 days  
 Acceptance: Observation, local prediction, embodiment, relational representation, and temporal-persistence gates pass under sensor-equivalent input.
+Notes: The gate must include the AI-106 correction: terminal coverage risk may
+not rely on the current single moment-matched Beta forecast. It requires a
+sample-count-converged particle estimate or a calibrated richer bounded family
+while retaining the fixed terminal preference and separate stop policy prior.
 
 ### AI-216 M2 lock decision
 
@@ -750,41 +890,64 @@ Notes: Accepted 2026-07-24 in `docs/BASELINE_TEST_RESULT_2026-07-24.md`; the com
 
 ### T-105 Capture baseline telemetry and web-runtime behavior
 
-Status: `Active`
+Status: `Done`
 Track: Web/Telemetry  
 Depends on: T-101, T-103  
 Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: Default web runtime endpoints, frontend state, canvas image, and telemetry CSV have a recorded baseline.
-Notes: Runtime endpoint, frontend-state, canvas-render, and telemetry-schema tests are implemented and passing. A short versioned baseline CSV/canvas/config artifact still needs to be saved under the T-107 bundle convention.
+Notes: Accepted 2026-08-11 in
+`runs/baseline/s0-native-abstract-v0-2026-08-11/`. The default native runtime
+served finite state, a 256 x 256 canvas PNG, 56 telemetry rows across 96 named
+columns, version/robot-model data, and the frontend asset snapshot. The default
+sensor boundary correctly failed closed instead of exposing oracle material
+state. The current focused runtime/telemetry selection passed 11 tests with
+exit status 0; exact config, source fingerprint, hashes, warnings, and one
+superseded wrapper-timeout attempt are recorded in the bundle.
 
 ### T-106 Document known simulator shortcuts and limitations
 
-Status: `Active`
+Status: `Done`
 Track: Documentation  
 Depends on: T-101, T-102, T-103  
 Owner: Jackson/Codex
 Estimate: 1 day  
 Acceptance: Simulator shortcuts are categorized as acceptable baseline, MuJoCo calibration need, or hardware validation need.
-Notes: `docs/ARCHITECTURE.md`, `docs/CURRENT_IMPLEMENTATION.md`, `docs/DEVELOPMENT_AUDIT.md`, `docs/VARIABLE_SENSOR_ACCESS_LEDGER.md`, and `models/README.md` now identify the native forecast approximation, motor/contact assumptions, paint boundary, and uncalibrated physical fields. A consolidated three-category acceptance table remains.
+Notes: Accepted 2026-08-11 in
+`docs/SIMULATOR_SHORTCUT_CLASSIFICATION_2026-08-11.md`. The consolidated table
+lists simulator-only observations, representative dynamics, brush/contact and
+material simplifications, camera/sensor assumptions, planning approximations,
+and counterfactual limits. Every row distinguishes S0 acceptable reference
+behavior from MuJoCo calibration work and hardware validation work; acceptable
+baseline never means physically calibrated.
 
 ### T-107 Define baseline artifact bundle
 
-Status: `Blocked`
+Status: `Done`
 Track: Research Ops  
 Depends on: T-003, T-104, T-105  
 Owner: TBD  
 Estimate: 0.5-1 day  
 Acceptance: Baseline bundle contents and location are defined, including test summary, config, telemetry, canvas image, and notes.
+Notes: Accepted 2026-08-11. The immutable location/content/manifest convention
+is `docs/BASELINE_ARTIFACT_BUNDLE_CONVENTION_2026-08-11.md`; the first complete
+instance is `runs/baseline/s0-native-abstract-v0-2026-08-11/` with config,
+version and experiment manifests, test summary, empty failure log, state,
+canvas, telemetry, frontend assets, server logs, and SHA-256 identities.
 
 ### T-108 S0 reference-contract decision
 
-Status: `Blocked`
+Status: `Ready`
 Track: Validation  
 Depends on: T-104, T-105, T-106, T-107  
 Owner: Jackson  
 Estimate: 0.5 day  
 Acceptance: S0 is marked locked only if baseline tests pass or failures are documented and judged non-blocking.
+Notes: All T-101 through T-107 dependencies are complete. The evidence and
+recommended decision text are consolidated in
+`docs/S0_REFERENCE_CONTRACT_ACCEPTANCE_CANDIDATE_2026-08-11.md`. Jackson's
+explicit acceptance remains required; T-109's missing native sensor adapter is
+recorded as a nonconformance, not hidden or silently treated as gate closure.
 
 ### T-109 Migrate native execution to `plant-interface-v1`
 
@@ -1141,6 +1304,14 @@ Depends on: T-103, T-501
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Motor, driver, transmission, encoder, current, temperature, contact, force, and exposed command-mode fields are versioned per joint.
+Notes: The hardware-oriented draft fixes RobStride 03 at yaw/pitch and
+RobStride 02 at upper-arm roll/elbow. That actuator assignment is a selected
+design configuration, not an inferred motor-realization latent. The
+`mujoco-robstride-electromechanical-v4` backend is vendor-grounded but still
+contains derived/approximate parameters and is not calibrated against assembled
+hardware; transmissions, full sensing fields, and command contracts therefore
+remain insufficient for acceptance. The separate `native-abstract-v0` plant is
+not identified from these selected motors.
 
 ### T-504 Add parameter provenance and uncertainty
 
@@ -1195,6 +1366,13 @@ Depends on: T-502, T-505
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
 Acceptance: Repeatable brush, registered canvas, fixed camera, secured paint, and supervised cleaning interfaces have geometry and operating envelopes.
+Notes: The fixed-camera portion now has a selected-but-not-purchased compact
+baseline: exactly two Raspberry Pi Global Shutter Cameras (Sony IMX296) on a
+rigid crossbar under `provisional-compact-dual-imx296-v1`. Brush anisotropy and
+an exploratory angled-wrist design are simulation studies, not accepted
+mechanical interfaces. Brush replacement/datum, registered physical canvas,
+paint security, cleaning, and operating envelopes remain open, so this task is
+still blocked.
 
 ### T-510 Define calibration and system-identification procedures
 

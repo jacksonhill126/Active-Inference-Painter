@@ -5,7 +5,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from PIL import Image
@@ -23,15 +23,28 @@ from .config import PainterConfig, SPATIAL_MATERIAL_PLANNER_STATE_KIND
 from .telemetry_log import ArmTelemetryLog
 from .version import CodeBuildInfo, code_build_info
 from .web_robot_model import load_robot_visual_model, retarget_legacy_robot_state
+from .spatial_state import SpatialCanvasState
 
 
 FOVEA_TRACE_INTERFACE_VERSION = "fovea-trace-v0"
 DEFAULT_FOVEA_TRACE_RETENTION_S = 10.0
 PROVISIONAL_SENSOR_NATIVE_RESOLUTION_OVERRIDES = {
-    "canvas_right_oblique": (640, 360),
-    "canvas_left_oblique": (640, 360),
-    "canvas_inspection_deployed": (640, 360),
-    "brush_standoff_overhead": (320, 240),
+    "canvas_right_oblique": (640, 480),
+    "canvas_left_oblique": (640, 480),
+}
+SENSOR_MOTOR_REALIZATION_PROFILES = {
+    "bounded_fixed_roll": (
+        "cartesian_ik",
+        "upper_arm_fixed_roll_positive",
+        "upper_arm_fixed_roll_negative",
+    ),
+    "research_full_roll": (
+        "cartesian_ik",
+        "upper_arm_fixed_roll_positive",
+        "upper_arm_fixed_roll_negative",
+        "upper_arm_roll_positive",
+        "upper_arm_roll_negative",
+    ),
 }
 
 
@@ -43,6 +56,9 @@ class WebSimRuntime:
     spatial_grid_size: int = 16
     stroke_tone_prior: float | None = None
     save_every_paintings: int = 5
+    # Interactive viewers preserve a stopped canvas for inspection. Batch/demo
+    # callers can opt into clearing and starting the next painting episode.
+    restart_on_stop: bool = True
     archive_dir: Path | str = Path("runs/web")
     telemetry_max_samples: int = 54_000
     telemetry_sample_period: float = 1.0 / 15.0
@@ -59,7 +75,14 @@ class WebSimRuntime:
     plant_backend: str = "native"
     observation_access_mode: str = OBSERVATION_ACCESS_MODE
     provisional_sensor_policy: bool = False
+    sensor_motor_realization_profile: str = "bounded_fixed_roll"
     fovea_trace_retention_s: float = DEFAULT_FOVEA_TRACE_RETENTION_S
+    proposal_diagnostic_interval_plans: int = 16
+    # None preserves the historical interactive streams exactly (process
+    # seeds 0, agent seed 17). Parallel collectors pass an explicit seed to
+    # obtain isolated worker streams without changing ordinary web launches.
+    seed: int | None = None
+    on_painting_complete: Callable[[int, SpatialCanvasState], None] | None = None
     sim: ArmPainterSim = field(init=False)
     agent_driver: ArmActiveInferenceDriver = field(init=False)
     telemetry_log: ArmTelemetryLog = field(init=False)
@@ -78,6 +101,7 @@ class WebSimRuntime:
     _next_telemetry_time: float = field(default=0.0, init=False)
     _last_robot_joint_position_deg: dict[str, float] | None = field(default=None, init=False)
     _camera_process: Any | None = field(default=None, init=False)
+    _camera_owner_thread_id: int | None = field(default=None, init=False)
     _fovea_trace: list[dict[str, Any]] = field(default_factory=list, init=False)
     _pending_fovea_delivery_deadlines: dict[str, float] = field(
         default_factory=dict,
@@ -90,6 +114,11 @@ class WebSimRuntime:
     def __post_init__(self) -> None:
         if not np.isfinite(self.fovea_trace_retention_s) or self.fovea_trace_retention_s <= 0.0:
             raise ValueError("fovea_trace_retention_s must be finite and positive")
+        if self.sensor_motor_realization_profile not in SENSOR_MOTOR_REALIZATION_PROFILES:
+            raise ValueError(
+                "unsupported sensor_motor_realization_profile: "
+                f"{self.sensor_motor_realization_profile!r}"
+            )
         if self.provisional_sensor_policy and self.plant_backend != "mujoco":
             raise ValueError(
                 "provisional sensor policy requires plant_backend='mujoco'"
@@ -108,6 +137,8 @@ class WebSimRuntime:
             planner_state_kind=self.planner_state_kind,
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,
+            canvas_grain_seed=(0 if self.seed is None else self.seed + 101),
+            brush_seed=(0 if self.seed is None else self.seed + 211),
         )
         # Replay capacity must be sized to the state representation. In spatial
         # mode each transition holds full-resolution material patches (~200 KB
@@ -130,14 +161,53 @@ class WebSimRuntime:
             passage_plan_proposal_mix=(
                 0.0 if self.provisional_sensor_policy else 0.15
             ),
+            # The sensor profile uses a symmetric mixed path-geometry proposal:
+            # a straight atom plus continuously varied left- and right-bending
+            # single marks. This is proposal support only; it adds no curve
+            # preference or reward.
+            curved_mark_proposal_mix=(
+                2.0 / 3.0 if self.provisional_sensor_policy else 0.0
+            ),
+            mark_curvature_magnitude=(
+                0.24 if self.provisional_sensor_policy else 0.18
+            ),
+            mark_curvature_min_fraction=(
+                0.10 if self.provisional_sensor_policy else 0.15
+            ),
+            # In the smoke profile the initial compact brush posterior is
+            # empty. Use an uncommitted preserve/reload prior so the
+            # paint-bearing reload outcome can win on its conditional
+            # likelihood; preparation is still inferred, never forced by a
+            # threshold.
+            brush_reload_policy_prior=(
+                0.50 if self.provisional_sensor_policy else 0.08
+            ),
             # Now the PRIOR MEAN of the policy-precision Gamma belief
             # (beta0 = alpha0 / 0.35), not a hand-tuned softmax temperature.
             policy_precision=0.35,
             batch_size=32,
             motor_forecast_candidates=1 if self.provisional_sensor_policy else 2,
             motor_forecast_samples=1 if self.provisional_sensor_policy else 3,
+            # Declared simulation-only throughput approximation for the
+            # bounded integration profile, not a hardware-control rate.
+            motor_forecast_hz=30.0 if self.provisional_sensor_policy else 45.0,
+            # The bounded live profile compares the historical neutral IK with
+            # symmetric fixed-roll postures. Dynamic roll sweeps remain in the
+            # broader research profile below, but are not yet reliable enough
+            # for this repeated camera-closed smoke loop.
+            motor_forecast_workers=(
+                len(
+                    SENSOR_MOTOR_REALIZATION_PROFILES[
+                        self.sensor_motor_realization_profile
+                    ]
+                )
+                if self.provisional_sensor_policy
+                else 1
+            ),
             motor_realization_kinds=(
-                ("cartesian_ik",)
+                SENSOR_MOTOR_REALIZATION_PROFILES[
+                    self.sensor_motor_realization_profile
+                ]
                 if self.provisional_sensor_policy
                 else (
                     "cartesian_ik",
@@ -148,14 +218,30 @@ class WebSimRuntime:
                 )
             ),
             motor_realization_candidate_limit=(
-                1
+                len(
+                    SENSOR_MOTOR_REALIZATION_PROFILES[
+                        self.sensor_motor_realization_profile
+                    ]
+                )
                 if self.provisional_sensor_policy
                 else 5
             ),
             planner_state_kind=self.planner_state_kind,
             spatial_grid_size=self.spatial_grid_size,
             stroke_tone_prior=self.stroke_tone_prior,
+            canvas_grain_seed=(0 if self.seed is None else self.seed + 307),
+            brush_seed=(0 if self.seed is None else self.seed + 401),
+            learned_proposal_diagnostic_interval_plans=max(
+                1, int(self.proposal_diagnostic_interval_plans)
+            ),
             replay_capacity=replay_capacity,
+            # Bootstrap is deliberately disabled for the live sensor baseline,
+            # so an untrained neural transition must not hallucinate paint.
+            # Camera-derived replay unlocks the learned local likelihood only
+            # after a modest, explicitly declared warm-up corpus.
+            spatial_transition_warmup_samples=(
+                64 if self.provisional_sensor_policy else 0
+            ),
             bootstrap_generator=self.driver_bootstrap_generator,
             bootstrap_composition_train_steps=self.driver_bootstrap_composition_train_steps,
         )
@@ -177,6 +263,7 @@ class WebSimRuntime:
             device=self.device,
             observation_access_mode=self.observation_access_mode,
             provisional_sensor_policy=self.provisional_sensor_policy,
+            seed=(17 if self.seed is None else self.seed + 503),
         )
         if self.provisional_sensor_policy:
             from .mujoco_backend import MujocoJointPlant
@@ -225,32 +312,37 @@ class WebSimRuntime:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        if self._camera_process is not None:
-            self._camera_process.close()
-            self._camera_process = None
+        # MuJoCo's Windows OpenGL context is thread-affine. The simulation
+        # thread closes a camera process it created in `_run`'s finally block.
+        # A process explicitly installed/created by the caller (owner unknown
+        # or current) can still be closed here, preserving test/manual usage.
+        self._close_camera_process_if_owned_by_current_thread()
         self.agent_driver.close_sensor_forecast_template()
         close = getattr(self.sim.plant, "close", None)
         if callable(close):
             close()
 
     def _run(self) -> None:
-        last = time.perf_counter()
-        fixed_dt = 1.0 / 240.0
-        while not self._stop.is_set():
-            now = time.perf_counter()
-            wall_dt = min(0.05, now - last)
-            last = now
-            steps = self._simulation_steps_for_wall_time(wall_dt, fixed_dt)
-            for index in range(steps):
-                if self._stop.is_set():
-                    break
-                with self._lock:
-                    if self.paused:
+        try:
+            last = time.perf_counter()
+            fixed_dt = 1.0 / 240.0
+            while not self._stop.is_set():
+                now = time.perf_counter()
+                wall_dt = min(0.05, now - last)
+                last = now
+                steps = self._simulation_steps_for_wall_time(wall_dt, fixed_dt)
+                for index in range(steps):
+                    if self._stop.is_set():
                         break
-                    self._advance_one_step(fixed_dt)
-                if self.max_speed and index % 8 == 7:
-                    time.sleep(0)
-            time.sleep(0.001 if self.max_speed else 0.01)
+                    with self._lock:
+                        if self.paused:
+                            break
+                        self._advance_one_step(fixed_dt)
+                    if self.max_speed and index % 8 == 7:
+                        time.sleep(0)
+                time.sleep(0.001 if self.max_speed else 0.01)
+        finally:
+            self._close_camera_process_if_owned_by_current_thread()
 
     def _simulation_steps_for_wall_time(self, wall_dt: float, fixed_dt: float) -> int:
         with self._lock:
@@ -442,6 +534,7 @@ class WebSimRuntime:
                 "maxSpeed": self.max_speed,
                 "agentEnabled": self.agent_enabled,
                 "paintingCount": self.painting_count,
+                "restartOnStop": self.restart_on_stop,
                 "saveEveryPaintings": self.save_every_paintings,
                 "lastSavedCanvas": self.last_saved_canvas,
                 "telemetryLog": self.telemetry_log.summary(self.sim_time),
@@ -528,6 +621,14 @@ class WebSimRuntime:
                     "pressure": contact.pressure,
                     "brushWidthPx": contact.brush_width_px,
                     "brushWorld": contact.brush_world.astype(float).tolist(),
+                    "paintingWorld": self.sim.painting_point_world.astype(float).tolist(),
+                    "tangentialForce": contact.tangential_force,
+                    "frictionCoefficient": contact.friction_coefficient,
+                    "pullAlignment": contact.pull_alignment,
+                    "sticking": contact.sticking,
+                    "stickSlipTransition": contact.stick_slip_transition,
+                    "slipFraction": contact.slip_fraction,
+                    "bristleDeflectionXZ": contact.bristle_deflection_xz.astype(float).tolist(),
                 },
                 "motor": {
                     name: {
@@ -809,13 +910,32 @@ class WebSimRuntime:
             from .camera_observation import CameraObservationProcess
 
             self._camera_process = CameraObservationProcess(
+                random_seed=(0 if self.seed is None else self.seed + 601),
                 native_resolution_overrides=(
                     PROVISIONAL_SENSOR_NATIVE_RESOLUTION_OVERRIDES
                     if self.provisional_sensor_policy
                     else None
-                )
+                ),
+                # The provisional camera likelihood predicts superficial
+                # grayscale directly. Retain geometric occlusion/noise but
+                # avoid injecting an unmodelled lighting gain that otherwise
+                # makes a blank canvas look materially covered.
+                identity_canvas_appearance=self.provisional_sensor_policy,
             )
+            self._camera_owner_thread_id = threading.get_ident()
         return self._camera_process, backend
+
+    def _close_camera_process_if_owned_by_current_thread(self) -> bool:
+        process = self._camera_process
+        if process is None:
+            return False
+        current_thread = threading.get_ident()
+        if self._camera_owner_thread_id not in {None, current_thread}:
+            return False
+        process.close()
+        self._camera_process = None
+        self._camera_owner_thread_id = None
+        return True
 
     @staticmethod
     def _inspection_camera_available(process: Any, backend: Any) -> bool:
@@ -828,13 +948,26 @@ class WebSimRuntime:
     def _restart_after_stop_if_needed(self) -> bool:
         if not self.agent_driver.stopped:
             return False
+        if not self.restart_on_stop:
+            return False
         self._complete_stopped_painting()
         return True
 
     def _complete_stopped_painting(self) -> None:
         self.painting_count += 1
+        belief = self.agent_driver.belief
+        if self.on_painting_complete is not None and isinstance(
+            belief, SpatialCanvasState
+        ):
+            self.on_painting_complete(self.painting_count, belief)
         if self.save_every_paintings > 0 and self.painting_count % self.save_every_paintings == 0:
             self.last_saved_canvas = str(self._save_canvas_snapshot(self.painting_count))
+        if not self.restart_on_stop:
+            # Leave the final material state visible. The agent has selected
+            # terminal stop, so pausing is faithful to that policy and avoids
+            # silently replacing it with an automatic new episode.
+            self.paused = True
+            return
         self.sim.reset_pose()
         self._reset_body_estimator()
         self.sim.canvas.clear()

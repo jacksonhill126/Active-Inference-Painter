@@ -15,7 +15,7 @@ from .brush_loading import (
     BrushLoadBelief,
     BrushLoadingModel,
 )
-from .env import StrokeAction
+from .env import StrokeAction, mark_path_length, mark_path_points
 from .local_spatial import pixel_logvar_from_state, pixel_material_from_state
 from .plant_interface import BodyBeliefSnapshot
 from .policies import MotorPrimitiveLatent
@@ -170,7 +170,13 @@ def adaptive_stroke_timing(sim: ArmPainterSim, action: StrokeAction) -> StrokeTi
     x0, z0, x1, z1 = stroke_world_endpoints(action, sim.canvas)
     tip = sim.kinematics.tip(sim.actual_pose)
     approach_distance = float(np.hypot(float(tip[0]) - x0, float(tip[2]) - z0))
-    stroke_length = float(np.hypot(x1 - x0, z1 - z0))
+    if abs(float(action.curvature)) <= 1e-12:
+        normalized_length = float(np.hypot(action.x1 - action.x0, action.y1 - action.y0))
+    else:
+        normalized_length = mark_path_length(action)
+    # The current canvas is square, but retain the explicit scale rather than
+    # silently equating normalized and physical arclength.
+    stroke_length = float(normalized_length * 0.5 * (sim.canvas.width + sim.canvas.height) * CANVAS_REACH_FRACTION)
     approach = clip_scalar(0.5 + approach_distance / 9.0, 0.6, 2.4)
     paint = clip_scalar(stroke_length / PAINT_SPEED_UNITS_PER_SECOND, 0.9, 3.6)
     return StrokeTiming(approach=approach, paint=paint)
@@ -179,10 +185,41 @@ def adaptive_stroke_timing(sim: ArmPainterSim, action: StrokeAction) -> StrokeTi
 def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing: StrokeTiming) -> StrokeReference:
     c = sim.canvas
     x0, z0, x1, z1 = stroke_world_endpoints(action, c)
-    feasible = c.contains(x0, z0) and c.contains(x1, z1)
+    is_straight = abs(float(action.curvature)) <= 1e-12
+    if is_straight:
+        # Preserve the inexpensive historical path for the overwhelmingly
+        # common straight-policy forecasts. Sampling a 65-point curve on each
+        # servo tick made planning latency scale needlessly with control rate.
+        feasible = c.contains(x0, z0) and c.contains(x1, z1)
+        path_length = float(np.hypot(x1 - x0, z1 - z0))
+    else:
+        normalized_path = mark_path_points(action, np.linspace(0.0, 1.0, 65))
+        world_path = np.stack(
+            (
+                (normalized_path[:, 0] - 0.5) * c.width * CANVAS_REACH_FRACTION,
+                (0.5 - normalized_path[:, 1]) * c.height * CANVAS_REACH_FRACTION,
+            ),
+            axis=1,
+        )
+        feasible = all(c.contains(float(point[0]), float(point[1])) for point in world_path)
+        path_length = float(np.linalg.norm(np.diff(world_path, axis=0), axis=1).sum())
     pressure_base = 0.08 + 0.62 * clip_scalar(action.amount, 0.0, 1.0)
-    curvature = float(np.hypot(x1 - x0, z1 - z0))
-    speed_factor = clip_scalar(curvature / max(0.2, timing.paint), 0.0, 12.0) / 12.0
+    speed_factor = clip_scalar(path_length / max(0.2, timing.paint), 0.0, 12.0) / 12.0
+    width_pressure = 0.42 * clip_scalar(action.width / 0.30, 0.0, 1.0)
+    end_pressure_fraction = clip_scalar(
+        c.config.brush_taper_end_pressure_fraction, 0.0, 1.0
+    )
+
+    def paint_pressure(u: float, end_release: float) -> float:
+        phase_pressure = pressure_base * (0.72 + 0.28 * np.sin(np.pi * u) ** 2)
+        raw = clip_scalar(
+            phase_pressure + width_pressure - 0.12 * speed_factor,
+            0.04,
+            0.92,
+        )
+        unloading = end_pressure_fraction + (1.0 - end_pressure_fraction) * end_release
+        return clip_scalar(raw * unloading, 0.004, 0.92)
+
     t = clip_scalar(t, 0.0, timing.total)
 
     if t < timing.approach:
@@ -219,22 +256,35 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
     if t < timing.approach + timing.press + timing.paint:
         u = (t - timing.approach - timing.press) / timing.paint
         smooth = smootherstep(u)
-        phase_pressure = pressure_base * (0.72 + 0.28 * np.sin(np.pi * u) ** 2)
-        width_pressure = 0.42 * clip_scalar(action.width / 0.30, 0.0, 1.0)
-        consequence_pressure = clip_scalar(phase_pressure + width_pressure - 0.12 * speed_factor, 0.04, 0.92)
         # Width-taper envelope: ramp 0->1 over the first `tf` of the paint phase
         # and 1->0 over the last `tf`, so the mark narrows to points at its ends.
+        # The end envelope also unloads Cartesian depth and intended pressure;
+        # otherwise smootherstep deceleration dwells at the endpoint under full
+        # contact and deposits the circular node seen in the live renderer.
         tf = clip_scalar(c.config.brush_taper_fraction, 0.0, 0.49)
         if tf > 1e-3:
-            flow = float(smootherstep(clip_scalar(u / tf, 0.0, 1.0)) * smootherstep(clip_scalar((1.0 - u) / tf, 0.0, 1.0)))
+            start_release = float(smootherstep(clip_scalar(u / tf, 0.0, 1.0)))
+            end_release = float(
+                smootherstep(clip_scalar((1.0 - u) / tf, 0.0, 1.0))
+            )
+            flow = start_release * end_release
         else:
             flow = 1.0
+            end_release = 1.0
+        consequence_pressure = paint_pressure(u, end_release)
+        if is_straight:
+            paint_x = x0 + (x1 - x0) * smooth
+            paint_z = z0 + (z1 - z0) * smooth
+        else:
+            path_uv = mark_path_points(action, smooth)
+            paint_x = float((float(path_uv[0]) - 0.5) * c.width * CANVAS_REACH_FRACTION)
+            paint_z = float((0.5 - float(path_uv[1])) * c.height * CANVAS_REACH_FRACTION)
         return StrokeReference(
             phase="paint",
             t=t,
-            x=float((1.0 - smooth) * x0 + smooth * x1),
-            z=float((1.0 - smooth) * z0 + smooth * z1),
-            depth=c.distance + 0.2,
+            x=paint_x,
+            z=paint_z,
+            depth=c.distance + 0.2 * end_release,
             pressure=float(consequence_pressure),
             intended_start=(x0, z0),
             intended_end=(x1, z1),
@@ -244,16 +294,18 @@ def stroke_reference(action: StrokeAction, sim: ArmPainterSim, t: float, timing:
 
     u = (t - timing.approach - timing.press - timing.paint) / timing.lift
     smooth = smootherstep(u)
+    endpoint_pressure = paint_pressure(1.0, 0.0)
     return StrokeReference(
         phase="lift",
         t=t,
         x=x1,
         z=z1,
-        depth=c.distance + 0.2 - 1.06 * smooth,
-        pressure=float(max(0.0, pressure_base * (1.0 - smooth))),
+        depth=c.distance - 0.86 * smooth,
+        pressure=float(max(0.0, endpoint_pressure * (1.0 - smooth))),
         intended_start=(x0, z0),
         intended_end=(x1, z1),
         feasible=feasible,
+        flow=0.0,
     )
 
 
@@ -483,6 +535,12 @@ def controller_for_motor_primitive(
     if kind in ("cartesian", "cartesian_ik", ""):
         return ContactAwareStrokeController()
     if kind in {"upper_arm_roll_positive", "upper_arm_roll_negative"}:
+        assert motor_primitive is not None
+        return ContactAwareStrokeController(
+            roll_start_deg=motor_primitive.roll_start_deg,
+            roll_end_deg=motor_primitive.roll_end_deg,
+        )
+    if kind in {"upper_arm_fixed_roll_positive", "upper_arm_fixed_roll_negative"}:
         assert motor_primitive is not None
         return ContactAwareStrokeController(
             roll_start_deg=motor_primitive.roll_start_deg,
@@ -958,7 +1016,10 @@ def _forecast_stroke_execution_once(
         if command.reference.phase == "paint":
             paint_samples += 1
             intended_points.append((command.reference.x, command.reference.z))
-            realized_points.append((float(working.contact.brush_world[0]), float(working.contact.brush_world[2])))
+            painting_point = working.painting_point_world
+            realized_points.append(
+                (float(painting_point[0]), float(painting_point[2]))
+            )
             pressures.append(float(working.contact.pressure))
             target_pressures.append(command.reference.pressure)
             if working.contact.pressure <= 0.01:
@@ -967,7 +1028,16 @@ def _forecast_stroke_execution_once(
     after_state = summary_fn(working)
     intended_start = stroke_reference(action, working, timing.approach + timing.press, timing).intended_start
     intended_end = stroke_reference(action, working, timing.approach + timing.press + timing.paint, timing).intended_end
-    intended_path_length = float(np.linalg.norm(np.asarray(intended_end) - np.asarray(intended_start)))
+    if abs(float(action.curvature)) <= 1e-12:
+        normalized_path_length = float(np.hypot(action.x1 - action.x0, action.y1 - action.y0))
+    else:
+        normalized_path_length = mark_path_length(action)
+    intended_path_length = float(
+        normalized_path_length
+        * 0.5
+        * (working.canvas.width + working.canvas.height)
+        * CANVAS_REACH_FRACTION
+    )
 
     if realized_points:
         realized = np.asarray(realized_points, dtype=np.float64)
@@ -978,6 +1048,9 @@ def _forecast_stroke_execution_once(
         realized_start = tuple(float(x) for x in realized[0])
         realized_end = tuple(float(x) for x in realized[-1])
         realized_path_span = float(np.linalg.norm(realized[-1] - realized[0]))
+        realized_path_length = float(
+            np.linalg.norm(np.diff(realized, axis=0), axis=1).sum()
+        )
         overshoot = float(max(np.linalg.norm(realized[0] - np.asarray(intended_start)), path_rmse))
     else:
         path_cov = np.asarray([1.0, 1.0], dtype=np.float64)
@@ -985,6 +1058,7 @@ def _forecast_stroke_execution_once(
         realized_start = intended_start
         realized_end = intended_end
         realized_path_span = 0.0
+        realized_path_length = 0.0
         overshoot = 1.0
         feasible = False
 
@@ -994,7 +1068,7 @@ def _forecast_stroke_execution_once(
     contact_loss_probability = float(contact_losses / max(1, paint_samples))
     execution_uncertainty = float(path_rmse + 0.35 * pressure_error + 0.55 * contact_loss_probability)
     minimum_realized_span = min(0.35, max(0.08, 0.2 * intended_path_length))
-    paint_motion_fraction = realized_path_span / max(1e-6, intended_path_length)
+    paint_motion_fraction = realized_path_length / max(1e-6, intended_path_length)
     feasible = (
         feasible
         and contact_loss_probability < 0.85

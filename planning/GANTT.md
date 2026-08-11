@@ -5,6 +5,20 @@ for one investigator, not a staffing plan. Overlapping bars indicate work that
 can be interleaved; they do not assume two full-time people. Dates must be
 revised after each capability gate.
 
+Status review 2026-08-11: the calendar envelope has not slipped—M1 was planned
+as a six-week effort after M0—but implementation has run ahead into provisional
+M2/S2/M5 branches while M1 scientific acceptance remains the critical path.
+Those branches do not advance their milestone gates. AI-106 terminal/stopping
+acceptance closed on 2026-08-11 with a required M2 forecast-family correction.
+AI-108's 256-transition leakage-resistant corpus was accepted on 2026-08-11.
+AI-107 then closed with a negative M2 calibration result: trained CNN and cVAE
+models improved held-out density but failed interval-shape and meaningful
+motor-OOD disagreement gates. Near-term work is therefore AI-109 learning
+curves and likelihood-family diagnosis, followed by the revised AI-110
+structural preference decision. Dates should be rebased only after the M1
+capability gate, not from the amount of provisional implementation already
+present.
+
 ```mermaid
 gantt
     title Active-Inference Painter Research And Robotics Roadmap

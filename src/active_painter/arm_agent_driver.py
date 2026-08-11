@@ -169,6 +169,7 @@ class PendingActionCameraUpdate:
     previous: SpatialCanvasState
     transition_prior: SpatialCanvasState
     brush_key: str
+    brush_previous: BrushLoadBelief
     brush_previous_revision: int
     brush_transition_revision: int
     capture_not_before_s: float | None = None
@@ -190,10 +191,22 @@ class ArmActiveInferenceDriver:
     bootstrap_train_steps: int = 180
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
+    checkpoint_provenance: dict[str, object] = field(default_factory=dict)
     observation_access_mode: str = OBSERVATION_ACCESS_MODE
     provisional_sensor_policy: bool = False
     enabled: bool = True
     on_stop: Callable[[], None] | None = None
+    on_observed_transition: Callable[
+        [
+            np.ndarray | SpatialCanvasState,
+            StrokeAction,
+            MotorPrimitiveLatent | None,
+            np.ndarray | SpatialCanvasState,
+            BrushLoadBelief | None,
+        ],
+        None,
+    ] | None = None
+    seed: int = 17
     device: str | None = None
     agent: ActiveInferencePainter | SpatialActiveInferencePainter = field(init=False)
     belief: GaussianBelief | SpatialCanvasState = field(init=False)
@@ -287,6 +300,8 @@ class ArmActiveInferenceDriver:
         default_factory=lambda: deque(maxlen=64), init=False
     )
     _cached_policy_proposal: dict[str, object] | None = field(default=None, init=False)
+    _policy_proposal_diagnostic_plan_count: int = field(default=0, init=False)
+    _policy_proposal_diagnostic_last_plan: int = field(default=0, init=False)
     # Evidence block for the motion-manifold bootstrap. Written ONCE at the end
     # of bootstrap_dynamics and never recomputed: __post_init__'s
     # reset_hierarchy_beliefs and web_runtime's driver reset both re-initialize
@@ -360,7 +375,7 @@ class ArmActiveInferenceDriver:
         if self._uses_spatial_planner():
             self.agent = SpatialActiveInferencePainter(
                 self.config,
-                seed=17,
+                seed=self.seed,
                 device=self.device,
                 precision_ledger=self.precision_ledger,
                 gap_increment=self.gap_increment,
@@ -368,7 +383,7 @@ class ArmActiveInferenceDriver:
         else:
             self.agent = ActiveInferencePainter(
                 self.config,
-                seed=17,
+                seed=self.seed,
                 device=self.device,
                 precision_ledger=self.precision_ledger,
                 gap_increment=self.gap_increment,
@@ -861,6 +876,7 @@ class ArmActiveInferenceDriver:
                 "motion_reliability": self.motion_reliability.snapshot(),
                 "precision_ledger": self.precision_ledger.snapshot(),
                 "gap_increment_belief": self.gap_increment.snapshot(),
+                "training_provenance": dict(self.checkpoint_provenance),
             }
             if isinstance(self.agent, SpatialActiveInferencePainter):
                 payload["composition_replay"] = self._replay_snapshot(self.agent.composition_replay)
@@ -997,6 +1013,8 @@ class ArmActiveInferenceDriver:
             self._contact_release_count = 0
             self._cached_belief_gap = None
             self._cached_passage_trajectory = None
+            self._policy_proposal_diagnostic_plan_count = 0
+            self._policy_proposal_diagnostic_last_plan = 0
             self.brush_load_beliefs = {
                 "white": self.brush_loading_model.unloaded_belief(0.0),
                 "black": self.brush_loading_model.unloaded_belief(1.0),
@@ -1166,6 +1184,7 @@ class ArmActiveInferenceDriver:
                 pending.action,
                 posterior,
                 pending.motor_primitive,
+                pending.brush_previous,
             )
             self.trained_transitions += 1
             training_started = time.perf_counter()
@@ -1266,6 +1285,7 @@ class ArmActiveInferenceDriver:
             previous=copy.deepcopy(source),
             transition_prior=copy.deepcopy(prior),
             brush_key=key,
+            brush_previous=brush_previous,
             brush_previous_revision=brush_previous.revision,
             brush_transition_revision=brush_transition.revision,
         )
@@ -1385,6 +1405,7 @@ class ArmActiveInferenceDriver:
         action: StrokeAction,
         next_state: np.ndarray | SpatialCanvasState,
         motor_primitive: MotorPrimitiveLatent | None = None,
+        brush_belief: BrushLoadBelief | None = None,
     ) -> None:
         if self._uses_spatial_planner():
             assert isinstance(self.agent, SpatialActiveInferencePainter)
@@ -1396,6 +1417,14 @@ class ArmActiveInferenceDriver:
             assert isinstance(state, np.ndarray)
             assert isinstance(next_state, np.ndarray)
             self.agent.replay.add(state, encoded_action_vector(action, self.config, motor_primitive), next_state)
+        if self.on_observed_transition is not None:
+            self.on_observed_transition(
+                state,
+                action,
+                motor_primitive,
+                next_state,
+                brush_belief,
+            )
 
     def step(self, sim: ArmPainterSim, dt: float) -> None:
         if self._observation_boundary_blocked:
@@ -1731,6 +1760,11 @@ class ArmActiveInferenceDriver:
             "motorForecastSeconds": 0.0,
             "motorEFERescoreSeconds": 0.0,
             "posteriorSeconds": 0.0,
+            "compositionDiagnosticSeconds": 0.0,
+            "proposalDiagnosticFresh": False,
+            "proposalDiagnosticIntervalPlans": max(
+                1, int(self.config.learned_proposal_diagnostic_interval_plans)
+            ),
             "selectedForecastSeconds": 0.0,
             "selectedForecastCacheHits": 0,
             "policyCount": 0,
@@ -1798,8 +1832,13 @@ class ArmActiveInferenceDriver:
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
             error = repr(exc)
         if error is None:
+            phase_started = time.perf_counter()
             self._refresh_composition_diagnostics(
                 pending_ranked[0][0] if pending_ranked else None
+            )
+            self._profile_add_seconds(
+                "compositionDiagnosticSeconds",
+                time.perf_counter() - phase_started,
             )
         profile["totalSeconds"] = time.perf_counter() - started
         with self._planner_lock:
@@ -1898,6 +1937,10 @@ class ArmActiveInferenceDriver:
             "motorEFERescoreSeconds": 0.0,
             "posteriorSeconds": 0.0,
             "compositionDiagnosticSeconds": 0.0,
+            "proposalDiagnosticFresh": False,
+            "proposalDiagnosticIntervalPlans": max(
+                1, int(self.config.learned_proposal_diagnostic_interval_plans)
+            ),
             "selectedForecastSeconds": 0.0,
             "selectedForecastCacheHits": 0,
             "trailingTrainingSeconds": 0.0,
@@ -2207,8 +2250,18 @@ class ArmActiveInferenceDriver:
             )
         # Also cached, and for the same reason: the divergence estimator runs the
         # proposal network forward, and diagnostics() is polled from the web
-        # thread. Never runs there.
-        self._refresh_policy_proposal_diagnostics()
+        # thread. Never runs there. Unlike the composition-gap update above,
+        # this block is evidence-only and may be decimated without changing a
+        # policy decision. The first plan always measures a fresh baseline.
+        self._policy_proposal_diagnostic_plan_count += 1
+        interval = max(
+            1, int(self.config.learned_proposal_diagnostic_interval_plans)
+        )
+        plan_count = self._policy_proposal_diagnostic_plan_count
+        if self._cached_policy_proposal is None or (plan_count - 1) % interval == 0:
+            self._refresh_policy_proposal_diagnostics()
+            self._policy_proposal_diagnostic_last_plan = plan_count
+            self._profile_set("proposalDiagnosticFresh", True)
 
     def _refresh_policy_proposal_diagnostics(self) -> None:
         """Measure the declared H4 numbers on the planner thread, once per plan.
@@ -2273,9 +2326,18 @@ class ArmActiveInferenceDriver:
                 ]
                 learned_mean = float(sum(learned_values) / len(learned_values))
                 hand_mean = float(sum(hand_values) / len(hand_values))
-                block["selectedMeanLogLikelihoodLearned"] = learned_mean
-                block["selectedMeanLogLikelihoodHandWritten"] = hand_mean
-                block["selectedLogLikelihoodAdvantage"] = learned_mean - hand_mean
+                # A zero learned-emission gate deliberately gives some newly
+                # introduced hand-only latents (for example curvature) zero
+                # learned density. That makes the comparison undefined, not
+                # an IEEE infinity-valued telemetry measurement.
+                if np.isfinite(learned_mean) and np.isfinite(hand_mean):
+                    block["selectedMeanLogLikelihoodLearned"] = learned_mean
+                    block["selectedMeanLogLikelihoodHandWritten"] = hand_mean
+                    block["selectedLogLikelihoodAdvantage"] = learned_mean - hand_mean
+                else:
+                    block["selectedMeanLogLikelihoodLearned"] = None
+                    block["selectedMeanLogLikelihoodHandWritten"] = None
+                    block["selectedLogLikelihoodAdvantage"] = None
                 block["selectedSampleCount"] = len(selected)
             else:
                 block["selectedMeanLogLikelihoodLearned"] = None
@@ -2299,7 +2361,13 @@ class ArmActiveInferenceDriver:
                     ).total
                     total -= float(weight) * float(log_density)
                     mass += float(weight)
-                cross_entropy = float(total / mass) if mass > 0.0 else None
+                candidate_cross_entropy = float(total / mass) if mass > 0.0 else None
+                cross_entropy = (
+                    candidate_cross_entropy
+                    if candidate_cross_entropy is not None
+                    and np.isfinite(candidate_cross_entropy)
+                    else None
+                )
             block["refinedTargetCrossEntropy"] = cross_entropy
             self._cached_policy_proposal = block
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
@@ -2450,8 +2518,9 @@ class ArmActiveInferenceDriver:
             and sim.contact.pressure > 0.001
         ):
             x0, z0, x1, z1 = stroke_world_endpoints(ex.action, sim.canvas)
-            px = float(sim.contact.brush_world[0])
-            pz = float(sim.contact.brush_world[2])
+            painting_point = sim.painting_point_world
+            px = float(painting_point[0])
+            pz = float(painting_point[2])
             seg_x, seg_z = x1 - x0, z1 - z0
             seg_len_sq = seg_x * seg_x + seg_z * seg_z
             if seg_len_sq > 1e-12:
@@ -2666,7 +2735,7 @@ class ArmActiveInferenceDriver:
                 body_snapshot,
                 missing_requests,
                 summary_fn,
-                dt=1.0 / 45.0,
+                dt=1.0 / max(1.0, float(self.config.motor_forecast_hz)),
                 max_workers=workers,
                 initial_body_belief=self._planning_body_belief,
                 initial_material_belief=self._planning_material_belief,
@@ -3355,7 +3424,7 @@ class ArmActiveInferenceDriver:
             action,
             canvas_summary_state,
             motor_primitive=motor_primitive,
-            dt=1.0 / 45.0,
+            dt=1.0 / max(1.0, float(self.config.motor_forecast_hz)),
             brush_reload=(
                 brush_preparation is None
                 or brush_preparation.kind == "reload"
@@ -3858,7 +3927,24 @@ class ArmActiveInferenceDriver:
                     elif key == "beliefFeatureSource":
                         block[key] = str(value)
                     else:
-                        block[key] = float(value)
+                        numeric = float(value)
+                        # Diagnostics are an observation interface. Never
+                        # expose IEEE NaN/Infinity as invalid JSON; undefined
+                        # quantities are represented explicitly as null.
+                        block[key] = numeric if np.isfinite(numeric) else None
+            block["diagnosticIntervalPlans"] = max(
+                1, int(self.config.learned_proposal_diagnostic_interval_plans)
+            )
+            block["diagnosticPlanCount"] = int(
+                self._policy_proposal_diagnostic_plan_count
+            )
+            block["diagnosticAgePlans"] = max(
+                0,
+                int(
+                    self._policy_proposal_diagnostic_plan_count
+                    - self._policy_proposal_diagnostic_last_plan
+                ),
+            )
             return block
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
             return {

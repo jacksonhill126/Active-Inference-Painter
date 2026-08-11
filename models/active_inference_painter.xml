@@ -51,38 +51,38 @@
     <text name="thermal_model" data="disabled_missing_vendor_constants"/>
     <text name="transmission_model" data="rigid_integrated_reducer_without_backlash"/>
     <text name="paint_process" data="external_VerticalCanvas"/>
-    <text name="camera_rig_version" data="provisional-multiview-v4"/>
+    <text name="camera_rig_version" data="provisional-compact-dual-imx296-v1"/>
     <text name="sensor_camera_order"
-          data="canvas_right_oblique canvas_left_oblique canvas_inspection_deployed brush_standoff_overhead"/>
+          data="canvas_right_oblique canvas_left_oblique"/>
     <text name="sensor_camera_roles"
-          data="contact_tracking contact_tracking canvas_inspection brush_standoff"/>
+          data="contact_tracking contact_tracking"/>
     <text name="sensor_camera_availability"
-          data="continuous continuous park_only continuous"/>
+          data="continuous continuous"/>
     <text name="sensor_camera_channels"
-          data="grayscale grayscale grayscale grayscale"/>
+          data="grayscale grayscale"/>
     <text name="sensor_camera_registration"
-          data="canvas_plane_homography canvas_plane_homography canvas_plane_homography canvas_edge_profile"/>
+          data="canvas_plane_homography canvas_plane_homography"/>
     <text name="sensor_camera_hardware_baseline"
-          data="OM_SYSTEM_OM-1 Sony_ILCE-7RM2 additional_head_on_TBD low_cost_global_shutter_TBD"/>
+          data="Raspberry_Pi_Global_Shutter_Camera_IMX296 Raspberry_Pi_Global_Shutter_Camera_IMX296"/>
     <text name="sensor_camera_hardware_status"
-          data="owned owned planned planned"/>
+          data="selected_not_purchased selected_not_purchased"/>
     <text name="sensor_camera_lens_status"
-          data="confirmed_focal_length confirmed_focal_length TBD TBD"/>
+          data="provisional_4mm_CS_mount provisional_4mm_CS_mount"/>
     <text name="sensor_camera_capture_mode"
-          data="MFT_full_width_16x9 Super35_full_width_16x9 TBD native_4x3_TBD"/>
+          data="IMX296_full_1456x1088 IMX296_full_1456x1088"/>
     <text name="sensor_camera_transport"
-          data="clean_HDMI_capture clean_HDMI_capture TBD CSI_or_USB"/>
+          data="CSI-2 CSI-2"/>
     <text name="sensor_camera_shutter_model"
-          data="rolling rolling TBD global"/>
+          data="global global"/>
     <text name="camera_geometry_model" data="ideal_pinhole_without_distortion"/>
     <text name="camera_calibration_status"
           data="nominal_lens_geometry_pending_physical_calibration"/>
     <text name="camera_normalization" data="role_dependent_v1"/>
     <text name="camera_focus_model"
-          data="fixed_manual_confirmed_primes_pending_focus_measurement"/>
+          data="fixed_manual_provisional_4mm_cs_pending_focus_measurement"/>
     <text name="camera_observation_encoding"
           data="linear_grayscale_float32_normalized_0_1"/>
-    <text name="camera_shutter_model" data="heterogeneous_per_camera_v1"/>
+    <text name="camera_shutter_model" data="global_pair_pending_time_sync_v1"/>
     <text name="camera_observation_model"
           data="mujoco_native_global_foveal_composite_v1"/>
     <text name="camera_product_contract"
@@ -101,36 +101,36 @@
     <text name="camera_specular_model"
           data="mujoco_lighting_residual_mix_approximation_v0"/>
     <numeric name="sensor_camera_model_resolution_px"
-             data="512 512 512 512 512 512 640 480"/>
+             data="512 512 512 512"/>
     <numeric name="sensor_camera_acquisition_resolution_px"
-             data="3840 2160 3840 2160 3840 2160 1456 1088"/>
+             data="1456 1088 1456 1088"/>
     <numeric name="sensor_camera_foveal_resolution_px"
-             data="256 256 256 256 256 256 0 0"/>
-    <!-- Nominal optical geometry for 16:9 acquisition. Active sensor widths
-         and the resulting MuJoCo vertical FOVs are approximations pending
-         checkerboard calibration of the actual HDMI streams. -->
-    <numeric name="sensor_camera_focal_length_mm" data="25 35 0 0"/>
-    <numeric name="sensor_camera_active_width_mm" data="17.3 23.5 0 0"/>
+             data="256 256 256 256"/>
+    <!-- IMX296 active dimensions use the declared 1456 x 1088 array and
+         3.45 um pixel pitch. The provisional 4 mm CS lens must be replaced by
+         the selected lens' measured intrinsics after purchase/calibration. -->
+    <numeric name="sensor_camera_focal_length_mm" data="4 4"/>
+    <numeric name="sensor_camera_active_width_mm" data="5.0232 5.0232"/>
     <numeric name="sensor_camera_full_frame_equivalent_focal_length_mm"
-             data="50 52.5 0 0"/>
-    <numeric name="sensor_camera_sample_rate_hz" data="30 30 5 60"/>
+             data="28.666985188724 28.666985188724"/>
+    <numeric name="sensor_camera_sample_rate_hz" data="60 60"/>
     <numeric name="sensor_camera_read_noise_std"
-             data="0.003 0.003 0.002 0.004"/>
+             data="0.004 0.004"/>
     <numeric name="sensor_camera_signal_noise_std"
-             data="0.006 0.006 0.004 0.008"/>
+             data="0.008 0.008"/>
     <!-- Likelihood uncertainty is deliberately wider than the acquisition-
          noise term. It includes unmodeled photometry/registration. The
          inlier prior is a latent occlusion probability, not a visibility mask. -->
     <numeric name="sensor_camera_likelihood_model_error_std"
-             data="0.035 0.035 0.030 0.040"/>
+             data="0.040 0.040"/>
     <numeric name="sensor_camera_likelihood_inlier_probability"
-             data="0.960 0.960 0.995 0.950"/>
+             data="0.950 0.950"/>
     <numeric name="sensor_camera_likelihood_outlier_std"
-             data="0.350 0.350 0.350 0.350"/>
+             data="0.350 0.350"/>
     <numeric name="sensor_camera_latency_s"
-             data="0.033333333333 0.033333333333 0.200000000000 0.016666666667"/>
-    <numeric name="sensor_camera_dropout_probability" data="0 0 0 0"/>
-    <numeric name="sensor_camera_quantization_bits" data="8 8 8 8"/>
+             data="0.016666666667 0.016666666667"/>
+    <numeric name="sensor_camera_dropout_probability" data="0 0"/>
+    <numeric name="sensor_camera_quantization_bits" data="10 10"/>
     <numeric name="camera_provisional_specular_strength" data="0.08"/>
     <numeric name="joint_range_rad"
              data="-1.570796326795 1.570796326795 -1.570796326795 1.570796326795 -3.141592653590 3.141592653590 -1.483529864195 2.617993877991"/>
@@ -262,30 +262,19 @@
             xyaxes="1 0 0 0 0 1"/>
     <camera name="top_view" pos="0.075 0.25 1.25"
             xyaxes="1 0 0 0 1 0"/>
-    <!-- Provisional sensor frames. The two oblique cameras are continuously
-         available and aimed at canvas center. Their opposing views preserve
-         brush-tip visibility under contact occlusion. -->
-    <camera name="canvas_right_oblique" pos="0.824 -0.911182 0.778"
-            xyaxes="0.880865989267 0.473365724311 0
-                    -0.123600957574 0.230003724765 0.965308805451"
-            fovy="22.027017404218" resolution="1024 1024"/>
-    <camera name="canvas_left_oblique" pos="-0.674 -0.911182 0.8315"
-            xyaxes="0.880865989267 -0.473365724311 0
-                    0.137808815966 0.256442519539 0.956684882506"
-            fovy="21.387533133508" resolution="1024 1024"/>
-    <!-- This is the deployed optical reference from the proposed fold-away
-         stalk. It is valid only at camera_clear_park; no fixed collision-safe
-         housing is claimed inside the arm's swept workspace. -->
-    <camera name="canvas_inspection_deployed" pos="0.075 0.100 0.350"
-            xyaxes="1 0 0 0 0 1"
-            fovy="72" resolution="1024 1024"/>
-    <!-- Continuous low-cost profile camera. Its optical axis is tangent to
-         the canvas plane, so it observes brush/canvas normal separation
-         against the upper canvas edge rather than a paintable surface image.
-         It deliberately does not participate in canvas-plane homography. -->
-    <camera name="brush_standoff_overhead" pos="0.075 0.250 1.250"
-            xyaxes="1 0 0 0 1 0"
-            fovy="45" resolution="640 480"/>
+    <!-- Compact dual IMX296 baseline. Both global-shutter cameras are fixed
+         to a rigid canvas crossbar, 650 mm normal to the canvas, 300 mm to
+         either side, and 220 mm above center. Their optical axes meet at the
+         canvas center with 29.8 degree opposing incidence. The 4 mm CS lens
+         and ideal 50.27 degree vertical FOV are provisional until measured. -->
+    <camera name="canvas_right_oblique" pos="0.375 -0.1674 0.570"
+            xyaxes="0.907959384500 0.419058177462 0
+                    -0.123098930765 0.266714349990 0.955881848742"
+            fovy="50.271939314149" resolution="1024 1024"/>
+    <camera name="canvas_left_oblique" pos="-0.225 -0.1674 0.570"
+            xyaxes="0.907959384500 -0.419058177462 0
+                    0.123098930765 0.266714349990 0.955881848742"
+            fovy="50.271939314149" resolution="1024 1024"/>
 
     <geom name="floor" type="plane" pos="0 0 -0.025" size="1.2 1.2 0.05"
           material="ground_mat" contype="0" conaffinity="0"/>
@@ -304,59 +293,36 @@
     <!-- Provisional camera housing envelopes. Each body has exactly the same
          frame as its camera: local -Z is the viewing direction, the optical
          center is at the body's origin, and all housing geometry stays behind
-         the optical center on local +Z. These static visual geoms do not
-         collide or contribute mass. Supports and final vendor CAD are pending
-         final mount CAD and measured optical centers. -->
-    <body name="canvas_right_camera_housing" pos="0.824 -0.911182 0.778"
-          xyaxes="0.880865989267 0.473365724311 0
-                  -0.123600957574 0.230003724765 0.965308805451">
+         the optical center on local +Z. The 38 x 38 x 20 mm body and 30 mm
+         provisional lens barrel approximate the Raspberry Pi camera envelope.
+         These static visual geoms do not collide or contribute mass. -->
+    <body name="canvas_right_camera_housing" pos="0.375 -0.1674 0.570"
+          xyaxes="0.907959384500 0.419058177462 0
+                  -0.123098930765 0.266714349990 0.955881848742">
       <geom name="canvas_right_camera_body" class="camera_visual" type="box"
-            pos="0 0 0.060" size="0.035 0.0275 0.028"
+            pos="0 0 0.040" size="0.019 0.019 0.010"
             material="camera_body_mat"/>
       <geom name="canvas_right_camera_barrel" class="camera_visual"
-            type="cylinder" fromto="0 0 0.002 0 0 0.034" size="0.021"
+            type="cylinder" fromto="0 0 0.002 0 0 0.030" size="0.015"
             material="camera_barrel_mat"/>
       <geom name="canvas_right_camera_glass" class="camera_visual"
-            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
+            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.012"
             material="camera_glass_mat"/>
     </body>
-    <body name="canvas_left_camera_housing" pos="-0.674 -0.911182 0.8315"
-          xyaxes="0.880865989267 -0.473365724311 0
-                  0.137808815966 0.256442519539 0.956684882506">
+    <body name="canvas_left_camera_housing" pos="-0.225 -0.1674 0.570"
+          xyaxes="0.907959384500 -0.419058177462 0
+                  0.123098930765 0.266714349990 0.955881848742">
       <geom name="canvas_left_camera_body" class="camera_visual" type="box"
-            pos="0 0 0.060" size="0.035 0.0275 0.028"
+            pos="0 0 0.040" size="0.019 0.019 0.010"
             material="camera_body_mat"/>
       <geom name="canvas_left_camera_barrel" class="camera_visual"
-            type="cylinder" fromto="0 0 0.002 0 0 0.034" size="0.021"
+            type="cylinder" fromto="0 0 0.002 0 0 0.030" size="0.015"
             material="camera_barrel_mat"/>
       <geom name="canvas_left_camera_glass" class="camera_visual"
-            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
+            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.012"
             material="camera_glass_mat"/>
     </body>
-    <body name="canvas_inspection_camera_housing" pos="0.075 0.100 0.350"
-          xyaxes="1 0 0 0 0 1">
-      <geom name="canvas_inspection_camera_body" class="camera_visual" type="box"
-            pos="0 0 0.060" size="0.035 0.0275 0.028"
-            material="camera_body_mat"/>
-      <geom name="canvas_inspection_camera_barrel" class="camera_visual"
-            type="cylinder" fromto="0 0 0.002 0 0 0.034" size="0.021"
-            material="camera_barrel_mat"/>
-      <geom name="canvas_inspection_camera_glass" class="camera_visual"
-            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.016"
-            material="camera_glass_mat"/>
-    </body>
-    <body name="brush_standoff_camera_housing" pos="0.075 0.250 1.250"
-          xyaxes="1 0 0 0 1 0">
-      <geom name="brush_standoff_camera_body" class="camera_visual" type="box"
-            pos="0 0 0.040" size="0.022 0.018 0.018"
-            material="camera_body_mat"/>
-      <geom name="brush_standoff_camera_barrel" class="camera_visual"
-            type="cylinder" fromto="0 0 0.002 0 0 0.024" size="0.013"
-            material="camera_barrel_mat"/>
-      <geom name="brush_standoff_camera_glass" class="camera_visual"
-            type="cylinder" fromto="0 0 0.001 0 0 0.002" size="0.010"
-            material="camera_glass_mat"/>
-    </body>
+    <!-- The compact baseline has no separate inspection or overhead camera. -->
 
     <body name="base">
       <geom name="base_plate" type="cylinder" fromto="0 0 -0.02 0 0 0.018"

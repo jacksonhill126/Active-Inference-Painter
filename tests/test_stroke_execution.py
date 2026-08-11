@@ -34,6 +34,27 @@ from active_painter.stroke_execution import (
 )
 
 
+def test_stroke_tail_unloads_before_stationary_lift_without_full_size_end_stamp() -> None:
+    sim = ArmPainterSim(PainterConfig(canvas_size=64))
+    action = StrokeAction(0.25, 0.45, 0.75, 0.55, 0.16, 0.65, 1.0)
+    timing = StrokeTiming(approach=0.6, press=0.4, paint=1.2, lift=0.5)
+    paint_start = timing.approach + timing.press
+    paint_end = paint_start + timing.paint
+
+    middle = stroke_reference(action, sim, paint_start + 0.5 * timing.paint, timing)
+    tail = stroke_reference(action, sim, paint_end - 1e-7, timing)
+    lift = stroke_reference(action, sim, paint_end, timing)
+
+    assert tail.phase == "paint"
+    assert tail.flow < 1e-8
+    assert tail.depth == pytest.approx(sim.canvas.distance, abs=1e-6)
+    assert 0.0 < tail.pressure < 0.12 * middle.pressure
+    assert lift.phase == "lift"
+    assert lift.flow == 0.0
+    assert lift.depth == pytest.approx(sim.canvas.distance)
+    assert lift.pressure == pytest.approx(tail.pressure, rel=1e-5)
+
+
 def test_contact_aware_controller_reduces_overshoot_against_direct_waypoint_baseline() -> None:
     sim = ArmPainterSim(PainterConfig(canvas_size=48))
     action = StrokeAction(0.2, 0.3, 0.8, 0.7, 0.08, 0.7, 1.0)

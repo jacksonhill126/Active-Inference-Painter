@@ -27,6 +27,39 @@ def clip_scalar(value: float, lower: float, upper: float) -> float:
     return value
 
 
+def round_brush_canvas_angle_degrees(brush_axis_world: np.ndarray) -> float:
+    """Acute angle between the end-effector/brush axis and canvas plane.
+
+    The vertical canvas lies in world XZ, so its unit normal is world +Y.
+    A perpendicular brush is 90 degrees from the plane; a grazing brush tends
+    toward zero. Axis sign is irrelevant for the axisymmetric footprint.
+    """
+
+    axis = np.asarray(brush_axis_world, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(axis))
+    if norm <= 1e-12:
+        return 90.0
+    normal_component = clip_scalar(abs(float(axis[1])) / norm, 0.0, 1.0)
+    return float(np.rad2deg(np.arcsin(normal_component)))
+
+
+def round_brush_footprint_aspect(
+    brush_axis_world: np.ndarray,
+    config: PainterConfig,
+) -> float:
+    """Major/minor footprint ratio from end-effector-to-canvas angle."""
+
+    angle_degrees = round_brush_canvas_angle_degrees(brush_axis_world)
+    beta = np.deg2rad(angle_degrees)
+    cotangent = float(np.cos(beta) / max(1e-6, np.sin(beta)))
+    return clip_scalar(
+        1.0
+        + float(config.brush_round_canvas_angle_elongation_gain) * cotangent,
+        1.0,
+        max(1.0, float(config.brush_round_max_aspect_ratio)),
+    )
+
+
 def safe_home_pose() -> "ArmPose":
     return ArmPose(yaw=0.0, pitch=-50.0, roll=0.0, elbow=100.0)
 
@@ -110,6 +143,43 @@ class ArmKinematics:
 
     def tip(self, pose: ArmPose) -> np.ndarray:
         return self.joint_points(pose)[-1]
+
+    def forearm_rotation(self, pose: ArmPose) -> np.ndarray:
+        """World rotation of the forearm/brush frame.
+
+        Local +Y runs from elbow/handle through the brush tip. The current
+        canonical upper-arm roll changes that handle axis through the coupled
+        elbow geometry; there is no distal wrist joint.
+        """
+
+        q = pose.clipped().radians()
+        r_shoulder = _rot_z(q["yaw"]) @ _rot_x(q["pitch"])
+        return r_shoulder @ _rot_y(q["roll"]) @ _rot_x(q["elbow"])
+
+    def brush_axis_world(self, pose: ArmPose) -> np.ndarray:
+        """Unit handle-to-tip axis of the axisymmetric round brush."""
+
+        return self.forearm_rotation(pose)[:, 1].copy()
+
+    def brush_canvas_axes(self, pose: ArmPose) -> tuple[np.ndarray, np.ndarray]:
+        """Return cross-pull and pull axes in the canvas plane (x, z).
+
+        The pull axis points from the bristle tip toward the handle, so a
+        positive dot product with canvas-plane velocity means handle-leading
+        motion. The cross axis is its in-plane perpendicular; it is not a
+        material orientation of the axisymmetric round tuft. Degenerate
+        projections use a stable fallback.
+        """
+
+        brush_axis = self.brush_axis_world(pose)
+        pull = -np.asarray([brush_axis[0], brush_axis[2]], dtype=np.float64)
+        pull_norm = float(np.linalg.norm(pull))
+        if pull_norm > 1e-8:
+            pull /= pull_norm
+        else:
+            pull = np.asarray([0.0, 1.0], dtype=np.float64)
+        cross = np.asarray([pull[1], -pull[0]], dtype=np.float64)
+        return cross, pull
 
     def upper_arm_axis(self, pose: ArmPose) -> np.ndarray:
         """World-space axis about which the upper-arm roll joint rotates."""
@@ -569,6 +639,28 @@ class ContactState:
     pressure: float
     brush_width_px: float
     brush_world: np.ndarray
+    tangential_force: float = 0.0
+    friction_coefficient: float = 0.0
+    pull_alignment: float = 0.0
+    sticking: bool = False
+    stick_slip_transition: bool = False
+    slip_fraction: float = 0.0
+    bristle_deflection_xz: np.ndarray = field(
+        default_factory=lambda: np.zeros(2, dtype=np.float64)
+    )
+
+
+@dataclass(slots=True)
+class BrushContactResponse:
+    """Reduced-order consequence of one brush/canvas contact increment."""
+
+    tangential_force: float
+    friction_coefficient: float
+    pull_alignment: float
+    sticking: bool
+    stick_slip_transition: bool
+    slip_fraction: float
+    bristle_deflection_xz: np.ndarray
 
 
 @dataclass(slots=True)
@@ -601,6 +693,10 @@ class Brush:
     streak_phases: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
     wobble_phases: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
     wobble_amps: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
+    contact_deflection_xz: np.ndarray = field(
+        default_factory=lambda: np.zeros(2, dtype=np.float64)
+    )
+    contact_sticking: bool = field(default=True)
 
     @property
     def loaded(self) -> bool:
@@ -612,6 +708,7 @@ class Brush:
         self.held_volume = 0.0
         self.held_black = 0.0
         self.path_distance = 0.0
+        self.reset_contact_dynamics()
 
     def reload(self, amount: float, tone: float) -> None:
         cfg = self.config
@@ -623,6 +720,7 @@ class Brush:
         self.held_black = 0.0
         self.carried_tone = self.fresh_tone
         self.path_distance = 0.0
+        self.reset_contact_dynamics()
         count = max(1, int(cfg.brush_bristle_count))
         offsets = np.linspace(-1.0, 1.0, count, dtype=np.float32) if count > 1 else np.zeros(1, np.float32)
         jitter = self.rng.uniform(-0.12, 0.12, size=count).astype(np.float32) if count > 1 else np.zeros(1, np.float32)
@@ -638,6 +736,118 @@ class Brush:
         self.streak_phases = self.rng.uniform(0.0, 1.0, size=count).astype(np.float32)
         self.wobble_phases = self.rng.uniform(0.0, 2.0 * np.pi, size=3).astype(np.float32)
         self.wobble_amps = self.rng.uniform(0.4, 1.0, size=3).astype(np.float32)
+
+    def reset_contact_dynamics(self) -> None:
+        """Release aggregate tuft deflection at a contact boundary."""
+
+        self.contact_deflection_xz.fill(0.0)
+        self.contact_sticking = True
+
+    def update_contact_dynamics(
+        self,
+        motion_xz: np.ndarray,
+        dt: float,
+        normal_force: float,
+        pull_direction_xz: np.ndarray,
+        surface_tooth: float,
+    ) -> BrushContactResponse:
+        """Advance a Baxter-inspired aggregate stick/slip brush state.
+
+        The tuft sticks while its elastic tangential load is below the
+        direction-conditioned static-friction limit.  At breakaway it releases
+        to the lower kinetic limit.  Repeated elastic loading and release is a
+        compact stop/play approximation of bristle chatter, with the frozen
+        canvas tooth perturbing the breakaway force.  It is a generative-
+        process model, not a preference or policy score.
+        """
+
+        cfg = self.config
+        displacement = np.asarray(motion_xz, dtype=np.float64).reshape(2)
+        pull = np.asarray(pull_direction_xz, dtype=np.float64).reshape(2)
+        normal = max(0.0, float(normal_force))
+        step_dt = float(dt)
+        if not np.isfinite(step_dt) or step_dt <= 0.0:
+            raise ValueError("Brush contact dt must be finite and positive.")
+        distance = float(np.linalg.norm(displacement))
+        pull_norm = float(np.linalg.norm(pull))
+        if pull_norm > 1e-9:
+            pull = pull / pull_norm
+        else:
+            pull = np.zeros(2, dtype=np.float64)
+        if distance > 1e-12:
+            travel = displacement / distance
+            alignment = clip_scalar(float(np.dot(travel, pull)), -1.0, 1.0)
+        else:
+            alignment = 0.0
+
+        directional_reduction = clip_scalar(
+            cfg.brush_pull_friction_reduction, 0.0, 0.99
+        ) * max(0.0, alignment) ** max(
+            1.0, float(cfg.brush_pull_direction_exponent)
+        )
+        tooth_modulation = 1.0 + clip_scalar(
+            cfg.brush_tooth_friction_modulation, 0.0, 0.95
+        ) * (2.0 * clip_scalar(surface_tooth, 0.0, 1.0) - 1.0)
+        directional_scale = max(0.01, (1.0 - directional_reduction) * tooth_modulation)
+        static_mu = max(0.0, float(cfg.brush_static_friction_coefficient)) * directional_scale
+        kinetic_mu = min(
+            static_mu,
+            max(0.0, float(cfg.brush_kinetic_friction_coefficient)) * directional_scale,
+        )
+        stiffness = max(
+            1e-6, float(cfg.brush_tangential_stiffness_n_per_world_unit)
+        )
+        previous = self.contact_deflection_xz.copy()
+
+        if normal <= 1e-9:
+            self.reset_contact_dynamics()
+            return BrushContactResponse(
+                tangential_force=0.0,
+                friction_coefficient=0.0,
+                pull_alignment=alignment,
+                sticking=True,
+                stick_slip_transition=False,
+                slip_fraction=0.0,
+                bristle_deflection_xz=self.contact_deflection_xz.copy(),
+            )
+
+        candidate = previous + displacement
+        candidate_norm = float(np.linalg.norm(candidate))
+        static_limit = static_mu * normal
+        slipped = stiffness * candidate_norm > static_limit + 1e-12
+        if slipped and candidate_norm > 1e-12:
+            kinetic_deflection = kinetic_mu * normal / stiffness
+            self.contact_deflection_xz = candidate * (
+                kinetic_deflection / candidate_norm
+            )
+        else:
+            self.contact_deflection_xz = candidate
+
+        delta_deflection = self.contact_deflection_xz - previous
+        slip_displacement = displacement - delta_deflection
+        slip_fraction = (
+            clip_scalar(float(np.linalg.norm(slip_displacement)) / distance, 0.0, 1.0)
+            if distance > 1e-12
+            else 0.0
+        )
+        was_sticking = self.contact_sticking
+        self.contact_sticking = not slipped
+        transition = bool(was_sticking and slipped)
+        elastic_force = stiffness * float(np.linalg.norm(self.contact_deflection_xz))
+        # The elastic force is the useful load signal.  The release itself is
+        # represented by the state discontinuity and consequent bristle-tip
+        # jump, rather than an arbitrary force/noise impulse.
+        tangential_force = min(elastic_force, static_limit)
+        effective_mu = tangential_force / max(normal, 1e-9)
+        return BrushContactResponse(
+            tangential_force=float(tangential_force),
+            friction_coefficient=float(effective_mu),
+            pull_alignment=float(alignment),
+            sticking=bool(self.contact_sticking),
+            stick_slip_transition=transition,
+            slip_fraction=float(slip_fraction),
+            bristle_deflection_xz=self.contact_deflection_xz.copy(),
+        )
 
     def consume(self, fresh_equivalent_thickness: float) -> None:
         """Deplete the normalized fresh reservoir by deposited paint."""
@@ -731,10 +941,34 @@ class VerticalCanvas:
         # is canvas-resolution independent; pressure splays the bristles. The
         # patch has hard support: no paint deposits beyond it no matter how
         # long the brush dwells.
-        return 0.10 + 0.42 * clip_scalar(pressure, 0.0, 1.0)
+        nominal_radius = 0.5 * max(
+            0.0, float(self.config.brush_round_bundle_diameter_world)
+        )
+        normalized_pressure = clip_scalar(pressure, 0.0, 1.0)
+        min_contact = clip_scalar(
+            self.config.brush_round_contact_min_fraction, 0.0, 1.0
+        )
+        exponent = max(
+            1e-6, float(self.config.brush_round_contact_pressure_exponent)
+        )
+        contact_fraction = min_contact + (1.0 - min_contact) * (
+            normalized_pressure**exponent
+        )
+        pressure_splay = max(
+            0.0, float(self.config.brush_round_pressure_splay_fraction)
+        ) * normalized_pressure
+        return nominal_radius * contact_fraction * (1.0 + pressure_splay)
 
     def _pixels_per_unit(self) -> float:
         return (self.config.canvas_size - 1) / max(1e-6, self.width)
+
+    def tooth_at(self, x: float, z: float) -> float:
+        """Nearest frozen canvas-tooth height at a world-space location."""
+
+        u, v = self.world_to_pixel(float(x), float(z))
+        col = int(np.clip(round(u), 0, self.config.canvas_size - 1))
+        row = int(np.clip(round(v), 0, self.config.canvas_size - 1))
+        return float(self.grain[row, col])
 
     def contact_from_tip(self, tip: np.ndarray, intended_pressure: float = 0.0) -> ContactState:
         on_canvas = self.contains(float(tip[0]), float(tip[2]))
@@ -770,6 +1004,7 @@ class VerticalCanvas:
         brush: Brush | None = None,
         flow: float = 1.0,
         amount: float = 1.0,
+        brush_axis_world: np.ndarray | None = None,
     ) -> float:
         """Deposit a stamp and return the peak thickness laid.
 
@@ -778,9 +1013,13 @@ class VerticalCanvas:
         tests). ``motion`` (world-space brush displacement since the previous
         deposition) sweeps the disc into a capsule so travel elongates the mark;
         ``brush`` adds finite loading, bristle furrows, canvas-grain texture,
-        and wet-drag smear. ``flow`` in [0, 1] tapers the brush width
-        (stroke-end envelope). ``amount`` is the selected mark's deposition
-        setting and is distinct from the persistent brush reservoir.
+        and wet-drag smear. When ``brush_axis_world`` is supplied, the
+        axisymmetric round patch is circular at normal incidence and elongates
+        along the projected handle axis as incidence becomes more oblique;
+        otherwise the legacy circular patch is retained. ``flow`` in [0, 1]
+        tapers the brush width (stroke-end envelope). ``amount`` is the selected
+        mark's deposition setting and is distinct from the persistent brush
+        reservoir.
         """
 
         if pressure <= 0.001 or not self.contains(float(brush_world[0]), float(brush_world[2])):
@@ -795,6 +1034,39 @@ class VerticalCanvas:
             taper_min = clip_scalar(self.config.brush_taper_min_width, 0.0, 1.0)
             radius = max(0.9, radius * (taper_min + (1.0 - taper_min) * clip_scalar(flow, 0.0, 1.0)))
         edge = max(0.7, 0.18 * radius)
+        angle_dependent = bool(
+            brush is not None
+            and self.config.brush_round_angle_footprint_enabled
+            and brush_axis_world is not None
+        )
+        major_radius = radius
+        if angle_dependent:
+            axis_world = np.asarray(brush_axis_world, dtype=np.float64).reshape(3)
+            axis_norm = float(np.linalg.norm(axis_world))
+            if axis_norm <= 1e-9:
+                angle_dependent = False
+            else:
+                axis_world /= axis_norm
+            axis_xz = axis_world[[0, 2]] if angle_dependent else np.zeros(2)
+            # Pixel rows increase downward, hence world +z maps to pixel -v.
+            major_axis = np.asarray([axis_xz[0], -axis_xz[1]], dtype=np.float64)
+            major_norm = float(np.linalg.norm(major_axis))
+            if major_norm <= 1e-9:
+                angle_dependent = False
+                major_axis = np.asarray([1.0, 0.0], dtype=np.float64)
+            else:
+                major_axis /= major_norm
+                aspect = round_brush_footprint_aspect(
+                    axis_world,
+                    self.config,
+                )
+                major_radius = radius * aspect
+            minor_axis = np.asarray([-major_axis[1], major_axis[0]], dtype=np.float64)
+            minor_radius = radius
+        else:
+            major_axis = np.asarray([1.0, 0.0], dtype=np.float64)
+            minor_axis = np.asarray([0.0, 1.0], dtype=np.float64)
+            minor_radius = radius
         # Trailing endpoint of the swept segment (previous contact point). With
         # no motion this collapses onto (u, v) and the capsule is a disc, so the
         # legacy distance field is reproduced bit-for-bit.
@@ -806,7 +1078,7 @@ class VerticalCanvas:
         u0, v0 = u - mu, v - mv
         seg_len = float(np.hypot(mu, mv))
         # The brush has hard support, so deposit only inside the swept bounding box.
-        extent = int(np.ceil(radius + edge)) + 1
+        extent = int(np.ceil(max(major_radius, minor_radius) + edge)) + 1
         col0 = max(0, int(np.floor(min(u, u0))) - extent)
         col1 = min(n, int(np.ceil(max(u, u0))) + extent + 1)
         row0 = max(0, int(np.floor(min(v, v0))) - extent)
@@ -819,14 +1091,33 @@ class VerticalCanvas:
             tx, ty = mu / seg_len, mv / seg_len
             proj = np.clip(((xx - u0) * tx + (yy - v0) * ty), 0.0, seg_len)
             cx, cy = u0 + proj * tx, v0 + proj * ty
-            distance = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+            dx, dy = xx - cx, yy - cy
         else:
-            distance = np.sqrt((xx - u) ** 2 + (yy - v) ** 2)
+            dx, dy = xx - u, yy - v
+        if angle_dependent:
+            major_coordinate = dx * major_axis[0] + dy * major_axis[1]
+            minor_coordinate = dx * minor_axis[0] + dy * minor_axis[1]
+            distance = np.sqrt(
+                (major_coordinate / max(1e-6, major_radius)) ** 2
+                + (minor_coordinate / max(1e-6, minor_radius)) ** 2
+            )
+            support_radius = 1.0
+            support_edge = edge / max(1e-6, minor_radius)
+        else:
+            distance = np.sqrt(dx**2 + dy**2)
+            support_radius = radius
+            support_edge = edge
         # A real contact patch is never a perfect circle: perturb the boundary
         # radius with fixed per-stroke low-order angular harmonics, so even a
         # stationary dab comes out slightly lumpy.
         if brush is not None and self.config.brush_edge_wobble > 0.0:
-            theta = np.arctan2(yy - v, xx - u)
+            if angle_dependent:
+                theta = np.arctan2(
+                    minor_coordinate / max(1e-6, minor_radius),
+                    major_coordinate / max(1e-6, major_radius),
+                )
+            else:
+                theta = np.arctan2(yy - v, xx - u)
             # Harmonic amps are normalised to the largest, so the leading
             # harmonic swings the boundary by the full configured wobble.
             amp_scale = clip_scalar(self.config.brush_edge_wobble, 0.0, 0.5) / max(
@@ -838,7 +1129,11 @@ class VerticalCanvas:
                 + brush.wobble_amps[2] * np.sin(5.0 * theta + brush.wobble_phases[2])
             ) / 3.0
             distance = distance / np.maximum(wobble, 0.5)
-        ramp = np.clip((radius + edge - distance) / edge, 0.0, 1.0)
+        ramp = np.clip(
+            (support_radius + support_edge - distance) / support_edge,
+            0.0,
+            1.0,
+        )
         footprint = (ramp * ramp * (3.0 - 2.0 * ramp)).astype(np.float32)
 
         # Track along-path distance (world units) for intermittent dry streaks.
@@ -849,6 +1144,8 @@ class VerticalCanvas:
         # dry gaps that open and close along the path (hairs recharge), so a
         # furrow textures the mark without splitting it end to end.
         if brush is not None and seg_len > 1e-6 and brush.bristle_offsets.size > 1:
+            # A round tuft has no fixed chisel edge. Its bristle tracks organize
+            # across the current motion direction, independent of radial roll.
             perp = ((xx - u) * (-ty) + (yy - v) * tx) / max(1e-6, radius)
             gains = np.interp(
                 np.clip(perp, -1.0, 1.0).ravel(),
@@ -1004,8 +1301,11 @@ class ArmPainterSim:
     contact: ContactState = field(init=False)
     brushes: dict[str, Brush] = field(init=False)
     _painting: bool = field(default=False, init=False)
+    _brush_in_contact: bool = field(default=False, init=False)
+    _previous_contact_world: np.ndarray | None = field(default=None, init=False)
     _previous_brush_world: np.ndarray | None = field(default=None, init=False)
     _tip_lag_world: np.ndarray | None = field(default=None, init=False)
+    _painting_point_world: np.ndarray | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.canvas = VerticalCanvas(self.config)
@@ -1023,7 +1323,11 @@ class ArmPainterSim:
             "black": Brush(self.config, np.random.default_rng(seed + 1)),
         }
         self._painting = False
+        self._brush_in_contact = False
+        self._previous_contact_world = None
         self._previous_brush_world = None
+        self._tip_lag_world = None
+        self._painting_point_world = None
         self.refresh_contact()
 
     def reset_pose(self) -> None:
@@ -1035,8 +1339,11 @@ class ArmPainterSim:
         self.intended_contact_pressure = 0.0
         self.control_damping_multiplier = 1.0
         self._painting = False
+        self._brush_in_contact = False
+        self._previous_contact_world = None
         self._previous_brush_world = None
         self._tip_lag_world = None
+        self._painting_point_world = None
         self.refresh_contact()
 
     def set_target(self, pose: ArmPose) -> None:
@@ -1053,8 +1360,12 @@ class ArmPainterSim:
 
         self.brush_tone = float(tone >= 0.5)
         self._painting = False
+        self._brush_in_contact = False
+        self._previous_contact_world = None
         self._previous_brush_world = None
         self._tip_lag_world = None
+        self._painting_point_world = None
+        self.brush.reset_contact_dynamics()
 
     def load_brush(self, amount: float, tone: float) -> None:
         """Load material before motion; later deposition is contact-driven."""
@@ -1067,8 +1378,11 @@ class ArmPainterSim:
 
         self.brush.unload()
         self._painting = False
+        self._brush_in_contact = False
+        self._previous_contact_world = None
         self._previous_brush_world = None
         self._tip_lag_world = None
+        self._painting_point_world = None
 
     def unload_all_brushes(self) -> None:
         """Clear both dedicated brushes, used by a complete simulator reset."""
@@ -1076,22 +1390,36 @@ class ArmPainterSim:
         for brush in self.brushes.values():
             brush.unload()
         self._painting = False
+        self._brush_in_contact = False
+        self._previous_contact_world = None
         self._previous_brush_world = None
         self._tip_lag_world = None
+        self._painting_point_world = None
 
     @property
     def depositing_paint(self) -> bool:
         return self._painting
 
+    @property
+    def painting_point_world(self) -> np.ndarray:
+        """Current aggregate bristle-tip painting point in world coordinates."""
+
+        if self._painting_point_world is not None:
+            return self._painting_point_world.copy()
+        return self.contact.brush_world.copy()
+
     def step(self, dt: float) -> None:
         previous_pose = self.actual_pose
         previous_plant_state = self.plant.state_snapshot()
         target_pose = self.target_pose
+        effective_contact_force = float(
+            np.hypot(self.contact.force, self.contact.tangential_force)
+        )
         self.actual_pose = self.plant.step(
             self.actual_pose,
             self.target_pose,
             dt,
-            contact_force=self.contact.force,
+            contact_force=effective_contact_force,
             damping_multiplier=self.control_damping_multiplier,
         )
         tip = self.kinematics.tip(self.actual_pose)
@@ -1109,41 +1437,83 @@ class ArmPainterSim:
                 self.target_pose = self.actual_pose
             tip = self.kinematics.tip(self.actual_pose)
         self.refresh_contact()
-        painting = self.brush.loaded and self.contact.pressure > 0.001 and self.contact.on_canvas
-        if painting:
-            if not self._painting:
-                # Contact onset resets only the geometric trailer. Material was
-                # loaded before motion and is not switched by tracking state.
+        contacting = self.contact.pressure > 0.001 and self.contact.on_canvas
+        painting = self.brush.loaded and contacting
+        if contacting:
+            contact_world = self.contact.brush_world.copy()
+            if not self._brush_in_contact:
+                self.brush.reset_contact_dynamics()
+                self._previous_contact_world = None
                 self._previous_brush_world = None
                 self._tip_lag_world = None
-            contact_world = self.contact.brush_world
-            # Bristle-tip trailer dynamics: the painting point is a damped
-            # follower of the contact point, so it lags starts and cuts corners
-            # like a pulled brush tip. Reset each contact onset.
+            if self._previous_contact_world is None:
+                contact_motion = np.zeros(3, dtype=np.float64)
+            else:
+                contact_motion = contact_world - self._previous_contact_world
+            _cross_axis_xz, pull_axis_xz = self.kinematics.brush_canvas_axes(
+                self.actual_pose
+            )
+            brush_axis_world = self.kinematics.brush_axis_world(self.actual_pose)
+            response = self.brush.update_contact_dynamics(
+                contact_motion[[0, 2]],
+                dt,
+                self.contact.force,
+                pull_axis_xz,
+                self.canvas.tooth_at(contact_world[0], contact_world[2]),
+            )
+            self.contact.tangential_force = response.tangential_force
+            self.contact.friction_coefficient = response.friction_coefficient
+            self.contact.pull_alignment = response.pull_alignment
+            self.contact.sticking = response.sticking
+            self.contact.stick_slip_transition = response.stick_slip_transition
+            self.contact.slip_fraction = response.slip_fraction
+            self.contact.bristle_deflection_xz = response.bristle_deflection_xz.copy()
+
+            # Aggregate bristle contact equals handle-side contact minus tuft
+            # deflection.  During sticking it stays almost fixed; breakaway
+            # releases it toward the handle position, producing a physical
+            # trajectory/deposition discontinuity rather than injected noise.
+            friction_world = contact_world.copy()
+            friction_world[[0, 2]] -= response.bristle_deflection_xz
             tau = float(self.config.brush_tip_lag_seconds)
             if tau > 1e-6:
                 if self._tip_lag_world is None:
-                    self._tip_lag_world = contact_world.copy()
+                    self._tip_lag_world = friction_world.copy()
                 follow = 1.0 - float(np.exp(-dt / tau))
-                self._tip_lag_world = self._tip_lag_world + follow * (contact_world - self._tip_lag_world)
+                self._tip_lag_world = self._tip_lag_world + follow * (
+                    friction_world - self._tip_lag_world
+                )
                 brush_world = self._tip_lag_world
             else:
-                brush_world = contact_world
-            if self._previous_brush_world is not None:
-                motion = brush_world - self._previous_brush_world
-            else:
-                motion = None
-            self.canvas.paint_at(
-                brush_world,
-                self.contact.pressure,
-                self.brush.fresh_tone,
-                dt,
-                motion=motion,
-                brush=self.brush,
-                flow=self.brush_flow,
-                amount=self.deposition_amount,
+                brush_world = friction_world
+            self._painting_point_world = brush_world.copy()
+            motion = (
+                brush_world - self._previous_brush_world
+                if self._previous_brush_world is not None
+                else None
             )
-            self._previous_brush_world = brush_world.copy()
+            if painting:
+                self.canvas.paint_at(
+                    brush_world,
+                    self.contact.pressure,
+                    self.brush.fresh_tone,
+                    dt,
+                    motion=motion,
+                    brush=self.brush,
+                    flow=self.brush_flow,
+                    amount=self.deposition_amount,
+                    brush_axis_world=brush_axis_world,
+                )
+                self._previous_brush_world = brush_world.copy()
+            self._previous_contact_world = contact_world
+        else:
+            if self._brush_in_contact:
+                self.brush.reset_contact_dynamics()
+            self._previous_contact_world = None
+            self._previous_brush_world = None
+            self._tip_lag_world = None
+            self._painting_point_world = None
+        self._brush_in_contact = contacting
         self._painting = painting
 
     def refresh_contact(self) -> None:

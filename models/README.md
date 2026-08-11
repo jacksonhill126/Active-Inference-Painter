@@ -12,6 +12,17 @@ intentionally not named `mujoco-abstract-v0`: the yaw and pitch axes are
 separated and the roll actuator is translated down the upper-arm axis, so it
 does not reproduce the co-located shoulder origin of `native-abstract-v0`.
 
+### Non-canonical angled wrist-roll branch
+
+`src/active_painter/wrist_roll_design.py` generates
+`mujoco-robstride-angled-wrist-roll-exploration-v0` in memory from the accepted
+MJCF. It replaces the upper-arm roll joint with a distal wrist-roll joint and
+mounts the brush at a parameterized fixed angle. This is an exploration model,
+not a selectable runtime backend, accepted plant, or hardware change. The
+current actuator assignment remains RobStride 02 at upper-arm `roll` and
+`elbow`. Results and approximation limits are recorded in
+`docs/ANGLED_WRIST_ROLL_EXPLORATION_2026-08-07.md`.
+
 Stable controller-facing names are:
 
 - joints in order: `yaw`, `pitch`, `roll`, `elbow`;
@@ -19,9 +30,8 @@ Stable controller-facing names are:
 - state sensors: `<joint>_position_sensor` and `<joint>_velocity_sensor`;
 - brush pose/contact: `tip`, `tip_position_sensor`, `brush_touch_sensor`,
   `brush_force_sensor`, and `brush_compression_sensor`;
-- home/inspection keyframes: `safe_home`, `camera_clear_park`;
-- sensor camera frames: `canvas_right_oblique`, `canvas_left_oblique`,
-  `canvas_inspection_deployed`, and `brush_standoff_overhead`.
+- home/clearance keyframes: `safe_home`, `camera_clear_park`;
+- sensor camera frames: `canvas_right_oblique` and `canvas_left_oblique`.
 
 MuJoCo supplies the generative process for joint motion, rigid-body geometry,
 brush compliance, and realized contact. It does **not** simulate paint.
@@ -217,6 +227,15 @@ individual bending bristles. Frictional contact torque deflects the bundle, the
 spring returns it after lift-off, and the resulting physical `tip` position
 drives the external paint process and the Three.js geometry.
 
+The external material process uses that same 12.7 mm diameter as the round
+tuft envelope, not as a full-size zero-load stamp. The contacting fraction
+grows from a small tip contact toward the envelope with pressure, which can
+then add a provisional maximum 20% splay. Its
+anisotropy is determined by the angle between the end-effector axis and canvas
+plane: 90 degrees is circular, while smaller angles elongate the patch along
+the projected axis, capped at a 1.65 aspect ratio. These footprint parameters
+remain uncalibrated against a physical brush.
+
 `brush_touch_sensor` reports realized normal contact; paint pressure remains a
 conditional inferred/predicted consequence, not a globally preferred scalar.
 
@@ -227,46 +246,38 @@ brush/canvas measurements; Python wet-paint state does not yet modify them.
 The bend stiffness/damping values are likewise provisional and should
 eventually come from a simple lateral tip load-deflection/free-decay test.
 
-## Provisional Camera Rig
+## Provisional Compact Camera Rig
 
-The MJCF is now the source of truth for a separately versioned
-`provisional-multiview-v4` camera rig:
+The MJCF is the source of truth for `provisional-compact-dual-imx296-v1`.
+The selected baseline is exactly two Raspberry Pi Global Shutter Cameras
+(Sony IMX296), mounted as a symmetric left/right pair on one rigid crossbar.
+They are selected but not yet purchased or calibrated. There is no separate
+inspection, overhead, or brush-profile camera in the initial build.
 
-| Camera | Position (m) | Role | Availability | Incidence |
+| Camera | Position (m) | Canvas-relative position | Availability | Incidence |
 | --- | --- | --- | --- | ---: |
-| `canvas_right_oblique` | `0.824 -0.911182 0.778` | brush/contact tracking | continuous | 31.75 deg |
-| `canvas_left_oblique` | `-0.674 -0.911182 0.8315` | brush/contact tracking | continuous | 32.57 deg |
-| `canvas_inspection_deployed` | `0.075 0.100 0.350` | head-on canvas inspection | park only | 0 deg |
-| `brush_standoff_overhead` | `0.075 0.250 1.250` | brush standoff profile | continuous | edge profile |
+| `canvas_right_oblique` | `0.375 -0.1674 0.570` | right 300 mm, forward 650 mm, up 220 mm | continuous | 29.78 deg |
+| `canvas_left_oblique` | `-0.225 -0.1674 0.570` | left 300 mm, forward 650 mm, up 220 mm | continuous | 29.78 deg |
 
-The three canvas frames use provisional 1024 x 1024 ideal-pinhole simulation
-reference metadata. The owned OM System OM-1 with its confirmed 25 mm lens and
-Sony A7R II with its confirmed 35 mm lens are assigned provisionally to the
-right and left continuous oblique views. The A7R II capture mode is Super 35;
-the resulting nominal full-frame equivalents are 50 and 52.5 mm. Each camera
-declares a 3840 x 2160 clean-HDMI acquisition, a 512 x 512 global grayscale
-input, and a 256 x 256 foveal product sampled directly from the native frame.
-The left/right assignment may swap after physical mount and latency tests.
+The camera centers span 600 mm. Each lens is about 749 mm from canvas center;
+the provisional housing envelope extends roughly 670 mm forward from the
+canvas plane and about 640 mm across before crossbar/end hardware. This is a
+layout envelope, not mounting CAD. It must be checked against the actual arm,
+tripod/base, cables, and lighting before fabrication.
 
-The nominal 16:9 vertical fields of view are 22.03 degrees for the OM-1 and
-21.39 degrees for the A7R II. These are calculated from provisional 17.3 and
-23.5 mm active widths and must be replaced by calibrated intrinsics. Both
-optical centers were moved 7% farther from canvas center than the v3 poses,
-preserving incidence while leaving about 4-8% vertical framing margin. At 4K,
-the 12.7 mm brush is approximately 40-48 pixels across depending on view and
-canvas direction. The deployed
-inspection reference uses 72 degrees to frame the 508 mm square canvas from
-382.6 mm away. Model-facing canvas observations are declared as 512 x 512
-normalized linear grayscale: 30 Hz for the oblique views and 5 Hz/on-demand
-for inspection.
+Each camera declares the IMX296 full 1456 x 1088 active array, 3.45 micrometre
+pixel pitch, global shutter, CSI-2 transport, and a provisional 60 Hz rate.
+The 4 mm CS-mount lens is a design assumption, not a purchased SKU. It gives a
+nominal 50.27 degree vertical field of view and 28.67 mm full-frame-equivalent
+focal length. Both cameras frame the whole 508 mm square canvas in the ideal
+pinhole model. Physical lens distortion, focus, exposure, timing, and
+cross-camera synchronization remain unmeasured.
 
-Both owned cameras use rolling shutters. The extra fixed head-on inspection
-camera and low-cost global-shutter overhead camera are still planned hardware;
-neither owned body is claimed at two fixed poses. The current MuJoCo process
-emits a native grayscale frame, an independently derived global product, and
-any explicitly requested foveal products under
-`camera-observation-interface-v1`. This simulates the declared 4K acquisition
-shape; it is not live HDMI capture or a physically calibrated camera model.
+The observation process emits native grayscale, 512 x 512 canvas-registered
+global products, and explicitly requested 256 x 256 foveal products under
+`camera-observation-interface-v1`. The web smoke runtime may render native
+frames at 640 x 480 to reduce cost while preserving the sensor aspect ratio.
+That is a declared simulation approximation, not a claim of live CSI capture.
 
 The same camera entries declare provisional per-view model-error standard
 deviations, inlier probabilities, and broad outlier standard deviations for
@@ -281,13 +292,6 @@ Generate and solve the physical intrinsic-calibration target with
 quality gates are documented in `calibration/cameras/README.md`. Calibration
 results are reviewed before replacing the nominal XML values.
 
-The overhead profile camera is a low-cost 640 x 480, 60 Hz grayscale
-global-shutter analogue. Its optical axis is tangent to the canvas plane and
-its registration is `canvas_edge_profile`; it must not be passed through the
-canvas homography. At the current geometry its image displacement is
-approximately 0.50-0.90 pixels per millimetre of brush/canvas normal motion
-across the canvas height.
-
 `camera_clear_park` places the physical tip at
 `0.075 0.4064 0.096` m: bottom-center height and 76.2 mm in front of the
 canvas. Ray tests from every camera to a dense canvas grid hit the canvas
@@ -298,40 +302,30 @@ until normal clearance is established, then interpolates toward the low park;
 this prevents the joint-space transfer from arcing the brush back toward the
 canvas.
 
-The inspection camera is an optical reference for the proposed fold-away
-stalk. It is not a claim that a fixed camera body can remain at that location
-during painting; the arm sweeps through that region. A later mechanical model
-must add the stowed/deployed mechanism, collision envelope, confirmation
-sensor, and hard motion interlock.
-
 `active_painter.camera_geometry` reads this rig directly from the XML. It
 provides ideal camera intrinsics, forward/inverse canvas homographies,
 incidence and axial-depth metrics, frustum masks, and Pillow rectification into
-canonical top-left canvas UV coordinates for the three canvas views. It also
-projects arbitrary world points for the edge-profile view. Lens distortion
+canonical top-left canvas UV coordinates for both views. Lens distortion
 must be removed before rectification. Occlusion, focus, exposure, glare,
 timing, and camera-specific likelihood precision remain separate observation
 quantities. The web robot-model payload exports the same camera frames,
 grayscale contract, rates, input sizes, registrations, and calibration status
 for later frontend use.
 
-Each optical frame now has a visible, non-colliding provisional camera
-envelope in the same XML. The three canvas cameras use a 70 x 55 x 56 mm
-envelope behind a 42 mm lens barrel; the low-cost profile camera uses a
-smaller 44 x 36 x 36 mm body behind a 26 mm barrel. The optical center remains
-at the front glass and all housing geometry lies behind it along camera-local
-+Z, so a sensor camera cannot see its own housing. These envelopes appear in
-both MuJoCo and the XML-driven Three.js viewer. They are sizing/orientation
-aids rather than vendor CAD; supports, cabling, the inspection-camera
-deployment mechanism, and their collision envelopes remain unspecified.
+The two frames have visible provisional 38 x 38 x 20 mm body envelopes behind
+30 mm-diameter lens barrels. Their optical centers are at the front glass and
+all housing geometry lies behind them along camera-local +Z. These envelopes
+appear in MuJoCo and the XML-driven viewer only as sizing/orientation aids;
+they are not vendor CAD or a designed bracket.
 
 The reproducible 9 x 9 x 3 contact-pose sweep and publication figures are
 documented in
 [`docs/CAMERA_OBSERVABILITY_BRIEF.md`](../docs/CAMERA_OBSERVABILITY_BRIEF.md).
-Across 243 contact poses, the opposing continuous oblique views have 100%
-combined bristle-tip visibility; the overhead profile view also has 100%
-sampled visibility. These are segmentation-based geometric results, not
-learned detector probabilities.
+Across 243 contact poses, each compact camera independently keeps the bristle
+tip in frame and geometrically visible in all sampled poses. Minimum sampled
+canvas visibility is 81.5% from the right and 75.3% from the left; their union
+retains the tip in all poses. These are segmentation-based geometric results,
+not learned detector probabilities.
 
 This is geometry and preprocessing infrastructure only. It does not yet emit a
 sensor-equivalent observation, enable the fail-closed active-inference path,

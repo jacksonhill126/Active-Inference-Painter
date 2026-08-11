@@ -216,12 +216,19 @@ class SpatialActiveInferencePainter:
         """Advance the material belief without treating a prediction as data."""
 
         source = self.belief if previous is None else previous
-        self.belief = self.estimator.predict(
-            source,
-            action,
-            self.dynamics,
-            motor_primitive,
-        )
+        if len(self.replay) < self.cfg.spatial_transition_warmup_samples:
+            self.belief = self.estimator.predict_untrained_action_prior(
+                source,
+                action,
+                motor_primitive,
+            )
+        else:
+            self.belief = self.estimator.predict(
+                source,
+                action,
+                self.dynamics,
+                motor_primitive,
+            )
         return self.belief
 
     def update_belief(

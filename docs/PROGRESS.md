@@ -1,12 +1,104 @@
 # Project Progress
 
+## 2026-08-11 - AI-107 calibration measured and failed the M2 gate
+
+AI-107 trained substantial CNN and conditional patch-cVAE ensembles on the
+accepted AI-108 train split, fitted one variance scale on validation only, and
+evaluated the frozen test trajectories. Both models improved held-out density
+but produced badly shaped Gaussian intervals: nominal 90% intervals contained
+about 99.4% of test residuals. The same failure remained under an action-
+footprint-only diagnostic. A CNN trained only on neutral/fixed-roll cases
+increased ensemble disagreement just 1.087x on held-out dynamic-roll cases,
+below the predeclared 1.50x gate. All precision-ledger entries remained
+unobserved declared priors, and the cVAE's within-member latent variance was
+effectively collapsed. AI-107 closes as an evidence task with a negative M2
+calibration result; AI-109 learning curves are next. See
+`docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md` and
+`docs/AI107_UNCERTAINTY_CALIBRATION_OWNER_BRIEF_2026-08-11.md`.
+
+## 2026-08-11 - AI-108 leakage-resistant corpus accepted
+
+AI-108 now has a provenance-complete `trajectory-posterior-corpus-v2` dataset:
+16 independent trajectories and 256 camera-posterior transitions, split
+10/3/3 before patch extraction. Every split contains the required tone,
+material/overlap, edge, width, length, signed-curvature, vertical-direction,
+reach, neutral/fixed-roll, and dynamic-roll-sweep conditions. All transitions
+carry compact inferred brush context and exclude exact process material from
+training input. Shards separately attest 256 process canvas, reduced 64
+inference/acquisition approximation, and 16x16 posterior grid. A two-step cVAE
+consumer smoke proves the multi-root manifest is usable but is not a learning
+result. Bulk wetness remains structurally unobserved, and the corpus has no
+genuine stop trajectories, so terminal composition training remains blocked.
+See `docs/AI108_CORPUS_TECHNICAL_2026-08-11.md` and
+`docs/AI108_CORPUS_OWNER_BRIEF_2026-08-11.md`.
+
+## 2026-08-11 — conditional patch-transition VAE shadow baseline
+
+The owner's original VAE direction has been reinstated as a bounded
+offline/shadow likelihood experiment. `ConditionalPatchVAEEnsemble` models
+camera-posterior local material consequences conditioned on the current
+posterior mean/log variance, selected mark, conditional motor realization, and
+optional compact inferred pre-stroke brush posterior. The v2 trajectory corpus
+records that brush belief without exact held paint or bristle state; v1 shards
+remain readable with context explicitly unavailable. Training uses a beta-one
+negative ELBO, reports reconstruction NLL and latent KL separately, and splits
+decoder, latent-outcome, and bootstrap-member uncertainty. Held-out reports
+include paired condition ablations and moment calibration. The model has no
+policy influence and is not a composition/order model. Ten focused cVAE/corpus
+tests passed; no substantial model has yet been trained. See
+`docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+
+## 2026-08-10 — variable-curvature mark proposal
+
+The bounded live profile no longer proposes every curved mark with the same
+quadratic bend. Its hand-written proposal now has one straight atom plus
+continuous, symmetric positive/negative curvature magnitudes. Proposed mark
+length is decoded as brush travel rather than endpoint chord length, removing
+the hidden extra-arclength/coverage advantage that curved candidates previously
+received. This changes candidate support and decoder geometry only; no curve
+reward or aesthetic preference was introduced. The remaining single-mark
+family is still a symmetric quadratic, so apex timing and inflection/S-curves
+remain future action-space work. See
+`docs/CURVED_MARK_AND_ROLL_REALIZATION_2026-08-07.md`.
+
+## 2026-08-10 — anisotropic round-brush process baseline
+
+The canonical upper-arm-roll simulator now projects an angle-dependent round-
+brush footprint and advances a Baxter-inspired aggregate bristle stick/slip
+state. Its determinant is the angle between the end-effector axis and canvas
+plane: 90 degrees is circular, and smaller angles elongate along the projected
+axis. The contact fraction grows toward the canonical 12.7 mm tuft envelope
+with pressure, followed by bounded splay; it no longer behaves like a fixed
+chisel edge or a full-envelope zero-load stamp. Stroke exit now unloads depth,
+pressure, and width together before tangential motion stops, eliminating the
+systematic circular endpoint node caused by the old stationary lift stamp.
+Directional friction is conditioned on handle-leading alignment, normal force,
+and frozen canvas tooth. It changes the deposited painting-point trajectory,
+native abstract plant load, forecast path residual, and camera-visible material
+consequence; no direction reward or direct preference was added. Parameters
+are provisional and uncalibrated. Exact bristle/contact fields are diagnostic
+labels, and counterfactual reuse of the process equations is explicitly not the
+desired final stochastic generative model. See
+`docs/BRUSH_ANISOTROPY_RESEARCH_2026-08-10.md`.
+
+## 2026-08-07 — compact matched global-shutter camera baseline
+
+The camera baseline is now `provisional-compact-dual-imx296-v1`: exactly two
+selected-but-not-purchased Raspberry Pi Global Shutter Cameras, 650 mm in
+front of the canvas plane, ±300 mm laterally, and 220 mm above canvas center.
+The inspection/overhead views and full-size OM-1/A7R II assignments were
+removed from current metadata. A 243-pose MuJoCo sweep gives 100% sampled
+bristle-tip visibility from each camera. Lens, rate, timing, noise, housing,
+and mount remain provisional and uncalibrated. See
+`docs/COMPACT_DUAL_IMX296_CAMERA_RIG_2026-08-07.md`.
+
 This document is the concise public record of what has been demonstrated, what
 has failed, and what comes next. Detailed task state remains in
 `planning/PROJECT_TRACKER.md`.
 
 ## Current Snapshot
 
-Snapshot date: 2026-08-06.
+Snapshot date: 2026-08-10.
 
 Phase: M1 formal baseline audit, with bounded M2 sensor-path and simulation
 support work proceeding in parallel. M1 has not passed its lock decision.
@@ -87,25 +179,48 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Stress-test terminal coverage and stopping in AI-106, especially the
-   low-coverage regime outside the accepted discrete/continuous KL oracle band.
-2. Build the leakage-resistant live-scale baseline corpus in AI-108, then
-   measure held-out likelihood and uncertainty calibration in AI-107/AI-109.
-3. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
+1. Run AI-109 learning curves against the frozen AI-107 evaluator. AI-108's
+   live-scale 160/48/48 transition split is accepted and AI-107 is complete,
+   but both the CNN and cVAE failed interval calibration: nominal 90% intervals
+   covered about 99.4% of test residuals. The fixed-to-dynamic-roll ensemble
+   disagreement ratio was only 1.087x against a declared 1.50x gate. Curves
+   must separate data, capacity, seed, and likelihood-family effects and test
+   the explicit near-no-change/continuous-consequence mixture hypothesis.
+2. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
    negative convergence result into an explicit M3 proposal correction. Until
    then, keep the learned mix at zero and label posterior mass as conditional on
    the sampled candidate set.
-4. Define checkpoint inheritance and online-learning semantics, profile the
+3. Define checkpoint inheritance and online-learning semantics, profile the
    major runtime phases, and capture three manifested baseline replicas.
-5. Make the M1 lock decision before treating ongoing M2 work as an accepted
+4. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-6. Collect episode-split camera/body posterior transitions and train a
+5. Collect episode-split camera/body posterior transitions and train a
    sensor-compatible checkpoint for the new provisional loop. Then derive the
    local camera statistic for the brush-load likelihood without counting the
-   transition prediction as evidence, and expand candidates, particles, motor
-   realizations, and temporal depth one dimension at a time.
+   transition prediction as evidence; fit a compact stochastic brush-contact
+   transition/observation model from permitted sensor history so
+   counterfactuals no longer reuse the process contact equations; and expand
+   candidates, particles, motor realizations, and temporal depth one dimension
+   at a time.
 
 ## Progress Log
+
+### 2026-08-07: curved marks and decision-relevant roll realization
+
+Technical record: `docs/CURVED_MARK_AND_ROLL_REALIZATION_2026-08-07.md`.
+
+- Added signed quadratic curvature as painting-policy geometry through action
+  encoding, proposal density, spatial rasterization, deposition, timing, and
+  physical reference tracking.
+- Added symmetric fixed +24/-24 degree upper-arm-roll motor realizations and
+  verified that they predict distinct proprioceptive outcomes.
+- Expanded the bounded sensor profile from neutral Cartesian IK to neutral plus
+  fixed ±roll, while retaining dynamic roll sweeps in the broader research
+  configuration.
+- Kept curve support and bodily realization separate: no curve reward, roll
+  reward, or global contact-pressure preference was added.
+- Restored paint-bearing repeated smoke execution with an explicit equal
+  preserve/reload policy prior for the initially empty compact brush belief.
 
 ### 2026-08-06: provisional sensor-only MuJoCo painting loop
 
@@ -122,6 +237,9 @@ Technical record: `docs/PROVISIONAL_SENSOR_SIMULATION_2026-08-06.md`.
   realization, one forecast particle, no passage proposals, and reduced native
   camera renders. The resolution override is a declared simulation-throughput
   approximation, not an operational sensor-equivalent camera claim.
+- As of 2026-08-07 that profile has three motor realizations (neutral IK and
+  fixed ±24-degree roll), symmetric straight/curved proposal support, and a
+  declared 30 Hz counterfactual integration approximation.
 - Demonstrated two repeated selected strokes, two causal camera corrections,
   two replay transitions, and nonzero process coverage. Exact coverage was
   test-only evaluation, not an inference input.

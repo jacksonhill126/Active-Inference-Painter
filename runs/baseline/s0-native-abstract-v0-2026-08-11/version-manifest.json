@@ -1,0 +1,73 @@
+{
+  "schema_version": "version-manifest-v1",
+  "run_id": "s0-native-abstract-v0-2026-08-11T180953Z",
+  "created_at_utc": "2026-08-11T18:09:53Z",
+  "code": {
+    "package_version": "0.1.0",
+    "viewer_build": "0.1.0+code.157",
+    "git_commit": "5e5281e370b7a0a950b7b1b2fb6479fb6993efff",
+    "git_branch": "codex/claude-handoff-recovery",
+    "git_dirty": true,
+    "source_fingerprint_sha256": "a7c8ec6d1790c71f6f90c5af6684c6ca730df94134fc0ebec9d514f7d0808049"
+  },
+  "artifacts": {
+    "native_plant": {
+      "label": "native-abstract-v0",
+      "identity_basis": "docs/NATIVE_PLANT_REFERENCE.md",
+      "sha256": "1e5309f7ef1278d99264e623d2d5b693dc9c6a3c285a499876cccc8236a81680"
+    },
+    "mujoco_model": {
+      "label": "mujoco-none",
+      "sha256": null
+    },
+    "agent_model": {
+      "label": "agent-spatial-v0-provisional",
+      "identity_basis": "captured source fingerprint plus state.json architecture",
+      "sha256": "a7c8ec6d1790c71f6f90c5af6684c6ca730df94134fc0ebec9d514f7d0808049"
+    },
+    "cad": {
+      "label": "cad-none",
+      "sha256": null
+    },
+    "calibration": {
+      "label": "calib-none",
+      "sha256": null
+    },
+    "hardware": {
+      "label": "hardware-none",
+      "sha256": null
+    },
+    "experiment_config": {
+      "label": "experiment-s0-default-web-capture-v0",
+      "path": "resolved-config.json",
+      "sha256": "88a2891521f1de543fabb2c42cbd159b471bdc08ff2970a880f7807f13090349"
+    },
+    "checkpoint": {
+      "label": "checkpoint-none",
+      "path": null,
+      "sha256": null,
+      "load_status": "not_requested"
+    }
+  },
+  "captured_files": {
+    "README.md": "53a247e7e777ff1767b73eb7f4c11549155372d2ee22eb16edee2799bc22b794",
+    "canvas.png": "cd87ac11d465b50138e9e27b8be365c2acbe70417042b44535143439ac7f905f",
+    "experiment-manifest.json": "d8b8320beaa70badecaaebfda5bdd64293c959beddede4828d86a09086e1547d",
+    "failure-log.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "frontend.html": "d239e744a5182e5a0d8680f6bfe964233947cbd5e165e6c06ca1a941b3ca3b1a",
+    "main.js": "59a6f0458a2ff63952c282ff9ef5bb3502d1f558602d27f66cfb8e565cc6fdad",
+    "robot-model.json": "d33d69b190929208a533afb92ddf9d0b6dabb5b6a412ece66a48b36eaa3ef485",
+    "server-stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "server-stdout.txt": "873dba64d74a302d13d97154de526bd0c9aa359b873b4adabb6cf1daa10d0ca2",
+    "state.json": "11dbfbcb924533af31b5b8465b0e5b2cf51d6d8e4986b2295f40e9e7c0f66189",
+    "style.css": "ca87224c0ba0a739cf8bec5601e79ddc8c5e7d2bde49a24a3b3b09db1fb3d0e9",
+    "telemetry.csv": "431dc77b60613f237095d1465eb0b867f824f36936baaf0047c356175bf108a1",
+    "test-summary.md": "b974be63a3330aa25b2703a2b9bd4cd48d163c792f4769f6867be8528fa15104",
+    "version.json": "9075c0a6734b93e03203d421d02e57e560b67d8f532c5eb107578a27043e83d2"
+  },
+  "related_files": {
+    "experiment_manifest": "experiment-manifest.json",
+    "failure_log": "failure-log.jsonl",
+    "limitation_classification": "../../../docs/SIMULATOR_SHORTCUT_CLASSIFICATION_2026-08-11.md"
+  }
+}

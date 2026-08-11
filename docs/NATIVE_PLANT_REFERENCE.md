@@ -134,11 +134,31 @@ The intended-pressure path is an execution convenience. It is not a physical
 force-sensor likelihood and must be replaced or calibrated before hardware
 claims.
 
-Brush radius in world units is:
+The round-bundle envelope diameter is 0.50 world units (12.7 mm / 0.5 in),
+aligned with the canonical MJCF. The contacting fraction grows continuously
+from the tuft tip toward that envelope, and pressure then supplies bounded 20%
+radial splay:
 
 ```text
-radius = 0.10 + 0.42 * clip(pressure, 0, 1)
+p = clip(pressure, 0, 1)
+contact_fraction = 0.12 + 0.88 * sqrt(p)
+radius = 0.5 * 0.50 * contact_fraction * (1 + 0.20 * p)
 ```
+
+The footprint aspect is then conditioned on `beta`, the acute angle between
+the end-effector/brush axis and the canvas plane:
+
+```text
+aspect = clamp(1 + 0.35 * cot(beta), 1, 1.65)
+```
+
+At 90 degrees the end effector is perpendicular to the canvas and the patch is
+circular. Smaller angles elongate it along the end-effector projection.
+
+During the final stroke taper, desired Cartesian penetration and intended
+pressure unload with width before lateral motion stops. Lift begins from the
+canvas plane with taper flow zero. Positive residual physical contact can still
+deposit; there is no paint-enable gate.
 
 The contact state exposed by the simulator contains:
 

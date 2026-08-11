@@ -58,12 +58,48 @@ class PainterConfig:
     brush_material_risk_precision: float = 1.0
     brush_pigment_risk_precision: float = 1.0
     brush_ambiguity_precision: float = 1.0
-    # Directional (swept-capsule) footprint: each deposition step paints the
-    # disc swept from the previous contact point, so travel elongates and
-    # connects the mark. Round brush to start: the cross-stroke radius is
-    # unchanged, only the along-travel extent.
+    # Directional footprint: each deposition step sweeps the oriented contact
+    # patch from the previous bristle contact point, so travel elongates and
+    # connects the mark.  Direct paint_at calls without an orientation retain
+    # the legacy round footprint for compatibility.
     brush_directional_enabled: bool = True
-    # Bristle furrows: a round brush is a bundle of hairs, so it leaves
+    # Reduced-order ROUND-brush contact footprint. Normal incidence produces
+    # the pressure-dependent circular patch above. As the handle tilts, the
+    # patch elongates only along the handle projection onto the canvas; an
+    # axisymmetric round tuft has no independent roll orientation. The
+    # tangent-law gain and cap are provisional until footprint-vs-pose samples
+    # are captured from the selected physical brush.
+    brush_round_angle_footprint_enabled: bool = True
+    # Native world units are inches. This matches the canonical MuJoCo bundle's
+    # selected 12.7 mm / 0.5 in nominal diameter. Pressure adds a bounded
+    # fractional splay instead of replacing that physical diameter with an
+    # unrelated hard-coded range.
+    brush_round_bundle_diameter_world: float = 0.50
+    # Only the contacting fraction of the circular tuft forms the footprint.
+    # It grows continuously from a small tip contact toward the full bundle as
+    # normal load increases; this prevents the hardware envelope diameter from
+    # becoming a full-size stamp at feather-light contact.
+    brush_round_contact_min_fraction: float = 0.12
+    brush_round_contact_pressure_exponent: float = 0.50
+    brush_round_pressure_splay_fraction: float = 0.20
+    # Geometry is parameterized by the acute angle beta BETWEEN the end-
+    # effector axis and canvas plane: beta=90 deg is perpendicular/circular;
+    # smaller beta increases elongation through cot(beta), subject to the cap.
+    brush_round_canvas_angle_elongation_gain: float = 0.35
+    brush_round_max_aspect_ratio: float = 1.65
+    # Baxter-inspired anisotropic bristle friction.  One aggregate tangential
+    # deflection represents the coherent motion of the tuft.  Static and
+    # kinetic limits produce breakaway/re-stick cycles; the existing frozen
+    # canvas tooth modulates those limits.  Friction is weakest in the pull
+    # direction (handle leading) and is proportional to normal force.  These
+    # are simulation priors, not calibrated brush coefficients.
+    brush_tangential_stiffness_n_per_world_unit: float = 24.0
+    brush_static_friction_coefficient: float = 0.90
+    brush_kinetic_friction_coefficient: float = 0.45
+    brush_pull_friction_reduction: float = 0.65
+    brush_pull_direction_exponent: float = 2.0
+    brush_tooth_friction_modulation: float = 0.25
+    # Bristle furrows: the brush is a bundle of hairs, so it leaves
     # lengthwise streaks. A fraction of the hairs run dry (`gap_fraction`),
     # carving furrows -- these survive the opacity saturation that washes out a
     # mere deposition-rate wobble, so the mark reads as brushed rather than
@@ -97,6 +133,11 @@ class PainterConfig:
     # phase at each end, so marks come to points instead of round caps.
     brush_taper_fraction: float = 0.28
     brush_taper_min_width: float = 0.18
+    # Conditional end-of-mark unloading. During the taper, Cartesian depth and
+    # intended pressure fall together to this fraction before lift begins.
+    # Positive contact still deposits; this is trajectory realization, not a
+    # paint-enable gate or global pressure preference.
+    brush_taper_end_pressure_fraction: float = 0.06
     # Bidirectional paint transfer (the "dirty brush" loop used by ArtRage /
     # Krita's color-smudge engine): per stamp the head skims a pressure-scaled
     # fraction of the wet surface layer into a small held reservoir, mixes it
@@ -116,7 +157,9 @@ class PainterConfig:
     brush_tip_lag_seconds: float = 0.06
 
     state_dim: int = 6
-    action_dim: int = 12
+    # Eight painting coordinates (endpoints, width, amount, tone, signed
+    # quadratic curvature) plus five configured motor-realization indicators.
+    action_dim: int = 13
     # Deprecated library default retained temporarily for checkpoint/test
     # compatibility. Runtime entry points default to spatial_material and
     # constructing an active driver with summary emits a FutureWarning.
@@ -124,7 +167,9 @@ class PainterConfig:
     spatial_grid_size: int = 16
     material_pyramid_levels: tuple[int, ...] = (64, 32, 16)
     spatial_material_channels: int = 6
-    spatial_action_channels: int = 11
+    # Seven painting fields (footprint/start/end/width/amount/tone/curvature)
+    # plus five configured motor-realization fields.
+    spatial_action_channels: int = 12
     spatial_transition_mode: str = "local_patch"
     spatial_hidden_channels: int = 32
     spatial_residual_blocks: int = 3
@@ -134,6 +179,12 @@ class PainterConfig:
     local_patch_batch_bucket_cells: int = 16
     local_patch_sequential_cell_limit: int = 8192
     local_identity_logvar: float = -12.0
+    # Number of camera-derived local transitions required before the learned
+    # material transition likelihood may supply a mean.  Until then the model
+    # uses an action-local, no-deposition transition prior with deliberately
+    # broad variance.  Zero preserves the historical learned-from-start mode.
+    spatial_transition_warmup_samples: int = 0
+    spatial_untrained_action_std: float = 0.25
     mark_slot_count: int = 8
     mark_activation_coverage: float = 0.08
     ensemble_size: int = 5
@@ -152,9 +203,20 @@ class PainterConfig:
     terminal_risk_precision: float = 1.0
     ambiguity_precision: float = 1.0
     transition_precision: float = 1.0
-    # Mixture weight of the low-coverage-seeking stroke proposal (a declared
-    # empirical policy prior); the remainder of proposals stay uniform.
+    # Mixture weight of the low-coverage-seeking computational proposal. This
+    # changes finite candidate support; it is not a policy prior and never
+    # enters EFE or the normalized posterior as log p(pi).
     proposal_low_coverage_mix: float = 0.5
+    # Hand-written mixed curve-support proposal. A nonzero draw chooses a fair
+    # sign and a continuous uniform magnitude between
+    # `mark_curvature_min_fraction * mark_curvature_magnitude` and
+    # `mark_curvature_magnitude`; otherwise the historical straight atom is
+    # emitted. `mark_curvature_magnitude` is therefore the upper envelope, not
+    # a fixed arc template. This is proposal support, not an aesthetic
+    # preference or EFE term.
+    curved_mark_proposal_mix: float = 0.0
+    mark_curvature_magnitude: float = 0.18
+    mark_curvature_min_fraction: float = 0.15
     # Mixture weight of the higher-level passage proposal. A passage is a
     # slower latent policy prior over several related marks; expected free
     # energy still scores the resulting terminal outcome.
@@ -197,6 +259,12 @@ class PainterConfig:
     # Monte-Carlo sample count for the declared divergence diagnostic
     # D_KL(learned proposal || hand-written proposal), in nats per latent.
     learned_proposal_divergence_samples: int = 32
+    # Evidence-only proposal diagnostics are expensive Monte Carlo estimates.
+    # Recompute them on the first plan and then at this plan interval, caching
+    # the last result between measurements. This interval changes no VFE/EFE
+    # term, preference, precision belief, policy prior/posterior, or control
+    # branch. Set to 1 for the historical every-plan measurement cadence.
+    learned_proposal_diagnostic_interval_plans: int = 16
     # Floor on the learned factored proposal's per-parameter log scale, so a
     # collapsed factor cannot make log q unbounded above. A numerical support
     # bound on a proposal density, NOT a precision belief over any outcome.
@@ -255,6 +323,10 @@ class PainterConfig:
     # the old eight x three budget because fixed-roll IK is richer per rollout.
     motor_forecast_candidates: int = 3
     motor_forecast_samples: int = 3
+    # Numerical integration rate for counterfactual motor rollouts. Runtime
+    # profiles may lower this explicitly as a declared throughput
+    # approximation; live process integration is configured separately.
+    motor_forecast_hz: float = 45.0
     # Independent motor-likelihood rollouts use deep-copied simulator states.
     # Batching changes only scheduling: equations, dt, and particle count stay
     # identical to sequential forecasts.
@@ -273,6 +345,7 @@ class PainterConfig:
     )
     motor_realization_candidate_limit: int = 5
     motor_roll_sweep_degrees: float = 32.0
+    motor_fixed_roll_degrees: float = 24.0
     motor_proprioceptive_risk_precision: float = 0.35
     motor_proprioceptive_ambiguity_precision: float = 0.25
     # Declared precision on the reliability PARAMETER-novelty term. Split out of

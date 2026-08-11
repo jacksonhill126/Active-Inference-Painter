@@ -119,6 +119,55 @@ class SpatialVariationalStateEstimator:
         )
 
     @torch.no_grad()
+    def predict_untrained_action_prior(
+        self,
+        previous: SpatialCanvasState,
+        action: StrokeAction,
+        motor_primitive: MotorPrimitiveLatent | None = None,
+    ) -> SpatialCanvasState:
+        """Conservative prior used before camera replay identifies dynamics.
+
+        It asserts neither an unobserved deposited mark nor an impossible
+        unchanged mark: the material mean remains the previous posterior and
+        only the action footprint gets broad process variance.  The following
+        registered camera likelihood is therefore the sole evidence allowed to
+        establish the new material field.
+        """
+
+        current_mean = pixel_material_from_state(previous)
+        current_variance = np.exp(
+            np.clip(pixel_logvar_from_state(previous, self.cfg), -30.0, 20.0)
+        ).astype(np.float32)
+        identity_variance = float(
+            np.exp(np.clip(self.cfg.local_identity_logvar, -30.0, 20.0))
+        )
+        prior_variance = current_variance + identity_variance
+        if not action.stop:
+            raster = rasterize_stroke_action(
+                action,
+                current_mean.shape[-1],
+                motor_primitive=motor_primitive,
+                config=self.cfg,
+            )
+            footprint = np.clip(raster[0], 0.0, 1.0)
+            action_variance = float(self.cfg.spatial_untrained_action_std) ** 2
+            prior_variance = np.maximum(
+                prior_variance,
+                action_variance * footprint[None, ...],
+            )
+        return spatial_state_from_pixel_posterior(
+            current_mean,
+            prior_variance,
+            self.cfg,
+            posterior_revision=previous.posterior_revision + 1,
+            inference_model_id=(
+                f"{SPATIAL_TRANSITION_PRIOR_VERSION}:"
+                "conservative-action-local-untrained-v0"
+            ),
+            calibration_status=SPATIAL_TRANSITION_PRIOR_CALIBRATION_STATUS,
+        )
+
+    @torch.no_grad()
     def infer(
         self,
         previous: SpatialCanvasState,
