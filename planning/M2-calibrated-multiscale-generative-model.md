@@ -3,14 +3,21 @@
 ## Summary
 
 M2 replaces the current oracle-like spatial observation path with a compact,
-explicitly probabilistic, sensor-equivalent generative model. It also turns the
+explicitly probabilistic, sensor-grounded generative model whose hardware
+equivalence still requires physical calibration. It also turns the
 pixel, canvas, relational, and passage levels into a tested multiscale
 hierarchy rather than a collection of loosely coupled predictors.
 
 The central M2 question is:
 
-> Can the agent infer and predict materially and spatially relevant hidden
-> states from observations a physical platform could plausibly receive?
+> Can the agent infer and predict visually and spatially relevant hidden
+> structure—and uncertain action-conditioned mark consequences—from
+> observations a physical platform could plausibly receive?
+
+The owner-confirmed perceptual boundary is
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`. Detailed material state remains in
+the process. The target persistent hierarchy is visual; it does not maintain a
+canvas-wide wetness map merely because the process contains one.
 
 M2 builds on the M1 factorization and held-out corpus. It does not add active
 gaze yet; the first observation process may expose a fixed full-canvas camera
@@ -41,7 +48,10 @@ capacity, training, uncertainty, or factorization.
 - Bootstrap data uses a different pixel scale from live data.
 - Local dynamics are tested more thoroughly than their multi-step rollout
   behavior.
-- The global canvas latent only sees a 16 x 16 coarse field.
+- The global canvas latent only sees a 16 x 16 coarse material field, which
+  erases useful angle and continuous-boundary structure.
+- The accepted corpus does not retain registered pre/post camera images, so it
+  cannot train the selected visual mark-consequence model.
 - Relational slots are produced by deterministic clustering with no assignment
   uncertainty.
 - Slow beliefs and transition models share a small, highly correlated online
@@ -57,35 +67,38 @@ M2 should implement or justify a structure of the following form:
 ```text
 shared parameters theta
         |
-material state x_t  ---- action a_t ----> x_(t+1)
-        |                                  |
-        v                                  v
-canvas observation o_canvas(t)      o_canvas(t+1)
+process material x_t ---- action a_t ----> process material x_(t+1)
+        |                                        |
+        v                                        v
+registered image o_t                      registered image o_(t+1)
+        |                 action, brush          ^
+        +----------> ephemeral z_interaction ----+
+        |                                        |
+        +------> z_visual --> z_mass --> z_relation
+                                      |
+                                      +---- passage/painting transition
 
 body state b_t ------ motor policy ------> b_(t+1)
         |                                  |
         v                                  v
 proprio/current/contact observations
-
-coarse material c_k <---- deterministic coarse-graining of x_t
-        |
-        +----> uncertain canvas latent z_canvas(k)
-        +----> uncertain relational latent z_relation(k)
-                        |
-                        +---- passage-scale transition
 ```
 
-Deterministic coarse-graining is permitted. Independently guessed coarse
-material state is not. The hierarchy may predict distributions over latent
-causes and future observations, but touched coarse fields must remain grounded
-in the predicted material state.
+The process may expose material arrays to evaluator-only diagnostics, but the
+agent-facing hierarchy is grounded in registered observations. A local
+interaction latent is inferred freshly for an action/patch and then
+marginalized; it is not a persistent inverse-physics canvas. Tone, oriented
+boundaries, continuous masses, and relations remain only if they improve
+held-out prediction, calibration, or temporal/intervention tests.
 
 ## Scope
 
 ### Included
 
-- Fixed-camera or idealized sensor-equivalent observation process.
-- Explicit visual/material observation likelihood.
+- Fixed-camera observation process with declared provisional assumptions and
+  a physical-calibration gate.
+- Explicit visual observation and action-conditioned visual-transition
+  likelihoods.
 - Compact amortized or iterative state inference.
 - Live-scale local transition learning.
 - Multi-step predictive and uncertainty calibration.
@@ -126,6 +139,9 @@ Acceptance:
   supervised corpus generation where declared, and evaluation.
 - Define how material coverage remains a hidden material state inferred from
   sensory consequences rather than a directly observed scalar.
+- Retain registered, rectified pre/post camera images, timing, calibration,
+  masks, action-aligned crops, brush context, motor realization, and terminal
+  provenance in the corpus contract.
 - Update the sensor-access ledger from M1.
 
 ### AI-202 Implement the fixed-view observation generative process
@@ -160,12 +176,17 @@ Estimate: 3-5 days
 
 Acceptance:
 
-- Define `p(o_canvas | x_material, z_canvas)` or a documented feature-space
-  likelihood with explicit support and variance.
+- Define an image or non-overlapping multiscale-coefficient likelihood with
+  explicit support and variance.
+- Define the action-conditioned visual transition
+  `p(o_(t+1,R) | o_(t,R), action, brush, z_interaction)` and its recognition
+  density without exposing process material arrays.
 - Define proprioceptive, current, and contact likelihoods separately.
 - Predict likelihood variance from permitted conditioning variables or latent
   state, not from inaccessible simulator truth at inference time.
 - Avoid counting deterministic transforms as independent evidence.
+- Preserve tone and oriented-boundary fidelity; do not count an edge transform
+  as independent evidence unless the joint-density approximation is explicit.
 - Test likelihood calibration on held-out observations.
 - Report what information about white paint, texture, and overlap is lost by
   the chosen sensor.
@@ -180,15 +201,18 @@ Estimate: 4-6 days
 
 Acceptance:
 
-- Define `q(x_material, z_canvas, z_relation | observations, prior)` with an
-  explicit factorization.
+- Define `q(z_visual, z_mass, z_relation | observations, prior)` with an
+  explicit factorization, plus an ephemeral local
+  `q(z_interaction | image crop, action, brush)` where predictive evidence
+  justifies it.
 - Use a small amortized encoder, iterative update, or hybrid whose
   approximation is documented.
 - Fuse transition priors and observations without reading ground-truth
   material state.
-- Provide the inferred initial-state distribution used by counterfactual body
-  and material rollouts; do not initialize them from a live process object.
-- Preserve uncertainty in unobserved or visually ambiguous material.
+- Provide the inferred visual and body initial-state distributions used by
+  counterfactual rollouts; do not initialize them from a live process object.
+- Preserve visually unresolved material causes as calibrated uncertainty over
+  visual outcomes rather than persistent named canvas variables.
 - Compare posterior estimates against hidden simulator labels only for
   evaluation.
 - Verify VFE terms against M1 fixtures and report inference latency.
@@ -214,7 +238,15 @@ sensor-posterior corpus collection but does not satisfy its calibration or
 factorization acceptance criteria; see the canonical status in
 `PROJECT_TRACKER.md`.
 
-### AI-205 Align local dynamics training with live execution
+Direction correction, 2026-08-12: this progress remains evidence that the
+sensor boundary, frozen posterior initialization, and independent
+counterfactual state work. It is not a commitment to complete a persistent
+canvas-wide inverse material posterior. The accepted continuation replaces
+that target with visual/body inference plus an optional ephemeral local
+interaction latent, as specified in
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
+
+### AI-205 Align local visual-dynamics training with live execution
 
 Status: `Blocked`  
 Track: Transition Model/Data  
@@ -225,14 +257,15 @@ Estimate: 2-3 days
 Acceptance:
 
 - Remove bootstrap/live pixel-scale mismatch.
-- Make brush footprint, grain, and patch margin physically equivalent across
-  corpus and live execution.
+- Make camera registration, brush footprint, action support, and patch margin
+  equivalent across corpus and live execution.
 - Train local dynamics using the M1 leakage-resistant split.
 - Preserve exact identity outside touched support.
-- Report calibration by action and material condition.
+- Report visual likelihood and boundary fidelity by action, brush context,
+  overlap, tone, and image condition.
 - Confirm no simulator outcome labels enter live policy inference.
 
-### AI-206 Validate multi-step material prediction
+### AI-206 Validate multi-step visual prediction
 
 Status: `Blocked`  
 Track: Transition Model/Validation  
@@ -247,7 +280,8 @@ Acceptance:
 - Sample or propagate posterior uncertainty rather than initializing every
   member only at the posterior mean.
 - Compare mean-evaluated, particle, and affordable Monte Carlo variants.
-- Report error growth, interval coverage, and failure by overlap condition.
+- Report visual error growth, normalized likelihood, interval/quantile
+  calibration, boundary fidelity, and failure by overlap condition.
 - Test that sparse full-canvas scaling does not reward or penalize patch area.
 - Choose the least expensive rollout approximation that meets declared error
   and calibration thresholds.
@@ -270,6 +304,8 @@ Acceptance:
   averages.
 - Define what state persists across marks, passages, paintings, and model
   checkpoints.
+- Explicitly prohibit persistent canvas-wide wetness in the target hierarchy;
+  local interaction latents expire after the action-conditioned prediction.
 - Provide a sequence diagram for one complete passage.
 
 ### AI-208 Make the global canvas latent predictively necessary
@@ -282,14 +318,16 @@ Estimate: 3-5 days
 
 Acceptance:
 
-- Compare flat, local-only, current 16 x 16 latent, and one modest richer
-  multiscale alternative.
+- Compare flat, local-only, current 16 x 16 material latent, and one modest
+  tone/edge/mass-preserving multiscale visual alternative.
 - Evaluate held-out reconstruction and future prediction, not only training
   ELBO.
 - Test spatial scrambling, translation, and rotation sensitivity.
 - Measure latent effective rank, posterior collapse, and context usage.
 - Demonstrate that conditioning on the canvas latent improves predictions of
   separated or later events.
+- Verify that oblique and curved boundaries survive the compact
+  representation rather than becoming square-cell artifacts.
 - Increase capacity only if learning curves show underfitting.
 
 ### AI-209 Replace or demote deterministic relational beliefs

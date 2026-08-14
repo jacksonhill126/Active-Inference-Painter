@@ -22,7 +22,7 @@ from active_painter.offline_train import (
     train_from_manifest,
 )
 from active_painter.policies import MotorPrimitiveLatent
-from active_painter.parallel_collect import _worker_specs
+from active_painter.parallel_collect import _stop_evidence_summary, _worker_specs
 from active_painter.spatial_state import SpatialCanvasState
 from active_painter.spatial_agent import SpatialActiveInferencePainter
 from active_painter.trajectory_corpus import (
@@ -230,6 +230,71 @@ def test_trajectory_shards_round_trip_full_posteriors_and_split_without_leakage(
     interrupted_temp = paths[0].with_name(f"{paths[0].stem}.tmp.npz")
     interrupted_temp.write_bytes(paths[0].read_bytes())
     assert discover_trajectory_shards(tmp_path) == sorted(paths)
+
+
+def test_trajectory_records_stop_posterior_trace_and_resets_between_episodes(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    recorder = TrajectoryRecorder(
+        tmp_path,
+        config,
+        worker_id=3,
+        seed=17,
+        provenance={"process_truth_role": "not stored"},
+    )
+    first = {
+        "schema": "stop-decision-diagnostic-v1",
+        "planning_revision": 1,
+        "stroke_count": 0,
+        "believed_material_coverage": 0.12,
+        "selected_stop": False,
+        "stop_rank": 4,
+        "stop_posterior": 0.02,
+        "stop_had_lowest_efe_but_prior_demoted": False,
+        "stop_log_posterior_odds_vs_best_continuation": -3.2,
+    }
+    second = {
+        **first,
+        "planning_revision": 2,
+        "stroke_count": 1,
+        "believed_material_coverage": 0.22,
+        "stop_rank": 2,
+        "stop_posterior": 0.30,
+        "stop_had_lowest_efe_but_prior_demoted": True,
+        "stop_log_posterior_odds_vs_best_continuation": -0.4,
+    }
+    recorder.record_stop_decision(first)
+    recorder.record_stop_decision(second)
+    path = recorder.complete(
+        _state(0.22, 2),
+        termination=TERMINATION_FIXED_HORIZON,
+    )
+    evidence = load_trajectory_shard(path).metadata["stop_decision_evidence"]
+
+    assert evidence["decision_count"] == 2
+    assert evidence["selected_stop_count"] == 0
+    assert evidence["prior_demoted_lowest_efe_stop_count"] == 1
+    assert evidence["maximum_stop_posterior"] == 0.30
+    assert evidence["minimum_stop_rank"] == 2
+    assert evidence["initial_believed_material_coverage"] == 0.12
+    assert evidence["final_believed_material_coverage"] == 0.22
+    assert evidence["trace"] == [first, second]
+
+    collection = _stop_evidence_summary([path])
+    assert collection["terminations"] == {"fixed_horizon_truncation": 1}
+    assert collection["decision_count"] == 2
+    assert collection["maximum_stop_posterior"] == 0.30
+
+    next_path = recorder.complete(
+        _state(0.0, 3),
+        termination=TERMINATION_FIXED_HORIZON,
+    )
+    next_evidence = load_trajectory_shard(next_path).metadata[
+        "stop_decision_evidence"
+    ]
+    assert next_evidence["decision_count"] == 0
+    assert next_evidence["trace"] == []
 
 
 def test_central_trainer_uses_train_split_and_labels_shared_pretraining(

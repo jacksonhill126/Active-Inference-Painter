@@ -1,6 +1,11 @@
 # Active-Inference Painter Research Charter
 
-Status: July 22, 2026
+Status: adopted July 22, 2026; perceptual boundary amended August 12, 2026
+
+The canonical distinction between the detailed paint process and the selected
+visual-first agent model is `VISUAL_GENERATIVE_MODEL_BOUNDARY.md`. It governs
+the interpretation of perception, transition learning, and composition work
+under this charter.
 
 ## 1. Project identity
 
@@ -18,9 +23,15 @@ not substitute for a clear account of the mechanism that produced them.
 ## 2. Central research question
 
 > Can an embodied, hierarchical active-inference agent develop temporally
-> extended spatial organization through foveated perception and sensorimotor
-> prediction, without image targets, aesthetic rewards, or demonstrated
-> painting policies?
+> extended spatial organization through multiscale visual prediction,
+> sensorimotor action, and active attention, without image targets, aesthetic
+> rewards, or demonstrated painting policies?
+
+The hierarchy is the central modeling object: tone and oriented boundaries,
+continuous masses, spatial relations, recurring motifs, and slower structure
+across marks and passages. Foveated or otherwise budgeted partial observation
+is a key experimental mechanism for testing that hierarchy, not a requirement
+that cognition be implemented as one crop physically steering around an image.
 
 The project investigates whether behavior resembling abstract composition can
 arise from multiscale generative modeling, active observation, bodily
@@ -37,11 +48,12 @@ labels must be identified separately.
 The primary object of study is the coupled process formed by:
 
 - a body with constrained and uncertain joint dynamics;
-- a foveated visual system that must choose where to look;
+- a visual system that can allocate detailed observation and precision over
+  space and time;
 - a persistent, materially changing canvas;
 - a hierarchical generative model operating at multiple spatial and temporal
   scales;
-- policy inference over gaze, motion, marks, passages, and stopping;
+- policy inference over attention, motion, marks, passages, and stopping;
 - learning from the sensory consequences of action.
 
 The desired result is not necessarily conventionally attractive painting. A
@@ -96,8 +108,13 @@ support, or predictive capacity.
 ### In scope
 
 - Foveated and active visual observation.
-- Pixel-local paint and brush transition learning.
-- Multiscale visual, material, and relational latent states.
+- Action-conditioned visual mark-consequence learning from registered image
+  patches, action, and compact brush context.
+- Multiscale visual tone, oriented-boundary, continuous-mass, and relational
+  latent states.
+- Detailed material variables in the generative process, with visually
+  unresolved local interaction causes marginalized into predicted visual
+  uncertainty rather than maintained as a canvas-wide wetness latent.
 - Explicit proprioceptive, current, contact, and energetic modalities.
 - Joint-space and Cartesian consequences of painting policies.
 - Temporally extended mark, polyline, passage, and passage-plan inference.
@@ -294,7 +311,7 @@ and bodily constraint.
 Useful presentation material includes:
 
 - completed and interrupted paintings;
-- gaze trajectories and foveated observations;
+- attention-allocation trajectories and partial observations;
 - passage boundaries and motor realizations;
 - synchronized belief, precision, VFE, and EFE traces;
 - prediction failures and subsequent adaptation;
@@ -311,21 +328,23 @@ Validate current local paint prediction, embodied forecasts, uncertainty,
 checkpointing, and hierarchy behavior. Resolve known data-scale and long-run
 training problems before interpreting compositional output.
 
-### Phase B: Introduce foveated observation
+### Phase B: Build the probabilistic perceptual hierarchy
 
-Define an explicit gaze state, observation likelihood, sensory precision, and
-gaze policies. Compare active foveation with matched uniform-observation and
-random-gaze baselines.
-
-### Phase C: Build the probabilistic perceptual hierarchy
-
-Connect foveated visual observations to fast and slow stochastic latent states.
+Connect registered visual observations to fast and slow stochastic latent states
+for tone, oriented boundaries, continuous masses, relations, and motifs.
 Demonstrate held-out prediction, calibrated uncertainty, temporal persistence,
 and sensitivity to spatial interventions.
 
+### Phase C: Introduce active attention
+
+Define an explicit attention-allocation state, partial-observation likelihood,
+sensory precision, and attention policies. A crop is one possible sensor
+realization, not the cognitive definition. Compare active allocation with
+matched uniform-observation, fixed-target, and random-allocation baselines.
+
 ### Phase D: Test temporally extended embodied organization
 
-Integrate gaze, joint-space consequences, marks, and passages within policy
+Integrate attention, joint-space consequences, marks, and passages within policy
 inference. Test whether slow beliefs causally affect later passages and whether
 embodiment changes the learned mark vocabulary.
 

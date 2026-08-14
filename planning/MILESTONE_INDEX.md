@@ -4,7 +4,7 @@ This is the compact index for project milestones and simulation-support
 milestones. Detailed task state remains authoritative in
 `planning/PROJECT_TRACKER.md`; this file summarizes milestone-level readiness.
 
-Status snapshot: 2026-08-11.
+Status snapshot: 2026-08-12.
 
 AI-104/AI-105 reference verification is accepted, AI-111 is closed with a
 negative proposal-convergence decision, and AI-106 terminal/stopping validation
@@ -18,18 +18,29 @@ components were implemented ahead of M1 as explicit provisional experiments;
 they do not make M2 active or satisfy their scientific acceptance gates.
 
 AI-108's live-scale leakage-resistant corpus was accepted on 2026-08-11.
-AI-107 calibration is also complete, with a negative M2 result: nominal 90%
-intervals covered about 99.4% and meaningful dynamic-roll OOD disagreement rose
-only 1.087x. The current critical-path task is AI-109 learning curves and
-likelihood-family diagnosis.
+AI-107 calibration is also complete, with a negative M2 result. AI-109's
+2026-08-12 local learning-curve branch measured 27 three-seed runs: generic
+capacity did not help, the material-posterior cVAE was not materially better
+than the CNN, and a
+normalized identity/consequence likelihood improved mean test NLL by 1.392
+nats but did not pass calibration. AI-109 remains active because its hierarchy
+branch requires genuine policy-selected terminal visual paintings; AI-108
+contains only fixed-horizon truncations and no registered image stream. A
+2026-08-12 pilot produced six genuine stops and two truncations, establishing
+feasibility but not an accepted visual corpus. Registered visual collection,
+visual mark-consequence baselines, and the tone/edge/mass hierarchy are the
+current critical path. See `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 Current physical-design records are aligned to the fixed RobStride assignment
 (03 yaw/pitch, 02 upper-arm roll/elbow) and the selected-but-not-purchased
 `provisional-compact-dual-imx296-v1` two-camera rig. Neither plant nor camera
-path is hardware calibrated. The 2026-08-11 conditional patch cVAE remains an
+path is hardware calibrated. The conditional patch cVAE remains an
 offline/shadow material-transition likelihood with no painting-policy
-influence. Its 3,000-step AI-107 result did not improve held-out calibration
-over the CNN and showed effectively collapsed within-member latent variance.
+influence. Its AI-109 three-seed result did not materially improve the CNN and
+had unstable recursive rollouts. It neither implements nor rejects the owner's
+proposed visual cVAE. The new identity/consequence mixture is also
+shadow-only: its density improvement is real, but its uncertainty remains
+over-dispersed and uncalibrated.
 
 ## Research And Delivery Milestones
 

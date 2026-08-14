@@ -17,6 +17,23 @@ SUPPORT_DOCUMENTS = (
     *sorted((ROOT / "models").glob("*.md")),
     *sorted((ROOT / "planning").glob("*.md")),
 )
+VISUAL_BOUNDARY_ENTRY_DOCUMENTS = (
+    "AGENTS.md",
+    "README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CURRENT_IMPLEMENTATION.md",
+    "docs/GENERATIVE_MODEL_SPEC.md",
+    "docs/PROGRESS.md",
+    "docs/RESEARCH_CHARTER.md",
+    "docs/OWNER_CONTRIBUTION_BRIEF_2026-08-11.md",
+    "docs/OWNER_STEERING_CATALOG_2026-08-11.md",
+    "docs/PROJECT_DECISION_PROVENANCE_2026-08-11.md",
+    "planning/GANTT.md",
+    "planning/M1-formal-baseline-and-inference-audit.md",
+    "planning/MILESTONE_INDEX.md",
+    "planning/PROJECT_TRACKER.md",
+    "planning/M2-calibrated-multiscale-generative-model.md",
+)
 
 
 @pytest.mark.parametrize("relative_path", AGENT_ENTRY_DOCUMENTS)
@@ -55,3 +72,45 @@ def test_support_documents_do_not_restore_superseded_mujoco_status() -> None:
         text = path.read_text(encoding="utf-8").lower()
         for stale_claim in stale_claims:
             assert stale_claim not in text, f"stale claim in {path.relative_to(ROOT)}"
+
+
+@pytest.mark.parametrize("relative_path", VISUAL_BOUNDARY_ENTRY_DOCUMENTS)
+def test_agent_entry_documents_link_the_visual_model_boundary(
+    relative_path: str,
+) -> None:
+    text = (ROOT / relative_path).read_text(encoding="utf-8")
+    assert "VISUAL_GENERATIVE_MODEL_BOUNDARY.md" in text
+
+
+def test_visual_model_boundary_preserves_the_owner_confirmed_distinctions() -> None:
+    text = (ROOT / "docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = text.lower().replace("–", "-").replace("—", "-")
+
+    assert "persistent canvas-wide wetness is not part of the target agent belief" in normalized
+    assert "ephemeral interaction/affordance latent" in normalized
+    assert "tone and oriented-boundary fidelity" in normalized
+    assert "registered, rectified pre-action" in normalized
+    assert "test or reject the visual vae" in normalized
+    assert "at planning time the future image is unavailable" in normalized
+
+
+def test_material_cvae_records_do_not_claim_to_implement_the_visual_vae() -> None:
+    records = (
+        ROOT / "docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md",
+        ROOT / "docs/CONDITIONAL_PATCH_VAE_OWNER_BRIEF_2026-08-11.md",
+        ROOT / "docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md",
+        ROOT / "docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md",
+    )
+    stale_attributions = (
+        "it is the\nfirst implementation of the owner's proposal",
+        "we implemented the first careful version of the vae idea you brought back",
+    )
+
+    for path in records:
+        text = path.read_text(encoding="utf-8").lower()
+        for stale_attribution in stale_attributions:
+            assert stale_attribution not in text, (
+                f"stale VAE attribution in {path.relative_to(ROOT)}"
+            )

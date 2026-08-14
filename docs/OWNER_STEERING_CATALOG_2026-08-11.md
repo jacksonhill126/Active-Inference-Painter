@@ -1502,11 +1502,13 @@ Labels:
 - **Type:** owner-supplied project history and candidate direction.
 - **Owner steering:** recalled that the earliest project used a pretrained VAE
   for low-level marks and asked whether it would be useful again.
-- **Effect/status:** selected on 2026-08-11 for a conditional local material-
-  transition VAE shadow experiment. The implemented model is offline-only,
-  has no policy influence, and is not yet the mesoscopic brushmark-order model.
-  It records the owner's distinction that material consequence prediction is
-  enabling rather than the main painting objective.
+- **Effect/status, corrected 2026-08-12:** the owner's proposal was a
+  stochastic, action-conditioned **visual mark-consequence model**, not a VAE
+  over coarse material-posterior channels. The 2026-08-11
+  `conditional-local-material-transition-cvae-v0` is a separate offline-only
+  experiment with no policy influence. Its negative result does not implement
+  or reject this owner direction. See
+  `VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 - **Evidence:** `CX-0804` message 78, turn
   `019ff12d-e547-7e20-88c5-7b2944e3b43e`.
 

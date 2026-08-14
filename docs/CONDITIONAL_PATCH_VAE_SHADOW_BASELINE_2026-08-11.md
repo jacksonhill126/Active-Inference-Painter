@@ -6,13 +6,21 @@ Status: implemented offline/shadow experiment; not policy-active
 
 Canonical model identifier: `conditional-local-material-transition-cvae-v0`
 
+## 2026-08-12 attribution correction
+
+This experiment is **not** the first implementation of the owner's original
+VAE proposal. That proposal was an action-conditioned visual mark-consequence
+model operating on fresh pre/post image patches. This experiment instead
+predicts coarse material-posterior channels. Its measurements remain valid for
+that declared target, but they do not test, implement, or reject the proposed
+visual VAE. The canonical distinction is
+`VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
+
 ## Decision
 
-The project now contains a conditional variational autoencoder (cVAE) ensemble
-as an experimental learned local material-transition likelihood. It is the
-first implementation of the owner's proposal to revisit the project's
-original pretrained VAE idea. The experiment is intentionally narrower than
-the eventual painting hierarchy:
+The project contains a conditional variational autoencoder (cVAE) ensemble as
+an experimental learned local material-transition likelihood. The experiment
+is intentionally narrower than the eventual painting hierarchy:
 
 - it models possible local material consequences of a selected mark;
 - it does not decide which part of the painting is disordered;
@@ -185,9 +193,10 @@ The model must remain shadow-only until a manifested, live-scale corpus shows:
 7. an explicit EFE integration design showing which cVAE outputs are
    likelihood, ambiguity, and epistemic-value terms.
 
-Passing these gates would justify a separate integration decision. It would
-not, by itself, establish the owner's proposed mesoscopic order/compressibility
-model. That later layer must explain whether a patch is economically described
+Passing these gates would justify a separate integration decision for this
+material-posterior model. It would not, by itself, establish the later
+mesoscopic order/compressibility model. That later layer must explain whether
+a patch is economically described
 as one or several coherent brush events and whether it is compatible with
 slower painting structure.
 
@@ -210,10 +219,12 @@ The full driver suite exceeded a two-minute command budget without producing a
 failure traceback; this is not counted as a full-suite pass. The directly
 affected driver callback is covered by a focused test.
 
-## Known limitations
+## Known limitations and measured update
 
-- No substantial cVAE has been trained yet; the passing tests establish code
-  and claim boundaries, not learned brush behavior.
+- AI-107 and AI-109 subsequently trained substantial instances. Across the
+  three-seed AI-109 comparison, the material cVAE did not improve beyond seed
+  variation and accumulated unstable recursive error. It remains shadow-only;
+  see `AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md`.
 - Current reconstruction target is the next posterior mean. Posterior log
   variance conditions recognition and prediction but is not yet integrated as
   uncertainty in the reconstruction observation measure.
@@ -226,3 +237,6 @@ affected driver callback is covered by a focused test.
   formal Bayesian neural-network posterior.
 - This one-step model does not yet infer multi-event brushmark explanations,
   patch compressibility, local order, or compatibility with global structure.
+- Most importantly, its target is a coarse material posterior rather than the
+  registered post-mark image. It is not the action-conditioned visual model
+  selected in `VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.

@@ -21,7 +21,7 @@ named approximation that adds the target posterior variance.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
@@ -39,6 +39,11 @@ from .conditional_patch_vae import (
 )
 from .config import PainterConfig
 from .models import LocalSpatialDynamicsEnsemble
+from .mixture_transition import (
+    LocalMixtureConfig,
+    LocalMixtureDynamicsEnsemble,
+    MIXTURE_CHECKPOINT_SCHEMA,
+)
 from .offline_train import _config_from_json, _pooled_training_config_payloads
 from .spatial_inference import spatial_observation_variance
 from .spatial_state import INDEPENDENT_MATERIAL_CHANNELS
@@ -50,8 +55,8 @@ from .trajectory_corpus import (
 )
 
 
-CALIBRATION_REPORT_SCHEMA = "local-transition-calibration-report-v1"
-CALIBRATION_PROTOCOL = "ai107-heldout-calibration-v1"
+CALIBRATION_REPORT_SCHEMA = "local-transition-calibration-report-v2"
+CALIBRATION_PROTOCOL = "ai107-heldout-calibration-v2-exact-mixture-intervals"
 LOG_TWO_PI = math.log(2.0 * math.pi)
 EPSILON = 1.0e-12
 ACTION_SUPPORT_THRESHOLD = 1.0e-2
@@ -100,6 +105,9 @@ class PredictionRecord:
     fixed_camera_likelihood_variance: np.ndarray
     mixture_nll: np.ndarray
     action_support: np.ndarray
+    component_residual: np.ndarray
+    component_variance: np.ndarray
+    component_log_weight: np.ndarray
 
 
 def calibration_metrics(
@@ -155,6 +163,113 @@ def validation_variance_scale(
     if not math.isfinite(raw):
         raise ValueError("validation variance scale is non-finite")
     return float(np.clip(raw, minimum, maximum))
+
+
+def _logsumexp(values: np.ndarray, axis: int) -> np.ndarray:
+    maximum = np.max(values, axis=axis, keepdims=True)
+    return np.squeeze(
+        maximum + np.log(np.exp(values - maximum).sum(axis=axis, keepdims=True)),
+        axis=axis,
+    )
+
+
+def _component_arrays(
+    records: Sequence[PredictionRecord],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not records:
+        raise ValueError("predictive mixture calibration needs records")
+    return tuple(
+        np.concatenate([getattr(record, field) for record in records], axis=-1).astype(
+            np.float64
+        )
+        for field in (
+            "component_residual",
+            "component_variance",
+            "component_log_weight",
+        )
+    )  # type: ignore[return-value]
+
+
+def mixture_variance_scale(
+    records: Sequence[PredictionRecord],
+    *,
+    minimum: float = 0.02,
+    maximum: float = 50.0,
+) -> float:
+    """Fit one component-variance scale by validation mixture NLL."""
+
+    residual, variance, log_weight = _component_arrays(records)
+    variance = np.clip(variance, EPSILON, 1.0e12)
+
+    def objective(log_scale: float) -> float:
+        scale = math.exp(log_scale)
+        component_log_density = log_weight - 0.5 * (
+            residual * residual / (variance * scale)
+            + np.log(variance * scale)
+            + LOG_TWO_PI
+        )
+        return float(np.mean(-_logsumexp(component_log_density, axis=0)))
+
+    left = math.log(minimum)
+    right = math.log(maximum)
+    for _ in range(48):
+        first = left + (right - left) / 3.0
+        second = right - (right - left) / 3.0
+        if objective(first) <= objective(second):
+            right = second
+        else:
+            left = first
+    return float(math.exp(0.5 * (left + right)))
+
+
+def predictive_mixture_calibration(
+    records: Sequence[PredictionRecord],
+    *,
+    variance_scale: float = 1.0,
+) -> dict[str, float | int | bool]:
+    """Evaluate NLL and central coverage through the full mixture CDF.
+
+    For a continuous predictive mixture, ``F(y)`` is uniform when calibrated.
+    A central alpha interval contains the observation exactly when its PIT lies
+    in ``[(1-alpha)/2, (1+alpha)/2]``. This avoids an invalid Gaussian moment
+    collapse for multimodal predictions.
+    """
+
+    residual, variance, log_weight = _component_arrays(records)
+    variance = np.clip(variance * float(variance_scale), EPSILON, 1.0e12)
+    normalized_log_weight = log_weight - _logsumexp(log_weight, axis=0)[None, ...]
+    z = residual / np.sqrt(variance)
+    cdf = 0.5 * (1.0 + torch.erf(torch.from_numpy(z) / math.sqrt(2.0)).numpy())
+    pit = (np.exp(normalized_log_weight) * cdf).sum(axis=0).reshape(-1)
+    component_log_density = normalized_log_weight - 0.5 * (
+        residual * residual / variance + np.log(variance) + LOG_TWO_PI
+    )
+    nll = -_logsumexp(component_log_density, axis=0).reshape(-1)
+    ordered = np.sort(pit)
+    count = ordered.size
+    lower = np.arange(count, dtype=np.float64) / max(1, count)
+    upper = np.arange(1, count + 1, dtype=np.float64) / max(1, count)
+    ks = max(float(np.max(np.abs(ordered - lower))), float(np.max(np.abs(ordered - upper))))
+
+    def coverage(alpha: float) -> float:
+        tail = 0.5 * (1.0 - alpha)
+        return float(np.mean((pit >= tail) & (pit <= 1.0 - tail)))
+
+    return {
+        "element_count": int(count),
+        "finite": bool(np.all(np.isfinite(pit)) and np.all(np.isfinite(nll))),
+        "variance_scale": float(variance_scale),
+        "mean_mixture_nll_nats": float(np.mean(nll)),
+        "pit_mean": float(np.mean(pit)),
+        "pit_variance": float(np.var(pit)),
+        "uniform_reference_pit_mean": 0.5,
+        "uniform_reference_pit_variance": 1.0 / 12.0,
+        "pit_ks_distance_from_uniform": ks,
+        "coverage_50": coverage(0.50),
+        "coverage_80": coverage(0.80),
+        "coverage_90": coverage(0.90),
+        "coverage_95": coverage(0.95),
+    }
 
 
 def precision_inventory(
@@ -321,6 +436,27 @@ def _masked_numpy(tensor: torch.Tensor, mask: torch.Tensor) -> list[np.ndarray]:
     ]
 
 
+def _masked_component_numpy(
+    tensor: torch.Tensor,
+    mask: torch.Tensor,
+) -> list[np.ndarray]:
+    """Extract [component, channel, valid-cell] arrays from padded batches."""
+
+    channel_count = len(INDEPENDENT_MATERIAL_CHANNELS)
+    array = tensor[:, :, :channel_count].detach().cpu().numpy()
+    valid = mask.detach().cpu().numpy().astype(bool)
+    return [
+        # Slice the batch axis before applying the 2-D boolean mask.  Combining
+        # both operations in one NumPy index moves the advanced-indexed cell
+        # axis ahead of the component/channel axes and silently scrambles the
+        # predictive mixture.
+        array[:, index][:, :, valid[index, 0]].reshape(
+            array.shape[0], channel_count, -1
+        )
+        for index in range(array.shape[1])
+    ]
+
+
 def _fixed_camera_variance(
     batch_material: torch.Tensor,
     mask: torch.Tensor,
@@ -363,6 +499,9 @@ def _prediction_records_from_tensors(
     ensemble: torch.Tensor,
     mixture_nll: torch.Tensor,
     config: PainterConfig,
+    component_means: torch.Tensor,
+    component_logvars: torch.Tensor,
+    component_log_weights: torch.Tensor,
 ) -> list[PredictionRecord]:
     target = batch.next_material[:, : len(INDEPENDENT_MATERIAL_CHANNELS)]
     target_logvar = batch.next_material_logvar[:, : len(INDEPENDENT_MATERIAL_CHANNELS)]
@@ -374,6 +513,12 @@ def _prediction_records_from_tensors(
     target_variance_np = _masked_numpy(target_logvar.exp(), mask)
     mixture_np = _masked_numpy(mixture_nll, mask)
     fixed_np = _fixed_camera_variance(batch.material, mask, config)
+    component_target = target.unsqueeze(0)
+    component_residual_np = _masked_component_numpy(
+        component_target - component_means, mask
+    )
+    component_variance_np = _masked_component_numpy(component_logvars.exp(), mask)
+    component_log_weight_np = _masked_component_numpy(component_log_weights, mask)
     valid_masks = batch.mask.detach().cpu().numpy().astype(bool)
     action_footprint = batch.action[:, 0].detach().cpu().numpy()
     support_np = [
@@ -394,6 +539,9 @@ def _prediction_records_from_tensors(
                 fixed_camera_likelihood_variance=fixed_np[index],
                 mixture_nll=mixture_np[index],
                 action_support=support_np[index],
+                component_residual=component_residual_np[index],
+                component_variance=component_variance_np[index],
+                component_log_weight=component_log_weight_np[index],
             )
         )
     return result
@@ -421,6 +569,9 @@ def predict_cnn(
         learned = logvars.exp().mean(dim=0)
         ensemble = means.var(dim=0, unbiased=False)
         mixture = _normal_mixture_nll(batch.next_material[:, :channels], means, logvars)
+        component_log_weights = torch.full_like(
+            means, -math.log(means.shape[0])
+        )
         predictions.extend(
             _prediction_records_from_tensors(
                 chunk,
@@ -431,6 +582,9 @@ def predict_cnn(
                 ensemble,
                 mixture,
                 config,
+                means,
+                logvars,
+                component_log_weights,
             )
         )
     return predictions
@@ -479,6 +633,11 @@ def predict_cvae(
             means.reshape(-1, *means.shape[2:]),
             logvars.reshape(-1, *logvars.shape[2:]),
         )
+        component_means = means.reshape(-1, *means.shape[2:])
+        component_logvars = logvars.reshape(-1, *logvars.shape[2:])
+        component_log_weights = torch.full_like(
+            component_means, -math.log(component_means.shape[0])
+        )
         predictions.extend(
             _prediction_records_from_tensors(
                 chunk,
@@ -489,6 +648,54 @@ def predict_cvae(
                 ensemble,
                 mixture,
                 config,
+                component_means,
+                component_logvars,
+                component_log_weights,
+            )
+        )
+    return predictions
+
+
+@torch.no_grad()
+def predict_mixture(
+    model: LocalMixtureDynamicsEnsemble,
+    records: Sequence[CalibrationRecord],
+    *,
+    config: PainterConfig,
+    device: torch.device,
+    batch_size: int,
+) -> list[PredictionRecord]:
+    model.eval()
+    predictions: list[PredictionRecord] = []
+    for start in range(0, len(records), max(1, int(batch_size))):
+        chunk = records[start : start + max(1, int(batch_size))]
+        batch = make_conditional_patch_batch([item.example for item in chunk], device)
+        moments = model.predictive_moments(batch.material, batch.action, batch.mask)
+        mixture = model.exact_ensemble_mixture_nll(
+            batch.material, batch.action, batch.next_material, batch.mask
+        )
+        independent = len(INDEPENDENT_MATERIAL_CHANNELS)
+        component_means, component_logvars, component_log_weights = model.forward_masked(
+            batch.material, batch.action, batch.mask
+        )
+        component_means = component_means[:, :, :, :independent].flatten(0, 1)
+        component_logvars = component_logvars[:, :, :, :independent].flatten(0, 1)
+        component_log_weights = (
+            component_log_weights[:, :, :, :independent] - math.log(len(model.members))
+        ).flatten(0, 1)
+        predictions.extend(
+            _prediction_records_from_tensors(
+                chunk,
+                batch,
+                moments.mean[:, :independent],
+                moments.likelihood_variance[:, :independent],
+                torch.zeros_like(moments.likelihood_variance[:, :independent]),
+                moments.epistemic_variance[:, :independent],
+                mixture,
+                config,
+                component_means,
+                component_logvars,
+                component_log_weights,
             )
         )
     return predictions
@@ -570,6 +777,7 @@ def _summary(
     records: Sequence[PredictionRecord],
     *,
     variance_scale: float | None = None,
+    mixture_scale: float | None = None,
 ) -> dict[str, object]:
     residual = _flatten(records, "residual")
     variants = {
@@ -632,6 +840,20 @@ def _summary(
         ),
         "mean_variance_components": components,
         "moment_gaussian_variants": variants,
+        "predictive_mixture_calibration": {
+            "unscaled": predictive_mixture_calibration(records),
+            "validation_scaled": (
+                predictive_mixture_calibration(
+                    records, variance_scale=float(mixture_scale)
+                )
+                if mixture_scale is not None
+                else None
+            ),
+            "definition": (
+                "central interval coverage evaluated through the exact CNN/mixture "
+                "Gaussian-mixture CDF or finite-sample cVAE prior-predictive mixture CDF"
+            ),
+        },
         "action_support_diagnostic": {
             "footprint_channel_threshold": ACTION_SUPPORT_THRESHOLD,
             "threshold_selection": (
@@ -693,18 +915,22 @@ def _gate_summary(summary: Mapping[str, object]) -> dict[str, object]:
     assert isinstance(variants, dict)
     chosen = variants.get("validation_scaled_model_total", variants["model_total"])
     assert isinstance(chosen, dict)
+    mixture_payload = summary["predictive_mixture_calibration"]
+    assert isinstance(mixture_payload, dict)
+    mixture_chosen = mixture_payload.get("validation_scaled") or mixture_payload["unscaled"]
+    assert isinstance(mixture_chosen, dict)
     checks = {
-        "finite": bool(chosen["finite"]),
+        "finite": bool(chosen["finite"]) and bool(mixture_chosen["finite"]),
         "absolute_signed_mean_z": abs(float(chosen["signed_mean_z"]))
         <= float(M2_THRESHOLDS["maximum_absolute_signed_mean_z"]),
         "mean_squared_z": float(M2_THRESHOLDS["minimum_mean_squared_z"])
         <= float(chosen["mean_squared_z"])
         <= float(M2_THRESHOLDS["maximum_mean_squared_z"]),
-        "coverage_90": float(M2_THRESHOLDS["minimum_90_interval_coverage"])
-        <= float(chosen["coverage_90"])
+        "predictive_mixture_coverage_90": float(M2_THRESHOLDS["minimum_90_interval_coverage"])
+        <= float(mixture_chosen["coverage_90"])
         <= float(M2_THRESHOLDS["maximum_90_interval_coverage"]),
-        "coverage_50": float(M2_THRESHOLDS["minimum_50_interval_coverage"])
-        <= float(chosen["coverage_50"])
+        "predictive_mixture_coverage_50": float(M2_THRESHOLDS["minimum_50_interval_coverage"])
+        <= float(mixture_chosen["coverage_50"])
         <= float(M2_THRESHOLDS["maximum_50_interval_coverage"]),
     }
     return {"checks": checks, "passes_all": bool(all(checks.values()))}
@@ -731,6 +957,153 @@ def _load_cvae(path: Path, device: torch.device) -> tuple[ConditionalPatchVAEEns
     return model, payload
 
 
+def _load_mixture(
+    path: Path,
+    device: torch.device,
+) -> tuple[LocalMixtureDynamicsEnsemble, dict[str, object]]:
+    payload = torch.load(path, map_location=device, weights_only=False)
+    if payload.get("schema") != MIXTURE_CHECKPOINT_SCHEMA:
+        raise ValueError("unsupported local mixture checkpoint")
+    model_config = payload.get("model_config")
+    if not isinstance(model_config, dict):
+        raise ValueError("mixture checkpoint has no model config")
+    model = LocalMixtureDynamicsEnsemble(LocalMixtureConfig(**model_config)).to(device)
+    model.load_state_dict(payload["model_state_dict"])
+    return model, payload
+
+
+@torch.no_grad()
+def multi_step_rollout_metrics(
+    model,
+    shards: Sequence[TrajectoryShard],
+    *,
+    model_kind: str,
+    config: PainterConfig,
+    device: torch.device,
+    horizons: Sequence[int],
+    latent_samples: int,
+    seed: int,
+) -> dict[str, object]:
+    """Roll a learned local likelihood mean forward without state resets.
+
+    Each start point is initialized from its camera-derived posterior, then the
+    learned mean is recursively inserted into later local patches. Errors are
+    evaluated over the cumulative selected-action footprint, not untouched
+    canvas background. This remains a posterior-trajectory simulation metric;
+    it does not read exact process canvas state.
+    """
+
+    requested = sorted({int(value) for value in horizons if int(value) > 0})
+    if not requested:
+        raise ValueError("multi-step evaluation needs a positive horizon")
+    accumulators = {
+        horizon: {"squared": 0.0, "absolute": 0.0, "elements": 0, "windows": 0}
+        for horizon in requested
+    }
+    model.eval()
+    for shard_index, shard in enumerate(shards):
+        examples = conditional_patch_examples_from_shards([shard], config)
+        if len(examples) != shard.transition_count:
+            raise ValueError("trajectory patch count does not align for rollout")
+        for start in range(shard.transition_count):
+            maximum = min(max(requested), shard.transition_count - start)
+            rolling_material = np.asarray(shard.state_material[start], dtype=np.float32).copy()
+            rolling_logvar = np.asarray(shard.state_logvar[start], dtype=np.float32).copy()
+            cumulative_support = np.zeros(rolling_material.shape[-2:], dtype=bool)
+            for offset in range(maximum):
+                index = start + offset
+                source = examples[index]
+                rows, cols = source.bounds.slices()
+                example = replace(
+                    source,
+                    material=rolling_material[:, rows, cols].copy(),
+                    material_logvar=rolling_logvar[:, rows, cols].copy(),
+                )
+                batch = make_conditional_patch_batch([example], device)
+                if model_kind == "cnn":
+                    means, logvars = model.forward_masked(
+                        batch.material, batch.action, batch.mask
+                    )
+                    prediction = means.mean(dim=0)
+                    variance = logvars.exp().mean(dim=0) + means.var(
+                        dim=0, unbiased=False
+                    )
+                elif model_kind == "cvae":
+                    member_means: list[torch.Tensor] = []
+                    member_logvars: list[torch.Tensor] = []
+                    for member_index, member in enumerate(model.members):
+                        generator = torch.Generator(device=device.type).manual_seed(
+                            int(seed)
+                            + 100_003 * shard_index
+                            + 1_009 * start
+                            + 97 * offset
+                            + 17 * member_index
+                        )
+                        means, logvars = member.prior_predictions(
+                            batch, samples=int(latent_samples), generator=generator
+                        )
+                        member_means.append(means)
+                        member_logvars.append(logvars)
+                    means = torch.stack(member_means, dim=0)
+                    logvars = torch.stack(member_logvars, dim=0)
+                    member_mean = means.mean(dim=1)
+                    prediction = member_mean.mean(dim=0)
+                    variance = (
+                        logvars.exp().mean(dim=(0, 1))
+                        + means.var(dim=1, unbiased=False).mean(dim=0)
+                        + member_mean.var(dim=0, unbiased=False)
+                    )
+                elif model_kind == "mixture":
+                    moments = model.predictive_moments(
+                        batch.material, batch.action, batch.mask
+                    )
+                    prediction = moments.mean
+                    variance = moments.total_variance
+                else:
+                    raise ValueError(f"unknown multi-step model kind: {model_kind}")
+                height, width = source.bounds.height, source.bounds.width
+                predicted_patch = prediction[0, :, :height, :width].detach().cpu().numpy()
+                predicted_variance = variance[0, :, :height, :width].detach().cpu().numpy()
+                rolling_material[:, rows, cols] = predicted_patch
+                rolling_logvar[:, rows, cols] = np.log(
+                    np.clip(predicted_variance, EPSILON, 1.0e6)
+                )
+                cumulative_support[rows, cols] |= source.action[0] >= ACTION_SUPPORT_THRESHOLD
+                horizon = offset + 1
+                if horizon not in accumulators:
+                    continue
+                target = np.asarray(shard.next_material[index, :4], dtype=np.float64)
+                residual = rolling_material[:4].astype(np.float64) - target
+                support = cumulative_support
+                selected = residual[:, support]
+                accumulator = accumulators[horizon]
+                accumulator["squared"] += float(np.square(selected).sum())
+                accumulator["absolute"] += float(np.abs(selected).sum())
+                accumulator["elements"] += int(selected.size)
+                accumulator["windows"] += 1
+    result: dict[str, object] = {}
+    for horizon, accumulator in accumulators.items():
+        count = int(accumulator["elements"])
+        result[str(horizon)] = {
+            "horizon_marks": horizon,
+            "window_count": int(accumulator["windows"]),
+            "element_count": count,
+            "rmse": (
+                math.sqrt(float(accumulator["squared"]) / count) if count else None
+            ),
+            "mae": float(accumulator["absolute"]) / count if count else None,
+        }
+    return {
+        "metric_region": (
+            "cumulative action footprint at raster footprint >= "
+            f"{ACTION_SUPPORT_THRESHOLD}"
+        ),
+        "state_initialization": "camera-derived posterior at every rollout window start",
+        "process_truth_used": False,
+        "horizons": result,
+    }
+
+
 @torch.no_grad()
 def _amount_support_stress(
     model,
@@ -752,7 +1125,7 @@ def _amount_support_stress(
             ood_mean, _ = model.forward_masked(batch.material, shifted.action, batch.mask)
             ind_epistemic = ind_mean[:, :, :4].var(dim=0, unbiased=False)
             ood_epistemic = ood_mean[:, :, :4].var(dim=0, unbiased=False)
-        else:
+        elif model_kind == "cvae":
             member_ind: list[torch.Tensor] = []
             member_ood: list[torch.Tensor] = []
             for member_index, member in enumerate(model.members):
@@ -765,6 +1138,17 @@ def _amount_support_stress(
                 member_ood.append(ood.mean(dim=0))
             ind_epistemic = torch.stack(member_ind)[:, :, :4].var(dim=0, unbiased=False)
             ood_epistemic = torch.stack(member_ood)[:, :, :4].var(dim=0, unbiased=False)
+        elif model_kind == "mixture":
+            ind_moments = model.predictive_moments(
+                batch.material, batch.action, batch.mask
+            )
+            ood_moments = model.predictive_moments(
+                batch.material, shifted.action, batch.mask
+            )
+            ind_epistemic = ind_moments.epistemic_variance[:, :4]
+            ood_epistemic = ood_moments.epistemic_variance[:, :4]
+        else:
+            raise ValueError(f"unknown amount-support model kind: {model_kind}")
         ind_values.append(_masked_numpy(ind_epistemic, batch.mask)[0].reshape(-1))
         ood_values.append(_masked_numpy(ood_epistemic, batch.mask)[0].reshape(-1))
     result = ood_disagreement_summary(np.concatenate(ind_values), np.concatenate(ood_values))
@@ -866,7 +1250,7 @@ def run_calibration(args: argparse.Namespace) -> dict[str, object]:
     )
     loaded, manifest, corpus_config = _loaded_splits(args.manifest)
     records = {
-        split: _records(loaded[split], corpus_config) for split in ("validation", "test")
+        split: _records(loaded[split], corpus_config) for split in SPLIT_NAMES
     }
     if not records["validation"] or not records["test"]:
         raise ValueError("calibration requires non-empty validation and test splits")
@@ -882,21 +1266,28 @@ def run_calibration(args: argparse.Namespace) -> dict[str, object]:
                 device=device,
                 batch_size=args.batch_size,
             )
-            for split in ("validation", "test")
+            for split in SPLIT_NAMES
         }
         scale = validation_variance_scale(
             _flatten(predictions["validation"], "residual"),
             _variance(predictions["validation"], "model_total"),
         )
+        mixture_scale = mixture_variance_scale(predictions["validation"])
         summaries = {
-            split: _summary(predictions[split], variance_scale=scale)
-            for split in ("validation", "test")
+            split: _summary(
+                predictions[split],
+                variance_scale=scale,
+                mixture_scale=mixture_scale,
+            )
+            for split in SPLIT_NAMES
         }
         model_reports["cnn"] = {
             "checkpoint": str(Path(args.cnn_checkpoint).resolve()),
             "validation_fitted_variance_scale": scale,
+            "validation_fitted_mixture_component_variance_scale": mixture_scale,
             "validation": summaries["validation"],
             "test": summaries["test"],
+            "train": summaries["train"],
             "test_strata": _strata(predictions["test"]),
             "test_provisional_m2_calibration_gate": _gate_summary(summaries["test"]),
             "amount_support_stress": _amount_support_stress(
@@ -924,6 +1315,19 @@ def run_calibration(args: argparse.Namespace) -> dict[str, object]:
                     "fixed warm-up likelihood variance; not learned by this checkpoint"
                 ),
             },
+            "multi_step_rollout": {
+                split: multi_step_rollout_metrics(
+                    model,
+                    loaded[split],
+                    model_kind="cnn",
+                    config=corpus_config,
+                    device=device,
+                    horizons=getattr(args, "rollout_horizons", (1, 2, 4, 8)),
+                    latent_samples=getattr(args, "rollout_latent_samples", 4),
+                    seed=int(args.seed) + index * 10_000,
+                )
+                for index, split in enumerate(SPLIT_NAMES)
+            },
         }
 
     if args.cvae_checkpoint:
@@ -938,22 +1342,29 @@ def run_calibration(args: argparse.Namespace) -> dict[str, object]:
                 latent_samples=args.latent_samples,
                 seed=args.seed + (0 if split == "validation" else 100_000),
             )
-            for split in ("validation", "test")
+            for split in SPLIT_NAMES
         }
         scale = validation_variance_scale(
             _flatten(predictions["validation"], "residual"),
             _variance(predictions["validation"], "model_total"),
         )
+        mixture_scale = mixture_variance_scale(predictions["validation"])
         summaries = {
-            split: _summary(predictions[split], variance_scale=scale)
-            for split in ("validation", "test")
+            split: _summary(
+                predictions[split],
+                variance_scale=scale,
+                mixture_scale=mixture_scale,
+            )
+            for split in SPLIT_NAMES
         }
         model_reports["cvae"] = {
             "checkpoint": str(Path(args.cvae_checkpoint).resolve()),
             "latent_prior_samples_per_member": int(args.latent_samples),
             "validation_fitted_variance_scale": scale,
+            "validation_fitted_mixture_component_variance_scale": mixture_scale,
             "validation": summaries["validation"],
             "test": summaries["test"],
+            "train": summaries["train"],
             "test_strata": _strata(predictions["test"]),
             "test_provisional_m2_calibration_gate": _gate_summary(summaries["test"]),
             "amount_support_stress": _amount_support_stress(
@@ -967,6 +1378,84 @@ def run_calibration(args: argparse.Namespace) -> dict[str, object]:
             "precision_inventory": {
                 "status": "not_present_in_shadow_model_checkpoint",
                 "boundary": "shadow cVAE predicts transitions and does not own EFE precisions",
+            },
+            "multi_step_rollout": {
+                split: multi_step_rollout_metrics(
+                    model,
+                    loaded[split],
+                    model_kind="cvae",
+                    config=corpus_config,
+                    device=device,
+                    horizons=getattr(args, "rollout_horizons", (1, 2, 4, 8)),
+                    latent_samples=getattr(args, "rollout_latent_samples", 4),
+                    seed=int(args.seed) + 50_000 + index * 10_000,
+                )
+                for index, split in enumerate(SPLIT_NAMES)
+            },
+        }
+
+    if args.mixture_checkpoint:
+        model, payload = _load_mixture(Path(args.mixture_checkpoint), device)
+        predictions = {
+            split: predict_mixture(
+                model,
+                records[split],
+                config=corpus_config,
+                device=device,
+                batch_size=args.batch_size,
+            )
+            for split in SPLIT_NAMES
+        }
+        scale = validation_variance_scale(
+            _flatten(predictions["validation"], "residual"),
+            _variance(predictions["validation"], "model_total"),
+        )
+        mixture_scale = mixture_variance_scale(predictions["validation"])
+        summaries = {
+            split: _summary(
+                predictions[split],
+                variance_scale=scale,
+                mixture_scale=mixture_scale,
+            )
+            for split in SPLIT_NAMES
+        }
+        model_reports["mixture"] = {
+            "checkpoint": str(Path(args.mixture_checkpoint).resolve()),
+            "validation_fitted_variance_scale": scale,
+            "validation_fitted_mixture_component_variance_scale": mixture_scale,
+            "train": summaries["train"],
+            "validation": summaries["validation"],
+            "test": summaries["test"],
+            "test_strata": _strata(predictions["test"]),
+            "test_provisional_m2_calibration_gate": _gate_summary(summaries["test"]),
+            "amount_support_stress": _amount_support_stress(
+                model,
+                records["test"],
+                model_kind="mixture",
+                device=device,
+                latent_samples=args.latent_samples,
+                seed=args.seed,
+            ),
+            "precision_inventory": {
+                "status": "not_present_in_shadow_model_checkpoint",
+                "boundary": "shadow mixture likelihood does not own EFE precisions",
+            },
+            "mixture_semantics": (
+                "normalized identity-plus-consequence Gaussian mixture; learned "
+                "mixing probabilities and component variances"
+            ),
+            "multi_step_rollout": {
+                split: multi_step_rollout_metrics(
+                    model,
+                    loaded[split],
+                    model_kind="mixture",
+                    config=corpus_config,
+                    device=device,
+                    horizons=getattr(args, "rollout_horizons", (1, 2, 4, 8)),
+                    latent_samples=getattr(args, "rollout_latent_samples", 4),
+                    seed=int(args.seed) + 90_000 + index * 10_000,
+                )
+                for index, split in enumerate(SPLIT_NAMES)
             },
         }
 
@@ -1029,11 +1518,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--cnn-checkpoint", default=None)
     parser.add_argument("--cvae-checkpoint", default=None)
+    parser.add_argument("--mixture-checkpoint", default=None)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--latent-samples", type=int, default=16)
     parser.add_argument("--seed", type=int, default=107)
+    parser.add_argument("--rollout-horizons", type=int, nargs="+", default=(1, 2, 4, 8))
+    parser.add_argument("--rollout-latent-samples", type=int, default=4)
     parser.add_argument("--motor-ood-cnn-checkpoint", default=None)
     parser.add_argument("--motor-ood-id-manifest", default=None)
     parser.add_argument("--motor-ood-shift-manifest", default=None)

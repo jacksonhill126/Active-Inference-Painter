@@ -3,6 +3,14 @@
 This tracker uses milestone-scale tasks, roughly 1-5 day chunks. It is a
 planning artifact, not a replacement for the research charter.
 
+> **Perceptual dependency rule (2026-08-12):** tasks involving perception,
+> local transition learning, canvas/composition latents, counterfactual mark
+> prediction, or corpus schemas must follow
+> `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`. The detailed material process is
+> retained; the target persistent agent hierarchy is visual. The implemented
+> 16x16 six-channel material posterior and its material cVAE are baselines, not
+> the selected representation or the owner's original visual VAE.
+
 ## Status Vocabulary
 
 - `Backlog`: not started.
@@ -275,19 +283,33 @@ brief.
 
 ### AI-109 Establish predictive learning curves
 
-Status: `Ready`
+Status: `Active`
 Track: Modeling/Validation  
 Depends on: AI-107, AI-108  
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: Data/capacity curves determine whether current local and hierarchy models are underfitting, data-limited, or overfitting.
-Notes: AI-107 and AI-108 are complete. AI-107 found real held-out density
-improvement but failed interval-shape and meaningful motor-OOD gates. Learning
-curves must now separate data limitation, capacity limitation, seed variance,
-and likelihood-family misspecification. The frozen AI-107 evaluator provides
-the comparison protocol; include the current CNN/cVAE and test an explicit
-near-no-change plus continuous-consequence likelihood as a hypothesis, not an
-assumed replacement.
+Notes: The local-model branch was measured on 2026-08-12 with 27 unique runs,
+three seeds, nested 3/6/10-trajectory training subsets, fixed 3-trajectory
+validation/test splits, CNN capacity and ensemble axes, the shadow cVAE, and a
+normalized identity-plus-consequence mixture. More data modestly improved CNN
+test NLL, generic width/depth did not, five ensemble members improved density,
+and the material-posterior cVAE did not materially outperform the CNN. That
+comparison did not train on registered image patches and does not test the
+owner's proposed visual cVAE. The mixture improved mean
+test NLL by 1.392 nats per independent material cell-channel and retained low
+eight-mark rollout error, but every seed still failed exact predictive-mixture
+calibration; it remains shadow-only. The hierarchy branch is not yet
+admissible because AI-108 contains zero policy-selected stops: every endpoint
+is a fixed-horizon truncation. A 2026-08-12 collection pilot produced six
+policy-selected stops and two truncations at a 192-step cap, demonstrating
+that genuine-stop collection is feasible. It retained coarse final posteriors,
+not the registered pre/post image stream required by the selected hierarchy.
+AI-109 remains active until a trajectory-isolated **visual** terminal corpus
+supports hierarchy data/capacity/seed curves. Do not relabel truncations as
+completed paintings. See
+`docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md` and the owner
+brief.
 
 ### AI-110 Resolve the composition-preference closed loop
 
@@ -303,9 +325,13 @@ with slower painting structure, then prefers predicted outcomes that reduce
 that posterior predictive mismatch. The material-transition predictor may
 forecast mark consequences but is not itself the painting objective.
 Notes: The older scalar compression-gap implementation remains provisional and
-must not be treated as acceptance of this broader formulation. The 2026-08-11
-conditional patch cVAE is a shadow low-level material likelihood only; it is
-not a contour/composition layer and does not influence policy selection.
+must not be treated as acceptance of this broader formulation. AI-110 cannot
+be resolved against the 16x16 material-posterior hierarchy: first establish the
+visual tone/edge/mass representation and genuine-stop visual corpus required by
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`. The 2026-08-11 conditional material
+patch cVAE is a shadow low-level likelihood only; it is neither the owner's
+visual VAE nor a contour/composition layer and does not influence policy
+selection.
 
 ### AI-111 Separate proposal distributions from policy priors
 
@@ -388,7 +414,10 @@ Track: Sensors/Active Inference
 Depends on: M1  
 Owner: Jackson/Codex  
 Estimate: 2 days  
-Acceptance: Fixed camera, encoders, current, and contact observations have declared channels, units, rates, noise, and physical analogues.
+Acceptance: Fixed camera, encoders, current, and contact observations have
+declared channels, units, rates, noise, and physical analogues; the corpus
+contract retains registered rectified pre/post images, timing/calibration/mask
+provenance, action crops, brush/action/motor context, and termination provenance.
 Notes: Boundary enforcement began 2026-07-28: the live default is now
 `sensor-boundary-v0`, which skips oracle bootstrap and blocks policy inference,
 learning, and planner-state construction from `ArmPainterSim`. The legacy
@@ -437,7 +466,9 @@ Track: Generative Process/Sensors
 Depends on: AI-201, T-101, T-102  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
-Acceptance: The process emits sensor-equivalent observations while hidden material arrays remain evaluation-only.
+Acceptance: The process emits declared provisional camera observations while
+hidden material arrays remain evaluation-only; sensor-equivalence claims wait
+for purchased-camera calibration and validation.
 Notes: Geometry/preprocessing work began 2026-07-29 with forward/inverse
 canvas homographies, frustum masks, image rectification, a camera-clear park,
 arbitrary world-point projection for an edge-profile camera, and XML-derived
@@ -481,7 +512,10 @@ Track: Generative Model
 Depends on: AI-201, AI-202  
 Owner: Jackson/Codex  
 Estimate: 3-5 days  
-Acceptance: Canvas, proprioceptive, current, and contact likelihoods are explicit, calibrated, and avoid double-counting deterministic transforms.
+Acceptance: Registered-image, action-conditioned visual-transition,
+proprioceptive, current, and contact likelihoods are explicit, calibrated, and
+avoid double-counting deterministic transforms such as image intensity and its
+edge map.
 Notes: A bounded body-likelihood slice was added 2026-07-29 as
 `body-inference-v0`: encoder position/velocity and optional contact-switch/force
 factors are explicit and require a versioned, nondefault precision profile.
@@ -507,7 +541,10 @@ Track: Variational Inference
 Depends on: AI-203  
 Owner: Jackson/Codex  
 Estimate: 4-6 days  
-Acceptance: An explicit compact posterior fuses transition priors with permitted observations and reports calibrated hidden-state uncertainty.
+Acceptance: An explicit compact visual/body posterior fuses transition priors
+with permitted observations and reports calibrated uncertainty. Persistent
+canvas-wide wetness is excluded; any material interaction latent is local,
+action-conditioned, and ephemeral.
 Notes: `BodyStateEstimator` now maps `PhysicalSensorPacket` to
 `BodyBeliefSnapshot` with a constant-velocity transition prior, conjugate
 Gaussian/Bernoulli updates, and global/per-factor VFE decomposition. It never
@@ -563,29 +600,39 @@ likelihood remain part of AI-204/AI-205 acceptance. On 2026-07-29 the
 six-aggregate summary planner was formally marked
 `obsolete_compatibility_fixture`; it is not an acceptable compact posterior
 for AI-204.
+Direction correction 2026-08-12: the frozen-state and sensor-boundary work is
+retained, but completion no longer means expanding the persistent canvas-wide
+material posterior. The selected target is visual/body inference with an
+optional ephemeral local interaction latent from fresh image evidence; see
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
-### AI-205 Align local dynamics training with live execution
+### AI-205 Align local visual dynamics training with live execution
 
 Status: `Blocked`  
 Track: Transition Model/Data  
 Depends on: AI-108, AI-202  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
-Acceptance: Corpus and live execution share physical pixel scale, support geometry, and held-out calibration.
+Acceptance: Corpus and live execution share camera registration, physical
+pixel scale, action-support geometry, and held-out visual calibration. The
+corpus retains registered pre/post image patches and required provenance.
 Notes: The 2026-08-11 `conditional-local-material-transition-cvae-v0` can be
 trained offline on train-only v2 trajectory patches and reports held-out
 metrics beside the CNN baseline. It remains shadow-only and has not been
 admitted to live/counterfactual dynamics; physical pixel-scale equivalence and
-held-out calibration are still absent.
+held-out calibration are still absent. It is a material-posterior experiment,
+not completion or rejection of the visual-dynamics task.
 
-### AI-206 Validate multi-step material prediction
+### AI-206 Validate multi-step visual prediction
 
 Status: `Blocked`  
 Track: Transition Model/Validation  
 Depends on: AI-204, AI-205  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
-Acceptance: One-mark through passage-length rollouts have measured error growth and uncertainty coverage under an approved approximation.
+Acceptance: One-mark through passage-length visual rollouts have measured
+normalized likelihood, tone/boundary fidelity, error growth, and uncertainty
+calibration under an approved approximation.
 
 ### AI-207 Define the multiscale latent clocks and messages
 
@@ -600,7 +647,9 @@ predictive likelihoods rather than replace the obsolete six summaries with
 another hand-selected global feature list. Hand-defined material variables are
 restricted to local physical prediction, diagnostics, or declared terminal
 readouts/preferences. Latents require held-out predictive and temporal
-intervention evidence.
+intervention evidence. Persistent canvas-wide wetness is prohibited in the
+target hierarchy; an ephemeral local interaction latent may be inferred from a
+fresh target image when it earns predictive necessity.
 
 ### AI-208 Make the global canvas latent predictively necessary
 
@@ -612,7 +661,9 @@ Estimate: 3-5 days
 Acceptance: A modest hierarchy improves held-out future prediction and responds correctly to spatial interventions without collapse.
 Notes: `spatial_material` is an interim low-level baseline, not the accepted
 global representation. AI-208 must establish predictive necessity for flexible
-learned canvas latents before they enter painting-level inference claims.
+learned visual tone/edge/mass latents before they enter painting-level inference
+claims, including tests that oblique and curved boundaries survive compression
+without square-cell artifacts.
 
 ### AI-209 Replace or demote deterministic relational beliefs
 
@@ -709,7 +760,10 @@ Track: Active Vision/Generative Process
 Depends on: M2  
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
-Acceptance: Gaze state, sensor geometry, fovea, periphery, rates, latency, uncertainty, and accessible samples are explicitly defined.
+Acceptance: Attention is defined as a budgeted trajectory of spatial access,
+scale, camera support, timing, and precision; crop/tile realization, sensor
+geometry, periphery, latency, uncertainty, non-leakage, and accessible samples
+are explicitly defined without assuming a smooth eye-like crop path.
 
 ### AI-302 Implement foveal and peripheral observations
 
@@ -729,16 +783,18 @@ Owner: Jackson/Codex
 Estimate: 4-6 days  
 Acceptance: Foveated likelihood updates and unobserved transition uncertainty produce calibrated partial-observation posteriors.
 
-### AI-304 Define gaze policies and their EFE
+### AI-304 Define attention policies and their EFE
 
 Status: `Blocked`  
 Track: Active Inference/Policy  
 Depends on: AI-105, AI-303  
 Owner: Jackson/Codex  
 Estimate: 3-5 days  
-Acceptance: Gaze risk, ambiguity, and information gain are derived, separately logged, and resolve controlled reducible ambiguity without saliency rewards.
+Acceptance: Attention risk, ambiguity, and information gain are derived,
+separately logged, and resolve controlled reducible ambiguity without saliency
+rewards; allocation is distinguished from its crop/tile sensor realization.
 
-### AI-305 Factor gaze, mark, passage, and motor policies
+### AI-305 Factor attention, mark, passage, and motor policies
 
 Status: `Blocked`  
 Track: Hierarchical Active Inference  

@@ -140,6 +140,51 @@ class TrajectoryShard:
         return int(self.action.shape[0])
 
 
+def _stop_decision_evidence(
+    decisions: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Summarize and retain the observed stop comparisons for one episode."""
+
+    trace = [dict(decision) for decision in decisions]
+    posteriors = [float(item["stop_posterior"]) for item in trace]
+    coverages = [float(item["believed_material_coverage"]) for item in trace]
+    ranks = [int(item["stop_rank"]) for item in trace]
+    log_odds = [
+        float(item["stop_log_posterior_odds_vs_best_continuation"])
+        for item in trace
+        if item.get("stop_log_posterior_odds_vs_best_continuation") is not None
+    ]
+    return {
+        "schema": "trajectory-stop-decision-evidence-v1",
+        "role": (
+            "read-only policy-posterior evidence; not a preference, reward, "
+            "likelihood, policy prior, or termination override"
+        ),
+        "selection_rule": "maximum_posterior_probability",
+        "decision_count": len(trace),
+        "selected_stop_count": sum(
+            1 for item in trace if bool(item["selected_stop"])
+        ),
+        "prior_demoted_lowest_efe_stop_count": sum(
+            1
+            for item in trace
+            if bool(item["stop_had_lowest_efe_but_prior_demoted"])
+        ),
+        "maximum_stop_posterior": max(posteriors) if posteriors else None,
+        "minimum_stop_rank": min(ranks) if ranks else None,
+        "maximum_stop_log_posterior_odds_vs_best_continuation": (
+            max(log_odds) if log_odds else None
+        ),
+        "initial_believed_material_coverage": (
+            coverages[0] if coverages else None
+        ),
+        "final_believed_material_coverage": (
+            coverages[-1] if coverages else None
+        ),
+        "trace": trace,
+    }
+
+
 class TrajectoryRecorder:
     """Thread-safe accumulator attached to one isolated simulation worker."""
 
@@ -159,6 +204,7 @@ class TrajectoryRecorder:
         self.provenance = dict(provenance)
         self._lock = threading.Lock()
         self._transitions: list[RecordedTransition] = []
+        self._stop_decisions: list[dict[str, object]] = []
         self._trajectory_index = 0
         self.completed_paths: list[Path] = []
 
@@ -166,6 +212,19 @@ class TrajectoryRecorder:
     def pending_transition_count(self) -> int:
         with self._lock:
             return len(self._transitions)
+
+    def record_stop_decision(self, diagnostic: Mapping[str, object]) -> None:
+        """Persist observational stop evidence without influencing inference."""
+
+        if diagnostic.get("schema") != "stop-decision-diagnostic-v1":
+            raise ValueError("unsupported stop-decision diagnostic schema")
+        # The JSON round trip both detaches caller-owned containers and enforces
+        # the same finite/plain-value contract used by trajectory metadata.
+        detached = json.loads(
+            json.dumps(dict(diagnostic), allow_nan=False, sort_keys=True)
+        )
+        with self._lock:
+            self._stop_decisions.append(detached)
 
     def record_transition(
         self,
@@ -236,6 +295,8 @@ class TrajectoryRecorder:
         with self._lock:
             records = self._transitions
             self._transitions = []
+            stop_decisions = self._stop_decisions
+            self._stop_decisions = []
             trajectory_index = self._trajectory_index
             self._trajectory_index += 1
 
@@ -254,6 +315,7 @@ class TrajectoryRecorder:
             "transition_count": len(records),
             "split_unit": "entire_trajectory_before_patch_extraction",
             "process_truth_used_as_training_input": False,
+            "stop_decision_evidence": _stop_decision_evidence(stop_decisions),
             "config": asdict(self.config),
             "provenance": self.provenance,
         }

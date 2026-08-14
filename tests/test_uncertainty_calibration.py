@@ -1,13 +1,37 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 from active_painter.uncertainty_calibration import (
+    PredictionRecord,
+    _masked_component_numpy,
     calibration_metrics,
+    mixture_variance_scale,
     ood_disagreement_summary,
+    predictive_mixture_calibration,
     precision_inventory,
     validation_variance_scale,
 )
+
+
+def _prediction_record(component_residual: np.ndarray) -> PredictionRecord:
+    residual = np.asarray(component_residual[0], dtype=np.float64)
+    return PredictionRecord(
+        labels={},
+        trajectory_id="test",
+        residual=residual,
+        learned_likelihood_variance=np.ones_like(residual),
+        latent_variance=np.zeros_like(residual),
+        ensemble_variance=np.zeros_like(residual),
+        target_posterior_variance=np.zeros_like(residual),
+        fixed_camera_likelihood_variance=np.ones_like(residual),
+        mixture_nll=np.zeros_like(residual),
+        action_support=np.ones(residual.shape[-1], dtype=bool),
+        component_residual=np.asarray(component_residual, dtype=np.float64),
+        component_variance=np.ones_like(component_residual, dtype=np.float64),
+        component_log_weight=np.zeros_like(component_residual, dtype=np.float64),
+    )
 
 
 def test_calibration_metrics_report_signed_z_and_interval_coverage() -> None:
@@ -82,3 +106,50 @@ def test_ood_summary_applies_declared_ratio_gate() -> None:
 
     assert np.isclose(result["ood_to_in_distribution_ratio"], 2.0)
     assert result["passes_provisional_m2_gate"] is True
+
+
+def test_predictive_mixture_coverage_uses_full_cdf_not_moment_collapse() -> None:
+    probabilities = torch.linspace(0.0005, 0.9995, 1000, dtype=torch.float64)
+    quantiles = (2.0**0.5 * torch.erfinv(2.0 * probabilities - 1.0)).numpy()
+    record = _prediction_record(quantiles.reshape(1, 1, -1))
+
+    metrics = predictive_mixture_calibration([record])
+
+    assert abs(metrics["coverage_50"] - 0.50) < 0.01
+    assert abs(metrics["coverage_90"] - 0.90) < 0.01
+    assert metrics["pit_ks_distance_from_uniform"] < 0.01
+
+
+def test_mixture_variance_scale_optimizes_component_density_on_validation() -> None:
+    probabilities = torch.linspace(0.001, 0.999, 999, dtype=torch.float64)
+    residual = (
+        2.0 * (2.0**0.5 * torch.erfinv(2.0 * probabilities - 1.0))
+    ).numpy()
+    record = _prediction_record(residual.reshape(1, 1, -1))
+
+    fitted = mixture_variance_scale([record])
+
+    assert abs(fitted - 4.0) < 0.1
+
+
+def test_masked_component_extraction_preserves_component_channel_cell_order() -> None:
+    values = torch.arange(2 * 2 * 4 * 2 * 3, dtype=torch.float64).reshape(
+        2, 2, 4, 2, 3
+    )
+    mask = torch.tensor(
+        [
+            [[[True, False, True], [False, True, False]]],
+            [[[False, True, False], [True, False, True]]],
+        ]
+    )
+
+    extracted = _masked_component_numpy(values, mask)
+
+    assert len(extracted) == 2
+    assert extracted[0].shape == (2, 4, 3)
+    np.testing.assert_array_equal(
+        extracted[0], values[:, 0][:, :, mask[0, 0]].numpy()
+    )
+    np.testing.assert_array_equal(
+        extracted[1], values[:, 1][:, :, mask[1, 0]].numpy()
+    )

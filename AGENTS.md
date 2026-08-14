@@ -23,6 +23,78 @@ At painting level, every decision-relevant quantity must be explicitly grounded 
 - an expected-free-energy term;
 - a policy prior or posterior.
 
+## Visual generative-model boundary
+
+The canonical perceptual direction is
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`. Read it before changing
+perception, canvas state, local transition learning, composition,
+counterfactual mark prediction, or corpus schemas.
+
+Keep the generative process and generative model asymmetrical:
+
+- The process may retain detailed thickness, wetness, pigment, brush, grain,
+  contact, pickup, and blending variables so it can generate credible sensory
+  consequences.
+- The target painting model is observation-first. Its persistent hierarchy
+  must prioritize registered visual tone, oriented edges, continuous masses,
+  uncertain boundaries, and their spatial/temporal relations.
+- Do not promote a simulator variable into a persistent agent latent merely
+  because it exists in the process.
+- Persistent canvas-wide wetness is not part of the target agent belief.
+  Wetness is process state, not a composition or painting-level latent.
+- If material ambiguity becomes necessary for local mark prediction, infer an
+  ephemeral action-conditioned interaction/affordance latent from a fresh
+  image crop of the proposed target region. It may implicitly compress
+  wetness-, thickness-, pickup-, viscosity-, and texture-like causes without
+  naming or maintaining them canvas-wide.
+- Material behavior that is not visually identifiable should remain calibrated
+  uncertainty over visual mark outcomes. Exact material predictability must
+  not become the primary painting objective.
+
+The implemented six-channel, usually 16x16 `SpatialCanvasState` is a
+provisional compatibility and simulation-integration baseline. It is not the
+accepted visual or composition representation. A low-bandwidth hierarchy may
+be compact, but it must preserve meaningful boundary orientation and shape;
+do not mistake square raster cells for tone masses.
+
+The owner's original VAE proposal is an action-conditioned **visual
+mark-consequence model** trained from registered pre/post image patches,
+actions, and brush context. Its first shadow implementation is
+`action-conditioned-visual-mark-cvae-v0` in
+`src/active_painter/visual_mark_vae.py`; its corpus and trainer are
+`visual_trajectory_corpus.py`, `visual_collect.py`, and `visual_vae_train.py`.
+It uses a learned conditional prior for planning-time latent samples, a
+post-image recognition density only during training, and a normalized Beta
+image likelihood. It has no policy influence and has not passed its admission
+gates. Never use image error, edge error, or latent distance from this model as
+an aesthetic reward.
+
+The separately implemented
+`conditional-local-material-transition-cvae-v0` predicts coarse material
+posterior patches. Its negative AI-107/AI-109 result applies only to that
+material target and does not test or reject the visual VAE. Never conflate the
+two.
+
+The central modeling target is the hierarchical visual active-inference model:
+multiscale tone and oriented edges, continuous masses with uncertain
+boundaries, spatial relations, recurring motifs, and slower structure across
+marks and passages. Active attention remains important, but do not let camera
+foveation work displace this hierarchy. An attention trajectory is a temporal
+sequence of spatial sensory-access and precision allocations; it need not be a
+smoothly steered rectangular crop. Treat `FoveaRequest` as one sensor-level
+realization, preserve the high-resolution non-leakage boundary, and defer an
+active attention policy until the visual likelihood and hierarchy can state
+what hidden hypotheses an observation would resolve.
+
+`registered-visual-trajectory-corpus-v1` retains registered rectified pre/post camera images,
+calibration/timing/mask provenance, action-aligned crops, action, compact brush
+belief, motor realization, whole-trajectory split identity, and genuine-stop
+versus truncation provenance. Exact process material arrays are denied as
+agent inputs. Treat this as simulation-only corpus evidence, not sensor-equivalent
+hardware data. The existing v2 posterior corpus and 2026-08-12 stop pilot are
+useful for their declared material-transition and termination evidence, but
+are not end-to-end visual-model corpora.
+
 ## Allowed conventional engineering boundary
 
 Conventional forward kinematics, inverse kinematics, trajectory interpolation, robot dynamics, motor control, collision checking, and hard safety constraints are allowed below the selected painting policy.
@@ -236,6 +308,8 @@ variance, and between-member epistemic disagreement remain distinct. Never
 use its reconstruction error or latent distance as an aesthetic reward. The
 canonical record and admission gates are
 `docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+This material-field experiment is not the owner's proposed visual
+mark-consequence VAE; see `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 ## Higher-level priors
 

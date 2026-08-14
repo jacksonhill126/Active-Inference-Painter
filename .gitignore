@@ -12,6 +12,8 @@ build/
 dist/
 htmlcov/
 outputs/
+data/
+.pytest_tmp*/
 # Generated runs stay local by default. Narrowly admit named, accepted baseline
 # bundles whose manifests are referenced by the durable tracker/documentation.
 runs/*

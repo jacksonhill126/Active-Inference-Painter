@@ -2,9 +2,15 @@
 
 ## Summary
 
-M3 makes visual sampling an inferred action and joins gaze, marks, motor
+M3 makes visual sampling an inferred action and joins attention, marks, motor
 realizations, passages, and stopping in a temporally hierarchical policy
 model.
+
+The attention action is an abstract allocation of spatial access, scale,
+timing, camera support, and precision. A moving crop is one possible sensor
+realization, not the cognitive primitive. M3 depends on the accepted M2 visual
+hierarchy; it must not replace hierarchy work with a separate crop-steering
+subsystem.
 
 The central M3 question is:
 
@@ -56,7 +62,7 @@ painting-scale latent or context
 passage policy pi_passage
         |
 mark policy pi_mark
-        +---- gaze subpolicy pi_gaze
+        +---- attention subpolicy pi_attention
         +---- motor realization pi_motor
         |
 observations and prediction errors
@@ -72,11 +78,11 @@ approximations are explicit.
 
 ### Included
 
-- Gaze state and gaze actions.
+- Attention-allocation state and actions.
 - Foveal and peripheral observation process.
 - Belief maintenance under partial observation.
 - EFE for active visual sampling.
-- Explicit policy hierarchy across gaze, marks, passages, and motor
+- Explicit policy hierarchy across attention, marks, passages, and motor
   realization.
 - Proposal-distribution correction or explicit policy-prior treatment.
 - Conditional continuity and bodily viability priors.
@@ -106,12 +112,14 @@ Estimate: 2-3 days
 
 Acceptance:
 
-- Define gaze position, optional scale, camera pose, foveal extent, peripheral
-  resolution, sample rate, and saccade latency.
+- Define a budgeted attention allocation over position, optional scale, camera
+  support, extent or sparse tiles, sample rate, and request-to-exposure latency.
+- Keep the cognitive allocation distinct from its crop/tile sensor realization;
+  do not assume a smooth eye-like trajectory.
 - Define which visual samples are physically available at each time.
 - Keep full-resolution hidden canvas state inaccessible to online inference.
 - Specify deterministic and stochastic parts of the sensor transform.
-- Define how gaze interacts with arm motion and occlusion.
+- Define how attention allocation interacts with arm motion and occlusion.
 - Version the observation process for every run.
 
 ### AI-302 Implement foveal and peripheral observations
@@ -127,7 +135,7 @@ Acceptance:
 - Produce high-resolution foveal and lower-resolution peripheral observations
   from the same physical camera model.
 - Prevent overlapping crops or caches from revealing unsampled detail.
-- Preserve timestamp and gaze-pose metadata.
+- Preserve timestamp and attention-allocation metadata.
 - Test edge, scale, motion, blank, overlap, and occlusion cases.
 - Provide uniform-full-view and random-gaze baselines using the same underlying
   image process.
@@ -152,7 +160,7 @@ Acceptance:
 - Compare posterior estimates with hidden truth only in evaluation.
 - Verify VFE decomposition for partial observations on tractable fixtures.
 
-### AI-304 Define gaze policies and their EFE
+### AI-304 Define attention policies and their EFE
 
 Status: `Blocked`  
 Track: Active Inference/Policy  
@@ -162,18 +170,18 @@ Estimate: 3-5 days
 
 Acceptance:
 
-- Define candidate gaze trajectories and a prior over them.
+- Define candidate attention-allocation trajectories and a prior over them.
 - Derive expected information gain about declared hidden states.
 - Keep pragmatic preferences, ambiguity, transition risk, and epistemic value
   separately logged.
 - Do not reward saliency, novelty, center bias, or edge density unless encoded
   as an explicit and justified prior.
-- Test cases where gaze should distinguish ambiguous hypotheses and cases where
+- Test cases where attention should distinguish ambiguous hypotheses and cases where
   more observation has no value.
 - Verify that repeated fixation loses epistemic value after uncertainty is
   reduced.
 
-### AI-305 Factor gaze, mark, passage, and motor policies
+### AI-305 Factor attention, mark, passage, and motor policies
 
 Status: `Blocked`  
 Track: Hierarchical Active Inference  
@@ -183,7 +191,7 @@ Estimate: 4-6 days
 
 Acceptance:
 
-- Specify the conditional dependencies between passage, mark, gaze, and motor
+- Specify the conditional dependencies between passage, mark, attention, and motor
   policies.
 - Define which level chooses temporal depth and which executes one action.
 - Pass slow-level priors downward and prediction evidence upward.
@@ -438,7 +446,7 @@ compromising the active-inference boundary.
 ## Failure Modes
 
 - Calling a hard-coded saliency map active vision.
-- Computing gaze information gain from hidden simulator state unavailable to
+- Computing attention information gain from hidden simulator state unavailable to
   the agent.
 - Letting candidate frequency silently determine the policy prior.
 - Rewarding energy efficiency so strongly that the agent stops acting.
@@ -453,8 +461,8 @@ compromising the active-inference boundary.
 
 - Foveated observation-process specification and implementation.
 - Partial-observation state estimator.
-- Gaze-policy and EFE derivation.
-- Hierarchical gaze/mark/passage/motor policy factorization.
+- Attention-policy and EFE derivation.
+- Hierarchical attention/mark/passage/motor policy factorization.
 - Proposal/prior correction and convergence report.
 - Bodily viability preference specification.
 - Epistemic-pathology test suite.

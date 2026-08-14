@@ -1,5 +1,95 @@
 # Project Progress
 
+## 2026-08-14 - Visual hierarchy centered; attention trajectory abstracted
+
+The owner clarified the scope needed to prevent the project from sprawling.
+The central modeling target is a hierarchical active-inference representation
+of multiscale tone and oriented edges, continuous masses, spatial and harmonic
+relations, recurring motifs, and slower structure across marks and passages.
+"Harmonic" denotes learned predictive relations among angle, spacing, scale,
+repetition, and transformation; it is not a scalar aesthetic score.
+
+Active attention remains an important research mechanism, but an attention
+trajectory is now defined as a temporal sequence of spatial sensory-access and
+precision allocations. It need not be a smooth trajectory of one crop around
+the image. The existing native-derived `FoveaRequest` remains a useful sensor
+realization and non-leakage boundary; active crop/tile allocation is deferred
+until the visual hierarchy can declare what hidden hypotheses an observation
+would distinguish. The intended later experiment compares active, random,
+fixed-target, and uniform observation under matched information and compute
+budgets.
+
+The durable technical record is
+`docs/VISUAL_HIERARCHY_ATTENTION_TECHNICAL_STATUS_2026-08-14.md`; the separate
+owner explanation is
+`docs/VISUAL_HIERARCHY_ATTENTION_OWNER_BRIEF_2026-08-14.md`.
+
+Pre-push validation collected 545 tests. The complete Windows/Python 3.14 run
+reached 100 percent with seven temporary-directory setup errors and no
+assertion-failure marker before pytest itself failed to clean its inaccessible
+base temp directory. The exact deterministic CI set passed 168 tests. A
+focused affected suite passed 92 tests; one legacy driver test missed its
+fixed 15-second planning deadline. A separately bounded behavioral probe
+published the correct non-stop stroke after 16.88 seconds with 72 bootstrapped
+transitions and no planner error, so the miss is retained as a timing failure
+rather than hidden by relaxing the gate. Exact details are in the technical
+status record.
+
+## 2026-08-12 - Visual generative-model boundary corrected and made canonical
+
+The owner clarified that the original VAE proposal was a stochastic,
+action-conditioned **visual mark-consequence model**: fresh target image,
+proposed mark, and brush context should predict plausible post-mark images.
+The implemented `conditional-local-material-transition-cvae-v0` instead
+predicts coarse 16x16 material-posterior patches. Its AI-107/AI-109 negative
+result remains valid for that target but does not implement, test, or reject
+the visual proposal. Older support records that conflated the two have been
+corrected.
+
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md` is now the canonical direction.
+Detailed thickness, wetness, pigment, brush, and contact variables remain in
+the generative process. The target persistent hierarchy is observation-first:
+tone, oriented edges, continuous masses, uncertain boundaries, and their
+relations. Persistent canvas-wide wetness is excluded. If local material
+ambiguity proves predictively useful, it may be represented by an ephemeral
+action-conditioned interaction latent inferred from a fresh image crop and
+marginalized into uncertainty over visible consequences.
+
+The next accepted data path must retain registered rectified pre/post camera
+images and action/camera/brush/motor/termination provenance. The eight-episode,
+192-step stop pilot produced six policy-selected stops and two truncations,
+showing that terminal collection is feasible, but it retained coarse final
+posteriors rather than a trainable visual stream. It is termination evidence,
+not the required visual hierarchy corpus. See the owner explanation in
+`docs/VISUAL_GENERATIVE_MODEL_OWNER_BRIEF_2026-08-12.md`.
+
+## 2026-08-12 - AI-109 local learning curves measured; hierarchy data still open
+
+AI-109 completed a 27-run local transition matrix across three seeds, nested
+3/6/10-trajectory training subsets, CNN capacity and ensemble axes, the shadow
+cVAE, and a normalized identity-plus-consequence likelihood. More data
+modestly improved CNN test density, generic width/depth did not, and five
+ensemble members improved density without repairing calibration. The cVAE did
+not materially beat the CNN and accumulated substantially worse eight-mark
+recursive error. The identity/consequence mixture improved mean test NLL by
+1.392 nats per independent material cell-channel and retained low multistep
+error, but its validation-scaled nominal 50% and 90% intervals still covered
+90.60% and 95.75% of test observations. All three mixture seeds failed the
+exact predictive-mixture calibration gate, so the model remains shadow-only.
+The hierarchy curve was not trained because AI-108 contains zero
+policy-selected stops; fixed-horizon truncations are not terminal composition
+labels. The later stop pilot established collection feasibility but did not
+retain registered images, so AI-109 remains active pending a genuine-stop
+visual corpus extension. See
+`docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md` and
+`docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md`.
+
+The post-change project-wide regression run exercised all 520 collected tests.
+It reported 514 passes and six setup errors because the sandbox denied pytest's
+Windows temporary directory; those same six test cases then passed in 6.75
+seconds with an accessible temporary directory. No assertion failed. Python
+compilation and `git diff --check` also passed.
+
 ## 2026-08-11 - AI-107 calibration measured and failed the M2 gate
 
 AI-107 trained substantial CNN and conditional patch-cVAE ensembles on the
@@ -34,8 +124,10 @@ See `docs/AI108_CORPUS_TECHNICAL_2026-08-11.md` and
 
 ## 2026-08-11 — conditional patch-transition VAE shadow baseline
 
-The owner's original VAE direction has been reinstated as a bounded
-offline/shadow likelihood experiment. `ConditionalPatchVAEEnsemble` models
+A bounded offline/shadow material-posterior likelihood experiment was added.
+It was initially misattributed as a reinstatement of the owner's original VAE
+direction; the 2026-08-12 entry above corrects that interpretation.
+`ConditionalPatchVAEEnsemble` models
 camera-posterior local material consequences conditioned on the current
 posterior mean/log variance, selected mark, conditional motor realization, and
 optional compact inferred pre-stroke brush posterior. The v2 trajectory corpus
@@ -45,7 +137,7 @@ negative ELBO, reports reconstruction NLL and latent KL separately, and splits
 decoder, latent-outcome, and bootstrap-member uncertainty. Held-out reports
 include paired condition ablations and moment calibration. The model has no
 policy influence and is not a composition/order model. Ten focused cVAE/corpus
-tests passed; no substantial model has yet been trained. See
+tests passed; no substantial model had yet been trained at that point. See
 `docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
 
 ## 2026-08-10 — variable-curvature mark proposal
@@ -98,7 +190,7 @@ has failed, and what comes next. Detailed task state remains in
 
 ## Current Snapshot
 
-Snapshot date: 2026-08-10.
+Snapshot date: 2026-08-12.
 
 Phase: M1 formal baseline audit, with bounded M2 sensor-path and simulation
 support work proceeding in parallel. M1 has not passed its lock decision.
@@ -160,7 +252,8 @@ available, but this test result is not a GPU performance benchmark.
 
 | Check | Result | Interpretation |
 | --- | --- | --- |
-| Current test collection | 463 tests collected | Includes the learned-proposal, AI-111 convergence, completed AI-104/AI-105 reference, body/material/brush-posterior forecast, action/camera-clock, provisional sensor simulation, documentation-contract, and MuJoCo alignment coverage |
+| Current test collection | 520 tests collected | Includes the AI-109 mixture, learning-curve, exact predictive-mixture calibration, and recursive-rollout claims in addition to the earlier learned-proposal, AI-111 convergence, body/material/brush-posterior forecast, sensor-clock, documentation-contract, and MuJoCo alignment coverage |
+| AI-109 post-change full regression | All 520 test cases passed; 514 passed in the 499.30-second project-wide invocation and the six sandbox-blocked setup cases passed in a 6.75-second rerun | The first invocation's six errors were Windows temporary-directory permission failures before the test bodies ran, not assertion failures; compilation and `git diff --check` also passed |
 | Complete suite, uncontended audit run | 415 passed; 527 seconds observed | Recorded in `docs/DEVELOPMENT_AUDIT.md`; deadlines were not relaxed |
 | Independent 2026-08-04 review | 414 passed; one Windows temp-directory setup error | The affected synthetic calibration test body passed separately with 11 usable views and 0.120 px RMS error |
 | Proposal and AI-111 focused suites | 20 passed; 8.67 seconds observed | Covers normalized support, parity, training, checkpointing, deterministic convergence metrics, and retained run provenance |
@@ -179,22 +272,25 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Run AI-109 learning curves against the frozen AI-107 evaluator. AI-108's
-   live-scale 160/48/48 transition split is accepted and AI-107 is complete,
-   but both the CNN and cVAE failed interval calibration: nominal 90% intervals
-   covered about 99.4% of test residuals. The fixed-to-dynamic-roll ensemble
-   disagreement ratio was only 1.087x against a declared 1.50x gate. Curves
-   must separate data, capacity, seed, and likelihood-family effects and test
-   the explicit near-no-change/continuous-consequence mixture hypothesis.
-2. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
+1. Finish AI-109's hierarchy branch by collecting independent episodes that
+   genuinely terminate through a selected `stop`. Preserve fixed-horizon and
+   watchdog endings as truncations, split whole paintings before hierarchy
+   example construction, then run three-seed data/capacity curves for the slow
+   canvas and relational models.
+2. Keep the identity/consequence local likelihood shadow-only while diagnosing
+   component responsibility and exact calibration inside/outside the action
+   footprint. Test a normalized spike/hurdle identity event or richer bounded
+   consequence family only if those diagnostics support it; do not respond by
+   merely increasing generic CNN capacity.
+3. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
    negative convergence result into an explicit M3 proposal correction. Until
    then, keep the learned mix at zero and label posterior mass as conditional on
    the sampled candidate set.
-3. Define checkpoint inheritance and online-learning semantics, profile the
+4. Define checkpoint inheritance and online-learning semantics, profile the
    major runtime phases, and capture three manifested baseline replicas.
-4. Make the M1 lock decision before treating ongoing M2 work as an accepted
+5. Make the M1 lock decision before treating ongoing M2 work as an accepted
    sensor model.
-5. Collect episode-split camera/body posterior transitions and train a
+6. Collect episode-split camera/body posterior transitions and train a
    sensor-compatible checkpoint for the new provisional loop. Then derive the
    local camera statistic for the brush-load likelihood without counting the
    transition prediction as evidence; fit a compact stochastic brush-contact

@@ -7,6 +7,22 @@ Status: implemented-model description for M1 audit, accepted for `AI-101` on
 the equations, sensor boundary, calibration, proposal semantics, and
 preference choices described here.
 
+## 0.1 Implemented model versus accepted perceptual target
+
+This document remains the executable specification of what the code currently
+does. It is not approval of the six-channel material posterior as the target
+painting representation. The owner-confirmed 2026-08-12 direction is
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`: detailed material variables stay in
+the process, while the target model predicts registered visual appearance,
+oriented boundaries, continuous masses, and their relations. Persistent
+canvas-wide wetness is not a target latent. Local material ambiguity may be an
+ephemeral action-conditioned interaction latent inferred from a fresh image
+crop.
+
+Accordingly, factors below involving 16x16 `SpatialCanvasState` fields describe
+the compatibility/integration baseline only. The material cVAE results concern
+that target and do not test the proposed visual mark-consequence VAE.
+
 ## 1. Purpose And Scope
 
 This document states the probability model that the current code actually
@@ -1019,6 +1035,8 @@ Online learning currently consists of:
 - Gaussian NLL training of local/summary transition ensembles;
 - offline/shadow beta-one negative-ELBO training of the conditional local
   patch VAE ensemble; it is not used by the online policy loop;
+- offline/shadow exact NLL training of a normalized identity-plus-consequence
+  local Gaussian mixture ensemble; it is not used by the online policy loop;
 - variational-autoencoder-style hierarchy training;
 - Gaussian NLL training of aggregate and passage-step latent transitions;
 - posterior-weighted maximum-likelihood training of the provisional amortized
@@ -1047,6 +1065,7 @@ research claims.
 | GM-SUM-TRANS | Transition likelihood | `p_theta(s_t+1|s_t,a_t,m_t)` | `models.DynamicsEnsemble` | Obsolete compatibility fixture |
 | GM-PIX-TRANS | Transition likelihood | local `p_theta(s^P_t+1|s^P_t,a^P_t,m_t)` | `models.LocalSpatialDynamicsEnsemble`, `local_spatial.py` | Learned sparse approximation; bootstrap evidence from `motion_manifold` (declared flag) or the retained iid source |
 | GM-PIX-CVAE-SHADOW | Candidate transition likelihood | local `p_theta(s^P_t+1|s^P_t,logvar^P_t,a^P_t,b_t,m_t,z_t)` with `z_t~N(0,I)` | `conditional_patch_vae.ConditionalPatchVAEEnsemble`, `conditional_vae_train.py` | Implemented offline/shadow only; no policy influence; live-scale likelihood, conditioning, calibration, and sequential-rollout gates not yet passed |
+| GM-PIX-MIXTURE-SHADOW | Candidate transition likelihood | normalized local identity/consequence mixture `sum_k pi_k(s^P_t,a^P_t,b_t,m_t) N(s^P_t+1; mu_k, Sigma_k)` | `mixture_transition.LocalMixtureDynamicsEnsemble`, `mixture_transition.py` | Leading AI-109 shadow family; improves exact held-out NLL and multistep error, but exact mixture-CDF calibration fails and it has no policy influence |
 | GM-SUM-OBS | Observation likelihood | `p(o_t|s_t)` | `models.ObservationModel` | Obsolete oracle compatibility fixture |
 | GM-PIX-OBS | Observation likelihood | `p(o^pixel_t|s^pixel_t)` | `spatial_inference.py` | Oracle material, provisional |
 | GM-CAMERA-OBS | Observation likelihood | `p(o^gray_t,z^inlier_t|s^pixel_t)` | `camera_inference.CameraSpatialLikelihood` | Analytic occlusion mixture, uncalibrated |
@@ -1419,9 +1438,19 @@ This specification records the following current decision state:
   conditions versus the declared 1.50x gate. Learned likelihood, cVAE latent,
   ensemble, target-posterior, fixed camera likelihood, fixed identity
   likelihood, and EFE precision terms are reported separately. All offline
-  precision-ledger entries were unobserved declared priors. AI-109 must now
-  determine whether the result is data/capacity limited or requires a richer
-  local consequence likelihood;
+  precision-ledger entries were unobserved declared priors. AI-109 subsequently
+  tested the data/capacity and likelihood-family hypotheses;
+- `AI-109`: LOCAL BRANCH MEASURED; HIERARCHY BRANCH ACTIVE. Twenty-seven
+  three-seed local runs show modest, non-monotonic data sensitivity and no
+  generic CNN capacity benefit. Five ensemble members improve density over
+  one. The material-posterior cVAE does not materially improve the CNN and
+  compounds recursive error; this does not test the proposed visual cVAE. A
+  normalized identity/consequence mixture improves mean exact test
+  NLL by 1.392 nats and retains 0.0738 eight-mark RMSE, but validation-scaled
+  50%/90% intervals cover 90.60%/95.75% and every seed fails calibration. It
+  remains shadow-only. Hierarchy learning curves are structurally unavailable
+  because all accepted corpus endpoints are fixed-horizon truncations, not
+  policy-selected terminal paintings;
 - `AI-110`: whether the composition preference can be retained;
 - `AI-111`: ANSWERED FOR THE CURRENT M1 BASELINE, WITH A NEGATIVE CONVERGENCE
   RESULT. Hand-written and learned proposals are explicitly separate from

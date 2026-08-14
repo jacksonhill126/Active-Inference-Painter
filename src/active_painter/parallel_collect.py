@@ -23,6 +23,7 @@ from .trajectory_corpus import (
     TERMINATION_POLICY_STOP,
     TrajectoryRecorder,
     discover_trajectory_shards,
+    load_trajectory_shard,
     split_trajectory_paths,
     write_split_manifest,
 )
@@ -32,6 +33,48 @@ SENSOR_MOTOR_REALIZATION_PROFILE_NAMES = (
     "bounded_fixed_roll",
     "research_full_roll",
 )
+
+
+def _stop_evidence_summary(paths: list[Path]) -> dict[str, object]:
+    terminations: dict[str, int] = {}
+    evidence_blocks: list[dict[str, object]] = []
+    for path in paths:
+        shard = load_trajectory_shard(path)
+        termination = str(shard.metadata.get("termination", "unknown"))
+        terminations[termination] = terminations.get(termination, 0) + 1
+        evidence = shard.metadata.get("stop_decision_evidence")
+        if isinstance(evidence, dict):
+            evidence_blocks.append(evidence)
+    maximum_posteriors = [
+        float(block["maximum_stop_posterior"])
+        for block in evidence_blocks
+        if block.get("maximum_stop_posterior") is not None
+    ]
+    final_coverages = [
+        float(block["final_believed_material_coverage"])
+        for block in evidence_blocks
+        if block.get("final_believed_material_coverage") is not None
+    ]
+    return {
+        "schema": "stop-collection-evidence-summary-v1",
+        "terminations": dict(sorted(terminations.items())),
+        "trajectory_count": len(paths),
+        "trajectories_with_stop_decision_evidence": len(evidence_blocks),
+        "decision_count": sum(
+            int(block.get("decision_count", 0)) for block in evidence_blocks
+        ),
+        "selected_stop_decision_count": sum(
+            int(block.get("selected_stop_count", 0)) for block in evidence_blocks
+        ),
+        "maximum_stop_posterior": (
+            max(maximum_posteriors) if maximum_posteriors else None
+        ),
+        "maximum_final_believed_material_coverage": (
+            max(final_coverages) if final_coverages else None
+        ),
+        "selection_rule": "maximum_posterior_probability",
+        "fixed_horizon_role": "right-censored trajectory, never terminal completion",
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +153,7 @@ def _collect_worker(spec: WorkerSpec) -> dict[str, object]:
         provenance=provenance,
     )
     runtime.agent_driver.on_observed_transition = recorder.record_transition
+    runtime.agent_driver.on_policy_decision = recorder.record_stop_decision
 
     def complete_policy_stop(painting_index: int, belief) -> None:
         recorder.complete(
@@ -122,7 +166,35 @@ def _collect_worker(spec: WorkerSpec) -> dict[str, object]:
     runtime.max_speed = True
     started = time.perf_counter()
     last_completion = started
+    last_progress_write = started - 10.0
     observed_completion_count = 0
+    progress_path = Path(spec.output_dir) / (
+        f"worker-{spec.worker_id:03d}-seed-{spec.seed}-progress.json"
+    )
+
+    def write_progress(status: str, current_error: str | None = None) -> None:
+        latest_stop = runtime.agent_driver.last_stop_decision
+        payload = {
+            "schema": "stop-corpus-worker-progress-v1",
+            "status": status,
+            "worker_id": spec.worker_id,
+            "seed": spec.seed,
+            "elapsed_seconds": time.perf_counter() - started,
+            "completed_trajectories": len(recorder.completed_paths),
+            "requested_trajectories": spec.trajectory_count,
+            "pending_transitions": recorder.pending_transition_count,
+            "censoring_limit": spec.max_transitions_per_trajectory,
+            "planning": runtime.agent_driver.planning,
+            "latest_stop_decision": latest_stop,
+            "error": current_error,
+        }
+        temp_path = progress_path.with_suffix(".json.tmp")
+        temp_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, allow_nan=False),
+            encoding="utf-8",
+        )
+        temp_path.replace(progress_path)
+
     runtime.start()
     error: str | None = None
     try:
@@ -153,11 +225,26 @@ def _collect_worker(spec: WorkerSpec) -> dict[str, object]:
             elif len(recorder.completed_paths) > observed_completion_count:
                 last_completion = now
             observed_completion_count = len(recorder.completed_paths)
+            if now - last_progress_write >= 10.0:
+                write_progress("running")
+                last_progress_write = now
             time.sleep(0.02)
     except Exception as exc:
         error = repr(exc)
         raise
     finally:
+        write_progress(
+            (
+                "failed"
+                if error is not None
+                else (
+                    "complete"
+                    if len(recorder.completed_paths) >= spec.trajectory_count
+                    else "stopped"
+                )
+            ),
+            error,
+        )
         runtime.stop()
     return {
         "worker_id": spec.worker_id,
@@ -249,6 +336,7 @@ def collect_parallel(args: argparse.Namespace) -> dict[str, object]:
         "manifest": str(manifest),
         "worker_results": sorted(results, key=lambda item: int(item["worker_id"])),
         "worker_failures": sorted(failures, key=lambda item: int(item["worker_id"])),
+        "stop_evidence": _stop_evidence_summary(paths),
         "requested_configuration": {
             "process_canvas_size": int(args.canvas_size),
             "spatial_posterior_grid_size": int(args.spatial_grid_size),

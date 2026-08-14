@@ -2,12 +2,24 @@
 
 Date: 2026-08-11
 
+## Correction made on 2026-08-12
+
+I previously described this as the first implementation of the VAE idea you
+brought back from the project's early design. That was incorrect. Your idea
+was a stochastic, action-conditioned **visual** predictor: fresh image patch
+plus proposed mark and brush context in, plausible post-mark image patches
+out. The model described here predicts coarse inferred material fields.
+
+The experiment and its negative result remain useful for that material target,
+but neither implements nor argues against your visual VAE proposal. See
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md` for the corrected boundary.
+
 ## The short version
 
-We implemented the first careful version of the VAE idea you brought back from
-the project's early design. It is currently a **shadow model**: it can train on
-recorded painting transitions and tell us how well it predicts them, but it has
-no vote in what the live painter chooses to do.
+We implemented a careful shadow cVAE over recorded local material-posterior
+transitions. It can train on recorded painting transitions and tell us how
+well it predicts that declared target, but it has no vote in what the live
+painter chooses to do.
 
 Its job is narrow and concrete:
 
@@ -100,36 +112,30 @@ Finished now:
 - held-out likelihood, condition-ablation, uncertainty, and rough calibration
   reports;
 - 10 focused passing tests.
+- a later three-seed AI-109 comparison showing that this material cVAE did not
+  improve beyond seed variation and became unstable in recursive rollout.
 
-Not finished:
+Not finished—and not tested by this model:
 
-- collecting enough diverse transitions to learn a good model;
-- demonstrating that it beats the existing local transition CNN;
-- showing calibrated uncertainty by tone, curvature, load, wetness, reach, and
-  motor realization;
-- connecting it to counterfactual planning;
+- retaining registered pre/post camera images;
+- predicting visible tone and oriented boundaries after an action;
+- evaluating a visual interaction latent against deterministic visual
+  baselines;
+- calibrated multistep visual rollout;
 - using sequences of marks to explain local visual order;
 - representing compatibility between a local patch and the larger painting.
 
-## Recommended next move
+## Corrected recommended next move
 
-The next move is evidence, not integration. Collect a larger v2 corpus with
-real variation in brush load, black/white tone, curvature, wet overlap, motor
-realization, canvas region, and mark size. Train the cVAE ensemble and the
-existing CNN on the exact same trajectory splits. Compare:
+Do not make a larger material-field cVAE the default next experiment. Retain it
+as a measured negative control. Collect a trajectory-isolated corpus of
+registered pre/post images with camera, action, brush, motor, crop, and
+termination provenance. On identical splits, compare a deterministic visual
+predictor, a stochastic action-conditioned visual model, and appropriate
+identity/no-action baselines using normalized likelihood, calibration,
+tone/edge fidelity, condition ablations, and multistep rollout.
 
-- held-out density;
-- calibration;
-- condition-ablation gaps;
-- sample diversity and physical plausibility;
-- multi-step rollout drift.
-
-If the VAE wins those tests, we can decide how it should replace or augment the
-one-step material likelihood. In parallel, we can design the layer you were
-really pointing toward: a model that tries to explain a patch as a small set of
-coherent brush events and measures whether that explanation is economical and
-compatible with slower painting structure.
-
-That division of labor is important: the VAE learns **what marks can do**; the
-later hierarchy learns **whether the painting is becoming more intelligibly
-organized**.
+Only after the local visual model is credible should the slower hierarchy be
+tested for compact tone masses, continuous uncertain boundaries, and
+compatibility with larger painting structure. The canonical sequence and
+admission gates are in `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.

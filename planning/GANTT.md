@@ -11,13 +11,20 @@ M2/S2/M5 branches while M1 scientific acceptance remains the critical path.
 Those branches do not advance their milestone gates. AI-106 terminal/stopping
 acceptance closed on 2026-08-11 with a required M2 forecast-family correction.
 AI-108's 256-transition leakage-resistant corpus was accepted on 2026-08-11.
-AI-107 then closed with a negative M2 calibration result: trained CNN and cVAE
-models improved held-out density but failed interval-shape and meaningful
-motor-OOD disagreement gates. Near-term work is therefore AI-109 learning
-curves and likelihood-family diagnosis, followed by the revised AI-110
-structural preference decision. Dates should be rebased only after the M1
-capability gate, not from the amount of provisional implementation already
-present.
+AI-107 then closed with a negative M2 calibration result. On 2026-08-12 the
+27-run local branch of AI-109 found modest data sensitivity, no generic
+capacity benefit, a negative result for the **material-posterior** cVAE, and
+strong held-out density evidence for a normalized identity/consequence
+likelihood. That mixture still fails exact predictive-mixture calibration; the
+result does not test the owner's visual VAE proposal. A subsequent 192-step
+pilot produced six genuine stops and two truncations, proving stop collection
+is feasible, but it did not retain the registered image stream required by the
+accepted visual hierarchy. Near-term critical-path work is therefore a
+genuine-stop **visual** corpus and action-conditioned visual baseline, followed
+by the tone/edge/mass hierarchy and revised AI-110 structural-preference
+decision. Dates should be rebased only after the M1 capability gate, not from
+the amount of provisional implementation already present. The canonical
+perceptual boundary is `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 ```mermaid
 gantt

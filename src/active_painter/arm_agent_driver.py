@@ -172,6 +172,7 @@ class PendingActionCameraUpdate:
     brush_previous: BrushLoadBelief
     brush_previous_revision: int
     brush_transition_revision: int
+    previous_camera_observation: CameraObservationBundle | None = None
     capture_not_before_s: float | None = None
     rejected_pre_action_frames: int = 0
 
@@ -206,6 +207,24 @@ class ArmActiveInferenceDriver:
         ],
         None,
     ] | None = None
+    # Read-only visual transition hook.  It receives exactly the last accepted
+    # registered camera bundle before execution and the first causally eligible
+    # bundle after execution.  This is corpus evidence only; it cannot alter
+    # the policy posterior or selected motor realization.
+    on_visual_observed_transition: Callable[
+        [
+            CameraObservationBundle,
+            StrokeAction,
+            MotorPrimitiveLatent | None,
+            CameraObservationBundle,
+            BrushLoadBelief | None,
+        ],
+        None,
+    ] | None = None
+    # Read-only evidence hook emitted exactly once when a completed planning
+    # result is published.  Collection code may persist this diagnostic, but it
+    # cannot alter the policy posterior or selected action.
+    on_policy_decision: Callable[[dict[str, Any]], None] | None = None
     seed: int = 17
     device: str | None = None
     agent: ActiveInferencePainter | SpatialActiveInferencePainter = field(init=False)
@@ -224,6 +243,8 @@ class ArmActiveInferenceDriver:
     checkpoint_last_error: str | None = field(default=None, init=False)
     checkpoint_architecture: dict[str, object] = field(default_factory=dict, init=False)
     last_stop_blocked: bool = field(default=False, init=False)
+    planning_revision: int = field(default=0, init=False)
+    last_stop_decision: dict[str, Any] | None = field(default=None, init=False)
     last_execution_forecast: ExecutionForecast | None = field(default=None, init=False)
     body_belief: BodyBeliefSnapshot | None = field(default=None, init=False)
     body_vfe: BodyVFEComponents | None = field(default=None, init=False)
@@ -259,6 +280,10 @@ class ArmActiveInferenceDriver:
         np.ndarray | SpatialCanvasState,
     ] | None = field(default=None, init=False)
     _pending_action_camera_update: PendingActionCameraUpdate | None = field(
+        default=None,
+        init=False,
+    )
+    _latest_camera_observation: CameraObservationBundle | None = field(
         default=None,
         init=False,
     )
@@ -970,6 +995,8 @@ class ArmActiveInferenceDriver:
             self.last_ranked = []
             self.last_components = None
             self.last_stop_blocked = False
+            self.planning_revision = 0
+            self.last_stop_decision = None
             self.last_execution_forecast = None
             self.last_motor_rejections = 0
             self.last_motor_primitive_candidates = 0
@@ -992,6 +1019,7 @@ class ArmActiveInferenceDriver:
             self._pending_error = None
             self._transition_to_learn = None
             self._pending_action_camera_update = None
+            self._latest_camera_observation = None
             self._action_camera_update_sequence = 0
             self.action_transition_prior_count = 0
             self.action_camera_update_count = 0
@@ -1186,6 +1214,17 @@ class ArmActiveInferenceDriver:
                 pending.motor_primitive,
                 pending.brush_previous,
             )
+            if (
+                self.on_visual_observed_transition is not None
+                and pending.previous_camera_observation is not None
+            ):
+                self.on_visual_observed_transition(
+                    pending.previous_camera_observation,
+                    pending.action,
+                    pending.motor_primitive,
+                    observation,
+                    pending.brush_previous,
+                )
             self.trained_transitions += 1
             training_started = time.perf_counter()
             try:
@@ -1225,6 +1264,8 @@ class ArmActiveInferenceDriver:
                 ),
             }
             self._pending_action_camera_update = None
+        if camera_factors:
+            self._latest_camera_observation = observation
         self.belief = posterior
         self.camera_observation_count += sum(
             factor.observed_cell_count > 0
@@ -1288,6 +1329,7 @@ class ArmActiveInferenceDriver:
             brush_previous=brush_previous,
             brush_previous_revision=brush_previous.revision,
             brush_transition_revision=brush_transition.revision,
+            previous_camera_observation=self._latest_camera_observation,
         )
         self.action_transition_prior_count += 1
         self.last_action_camera_update = {
@@ -2422,6 +2464,11 @@ class ArmActiveInferenceDriver:
         if pending_components is not None:
             self.last_components = pending_components
         self.last_stop_blocked = stop_blocked
+        if pending_ranked is not None:
+            self.planning_revision += 1
+            self.last_stop_decision = self._stop_decision_diagnostics()
+            if self.on_policy_decision is not None and self.last_stop_decision is not None:
+                self.on_policy_decision(copy.deepcopy(self.last_stop_decision))
         if pending_stopped:
             self.stopped = True
             if self.on_stop is not None:
@@ -3436,6 +3483,158 @@ class ArmActiveInferenceDriver:
         )
         return self._annotate_forecast_context(forecast)
 
+    @staticmethod
+    def _stop_evidence_components(
+        components: EFEComponents | SpatialEFEComponents,
+    ) -> dict[str, object]:
+        """Compact, JSON-safe decomposition used only for stopping evidence."""
+
+        names = (
+            "total",
+            "terminal_risk",
+            "ambiguity",
+            "epistemic_value",
+            "terminal_entropy",
+            "pragmatic_value",
+            "transition_risk",
+            "transition_ambiguity",
+            "composition_gap",
+            "composition_risk",
+            "canvas_transition_risk",
+            "relational_transition_risk",
+            "motor_risk",
+            "motor_ambiguity",
+            "motor_epistemic_value",
+            "terminal_coverage_mean",
+            "terminal_coverage_std",
+            "motor_feasible",
+        )
+        payload: dict[str, object] = {}
+        for name in names:
+            if not hasattr(components, name):
+                continue
+            value = getattr(components, name)
+            if isinstance(value, (bool, np.bool_)):
+                payload[name] = bool(value)
+            elif isinstance(value, (int, float, np.integer, np.floating)):
+                numeric = float(value)
+                payload[name] = numeric if np.isfinite(numeric) else None
+        return payload
+
+    def _stop_decision_diagnostics(self) -> dict[str, Any] | None:
+        """Describe the published immediate-stop comparison without rescoring.
+
+        This is observational telemetry.  It reads the already normalized
+        painting-policy posterior and its already evaluated EFE components;
+        none of these values is fed back into inference or execution.
+        """
+
+        if not self.last_ranked:
+            return None
+        stop_entries = [
+            (rank, policy, components, float(posterior))
+            for rank, (policy, components, posterior) in enumerate(
+                self.last_ranked, start=1
+            )
+            if policy.actions[0].stop
+        ]
+        if not stop_entries:
+            return None
+        stop_rank, stop_policy, stop_components, stop_posterior = max(
+            stop_entries,
+            key=lambda item: item[3],
+        )
+        continuation_entries = [
+            (rank, policy, components, float(posterior))
+            for rank, (policy, components, posterior) in enumerate(
+                self.last_ranked, start=1
+            )
+            if not policy.actions[0].stop
+        ]
+        best_continuation = (
+            max(continuation_entries, key=lambda item: item[3])
+            if continuation_entries
+            else None
+        )
+        if isinstance(self.belief, SpatialCanvasState):
+            believed_coverage = self.belief.material_coverage_mean(
+                self.config.paint_presence_threshold
+            )
+        else:
+            believed_coverage = float(self.belief.mean[0].item())
+        coverage_log_prior = policy_stop_log_prior(
+            stop_policy,
+            believed_coverage,
+            self.config,
+        )
+        total_log_prior = policy_stop_log_prior(
+            stop_policy,
+            believed_coverage,
+            self.config,
+            self.gap_increment,
+        )
+        selected_stop = bool(self.last_ranked[0][0].actions[0].stop)
+        payload: dict[str, Any] = {
+            "schema": "stop-decision-diagnostic-v1",
+            "planning_revision": int(self.planning_revision),
+            "stroke_count": int(self.stroke_count),
+            "candidate_count": len(self.last_ranked),
+            "believed_material_coverage": float(believed_coverage),
+            "selected_stop": selected_stop,
+            "stop_rank": int(stop_rank),
+            "stop_posterior": float(stop_posterior),
+            "stop_coverage_log_prior": float(coverage_log_prior),
+            "stop_gap_progress_log_prior": float(
+                total_log_prior - coverage_log_prior
+            ),
+            "stop_total_log_prior": float(total_log_prior),
+            "stop_had_lowest_efe_but_prior_demoted": bool(
+                self.last_stop_blocked
+            ),
+            "stop_efe": self._stop_evidence_components(stop_components),
+            "gap_progress": self.gap_increment.summary(),
+            "selection_rule": "maximum_posterior_probability",
+        }
+        if best_continuation is None:
+            payload.update(
+                {
+                    "best_continuation_rank": None,
+                    "best_continuation_posterior": None,
+                    "best_continuation_efe": None,
+                    "stop_minus_best_continuation_efe": None,
+                    "stop_log_posterior_odds_vs_best_continuation": None,
+                }
+            )
+        else:
+            continuation_rank, _, continuation_components, continuation_posterior = (
+                best_continuation
+            )
+            payload.update(
+                {
+                    "best_continuation_rank": int(continuation_rank),
+                    "best_continuation_posterior": float(
+                        continuation_posterior
+                    ),
+                    "best_continuation_efe": self._stop_evidence_components(
+                        continuation_components
+                    ),
+                    "stop_minus_best_continuation_efe": (
+                        float(stop_components.total - continuation_components.total)
+                        if np.isfinite(
+                            stop_components.total - continuation_components.total
+                        )
+                        else None
+                    ),
+                    "stop_log_posterior_odds_vs_best_continuation": float(
+                        np.log(max(stop_posterior, np.finfo(float).tiny))
+                        - np.log(
+                            max(continuation_posterior, np.finfo(float).tiny)
+                        )
+                    ),
+                }
+            )
+        return payload
+
     def diagnostics(self) -> dict[str, Any]:
         action = asdict(self.current.action) if self.current is not None else None
         efe = asdict(self.last_components) if self.last_components is not None else None
@@ -3636,6 +3835,8 @@ class ArmActiveInferenceDriver:
             "activePassageCompletedStrokes": self._active_passage_completed_strokes,
             "minimumStopCoverage": self.config.minimum_stop_coverage,
             "lastStopBlocked": self.last_stop_blocked,
+            "planningRevision": self.planning_revision,
+            "stopDecision": copy.deepcopy(self.last_stop_decision),
             "motorRejections": self.last_motor_rejections,
             "motorPrimitiveCandidateCount": self.last_motor_primitive_candidates,
             "motorPrimitivePosteriorMass": motor_posterior_mass,

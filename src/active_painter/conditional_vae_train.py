@@ -326,6 +326,9 @@ def train_conditional_vae_from_manifest(
         ensemble_size=int(args.ensemble_size),
     )
     model = ConditionalPatchVAEEnsemble(model_config).to(device)
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=float(args.learning_rate))
     if args.input_checkpoint:
         payload = torch.load(
@@ -383,7 +386,7 @@ def train_conditional_vae_from_manifest(
             prior_samples=int(args.prior_samples),
             seed=int(args.seed) + 201 + index,
         )
-        for index, name in enumerate(("validation", "test"))
+        for index, name in enumerate(SPLIT_NAMES)
     }
     report: dict[str, object] = {
         "schema": TRAINING_REPORT_SCHEMA,
@@ -403,6 +406,12 @@ def train_conditional_vae_from_manifest(
         "trajectory_counts": {name: len(shards[name]) for name in SPLIT_NAMES},
         "patch_counts": {name: len(examples[name]) for name in SPLIT_NAMES},
         "gradient_steps": int(args.gradient_steps),
+        "parameter_count": int(parameter_count),
+        "peak_cuda_memory_bytes": (
+            int(torch.cuda.max_memory_allocated(device))
+            if device.type == "cuda"
+            else None
+        ),
         "training_loss_last": loss_history[-1] if loss_history else None,
         "training_loss_recent_mean": (
             float(np.mean(loss_history[-min(50, len(loss_history)) :]))

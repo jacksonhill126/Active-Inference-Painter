@@ -14,8 +14,15 @@ painting policies, or fine-tuning on a painting corpus.
 > Python process; realized arm dynamics and contact can use either the native
 > reference plant or the hardware-oriented MuJoCo model. It is not validated
 > for physical hardware, its default sensor path remains fail-closed, and its
-> present visual output should not be treated as evidence of learned
-> composition.
+> local transition likelihoods have not passed calibration. Its present visual
+> output should not be treated as evidence of learned composition.
+
+> **Perceptual direction:** detailed paint variables belong in the generative
+> process; the target agent model is visual and observation-first. It must
+> represent and predict tone, oriented edges, continuous masses, and their
+> relations before attempting explicit canvas-wide inverse paint physics.
+> Persistent canvas-wide wetness is not a target latent. See the canonical
+> [visual generative-model boundary](docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md).
 
 ## Quick Start
 
@@ -89,6 +96,13 @@ AI-107's held-out calibration on that corpus is also complete, with a negative
 M2 result; see the
 [technical calibration record](docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md)
 and [owner brief](docs/AI107_UNCERTAINTY_CALIBRATION_OWNER_BRIEF_2026-08-11.md).
+AI-109's 27-run local learning-curve branch found that a normalized
+identity/consequence mixture materially improves held-out density and
+multistep prediction, but still fails exact full-mixture calibration. The
+hierarchy curve remains open because the accepted corpus has no genuine
+policy-selected terminal paintings. See the
+[technical learning-curve record](docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md)
+and [owner brief](docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md).
 
 An experimental conditional patch-transition VAE can be trained against the
 same whole-trajectory splits in shadow mode:
@@ -99,9 +113,64 @@ python -m active_painter.conditional_vae_train --manifest runs/corpus/split_mani
 
 It has no policy influence. It predicts local material consequences and keeps
 latent outcome variation separate from ensemble disagreement; it is not the
-project's composition/order model. See the
+project's composition/order model. It is also not the owner's originally
+proposed visual VAE: the measured negative result applies to coarse material
+posterior patches, not to an action-conditioned model of pre/post camera
+appearance. See the
 [technical record](docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md)
-and [owner brief](docs/CONDITIONAL_PATCH_VAE_OWNER_BRIEF_2026-08-11.md).
+and the corrected
+[visual-model boundary](docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md).
+
+The owner's visual proposal now has a separate, shadow-only implementation.
+It records causally paired, canvas-registered pre/post camera images without
+process material arrays, then trains a conditional-prior VAE with a normalized
+Beta image likelihood:
+
+```bash
+python -m active_painter.visual_collect \
+  --output-dir runs/visual-corpus \
+  --manifest runs/visual-corpus/split_manifest.json \
+  --report runs/visual-corpus/collection_report.json \
+  --trajectories 96 --workers 3 --max-transitions-per-trajectory 8 --resume
+
+python -m active_painter.visual_vae_train \
+  --manifest runs/visual-corpus/split_manifest.json \
+  --checkpoint runs/checkpoints/visual-mark-cvae.pt \
+  --report runs/checkpoints/visual-mark-cvae-report.json \
+  --panel runs/checkpoints/visual-mark-cvae-panel.png \
+  --epochs 80 --device auto --resume
+```
+
+Collection splits complete painting trajectories before crop extraction.
+Collection `--resume` audits matching closed shards and continues each worker
+at its next trajectory index. Training checkpoints after every epoch, and its
+own `--resume` treats `--epochs` as the desired total epoch count. This model currently has no policy influence and
+must pass the admission gates in the
+[visual-model boundary](docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md) before it can
+replace process-equation counterfactuals.
+
+For the current Windows run, one wrapper resumes the atomically saved corpus
+and automatically starts epoch-checkpointed CUDA training after collection:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_visual_vae_overnight.ps1
+```
+
+Keep that terminal open and keep the laptop connected to AC power. The wrapper
+logs to `data/visual_vae_run_20260812/overnight_console.log`; rerunning the same
+command resumes both collection and training rather than overwriting completed
+work.
+
+To reproduce the resumable AI-109 local data/capacity/ensemble/family matrix
+from an accepted whole-trajectory manifest:
+
+```bash
+python -m active_painter.learning_curves --manifest runs/corpus/split_manifest.json --output-dir runs/learning-curves --device cuda
+```
+
+This trains conventional shadow likelihoods and evaluates held-out NLL,
+full-mixture calibration, and recursive mark prediction. It does not change
+painting policy selection.
 
 Run the deterministic smoke suite:
 
@@ -264,6 +333,10 @@ that every planned feature will be built.
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): current evidence, known failures, and public progress log.
 - [`docs/BASELINE_TEST_RESULT_2026-07-24.md`](docs/BASELINE_TEST_RESULT_2026-07-24.md): latest complete-suite environment and result.
 - [`docs/RESEARCH_CHARTER.md`](docs/RESEARCH_CHARTER.md): scientific intent and scope.
+- [`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`](docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md): canonical process/model boundary, visual-first target factorization, corpus requirements, and correction of the VAE attribution.
+- [`docs/VISUAL_GENERATIVE_MODEL_OWNER_BRIEF_2026-08-12.md`](docs/VISUAL_GENERATIVE_MODEL_OWNER_BRIEF_2026-08-12.md): owner-facing explanation of the corrected perceptual direction.
+- [`docs/VISUAL_HIERARCHY_ATTENTION_TECHNICAL_STATUS_2026-08-14.md`](docs/VISUAL_HIERARCHY_ATTENTION_TECHNICAL_STATUS_2026-08-14.md): current hierarchy-first scope, abstract attention-trajectory contract, implementation standing, gates, and narrowed critical path.
+- [`docs/VISUAL_HIERARCHY_ATTENTION_OWNER_BRIEF_2026-08-14.md`](docs/VISUAL_HIERARCHY_ATTENTION_OWNER_BRIEF_2026-08-14.md): plain-language explanation of why attention remains important without making crop steering the center of the project.
 - [`docs/OWNER_CONTRIBUTION_BRIEF_2026-08-11.md`](docs/OWNER_CONTRIBUTION_BRIEF_2026-08-11.md): owner-facing account of the project's conceptual, architectural, and embodiment contributions.
 - [`docs/OWNER_STEERING_CATALOG_2026-08-11.md`](docs/OWNER_STEERING_CATALOG_2026-08-11.md): chronological catalog of 145 recoverable owner decisions, corrections, selections, deferrals, and meaningful steering actions since June 29.
 - [`docs/PROJECT_DECISION_PROVENANCE_2026-08-11.md`](docs/PROJECT_DECISION_PROVENANCE_2026-08-11.md): evidence-qualified owner/agent decision ledger for future project instances.

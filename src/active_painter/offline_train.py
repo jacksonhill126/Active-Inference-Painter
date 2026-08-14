@@ -340,10 +340,19 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
     if train_transition_count <= 0:
         raise ValueError("the training split has no observed transitions")
     batch_size = min(max(1, int(args.batch_size)), train_transition_count)
+    config_overrides: dict[str, object] = {
+        "batch_size": batch_size,
+        "replay_capacity": max(base_config.replay_capacity, train_transition_count + 1),
+    }
+    if getattr(args, "hidden_channels", None) is not None:
+        config_overrides["spatial_hidden_channels"] = int(args.hidden_channels)
+    if getattr(args, "residual_blocks", None) is not None:
+        config_overrides["spatial_residual_blocks"] = int(args.residual_blocks)
+    if getattr(args, "ensemble_size", None) is not None:
+        config_overrides["spatial_ensemble_size"] = int(args.ensemble_size)
     config = replace(
         base_config,
-        batch_size=batch_size,
-        replay_capacity=max(base_config.replay_capacity, train_transition_count + 1),
+        **config_overrides,
     )
     input_checkpoint = Path(args.input_checkpoint) if args.input_checkpoint else None
     output_checkpoint = Path(args.output_checkpoint).resolve()
@@ -362,6 +371,9 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
         agent.dynamics, LocalSpatialDynamicsEnsemble
     ):
         raise RuntimeError("central trainer requires the spatial local-patch model")
+    parameter_count = sum(parameter.numel() for parameter in agent.dynamics.parameters())
+    if agent.device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(agent.device)
 
     # A supplied checkpoint initializes shared parameters/optimizer moments,
     # never the sampling pool for this run. Its replay may have unknown split
@@ -417,7 +429,7 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
             device=agent.device,
             batch_size=int(args.evaluation_batch_size),
         )
-        for name in ("validation", "test")
+        for name in SPLIT_NAMES
     }
 
     driver.trained_transitions = train_transition_count
@@ -453,6 +465,17 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
         "transition_counts": {name: len(transitions[name]) for name in SPLIT_NAMES},
         "terminal_training_canvases": terminal_canvas_count,
         "dynamics_gradient_steps": int(args.dynamics_steps),
+        "dynamics_parameter_count": int(parameter_count),
+        "peak_cuda_memory_bytes": (
+            int(torch.cuda.max_memory_allocated(agent.device))
+            if agent.device.type == "cuda"
+            else None
+        ),
+        "architecture": {
+            "hidden_channels": int(config.spatial_hidden_channels),
+            "residual_blocks": int(config.spatial_residual_blocks),
+            "ensemble_size": int(config.spatial_ensemble_size),
+        },
         "composition_gradient_steps_requested": int(args.composition_steps),
         "dynamics_loss_last_budget_mean": dynamics_loss,
         "composition_loss_last": composition_loss,
@@ -498,6 +521,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evaluation-batch-size", type=int, default=64)
     parser.add_argument("--dynamics-steps", type=int, default=1000)
     parser.add_argument("--composition-steps", type=int, default=200)
+    parser.add_argument("--hidden-channels", type=int, default=None)
+    parser.add_argument("--residual-blocks", type=int, default=None)
+    parser.add_argument("--ensemble-size", type=int, default=None)
     return parser
 
 

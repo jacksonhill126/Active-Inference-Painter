@@ -13,6 +13,15 @@ It implements one feature rigorously: **policies are inferred so that the eventu
 > insufficient for image-making and are not a candidate highest-level painting
 > representation. Explicit construction emits a deprecation warning.
 
+> **Accepted target versus implemented baseline (2026-08-12):** the process
+> below deliberately retains detailed paint physics, but the target agent
+> model is visual and observation-first. The persistent hierarchy must
+> prioritize tone, oriented boundaries, continuous masses, and their relations.
+> Persistent canvas-wide wetness is not a target latent. The six-channel 16x16
+> `SpatialCanvasState` is a compatibility/integration baseline, not the accepted
+> composition representation. See
+> `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
+
 It deliberately separates:
 
 - **Generative process**: stochastic wet-into-wet oil deposition with persistent
@@ -808,7 +817,7 @@ Those mechanisms realize an inferred Cartesian/contact policy; they do not selec
 
 ## Next integration steps
 
-The affordable-training and calibration baseline now lives in six modules:
+The affordable-training and calibration baseline now lives in eight modules:
 
 - `trajectory_corpus.py`: whole-trajectory posterior shards and split manifests;
 - `parallel_collect.py`: isolated headless MuJoCo/camera workers;
@@ -817,8 +826,14 @@ The affordable-training and calibration baseline now lives in six modules:
 - `offline_train.py`: train-only patch extraction, centralized shared
   parameter learning, and held-out NLL;
 - `parallel_benchmark.py`: measured 1/4/6/8-worker scaling;
-- `uncertainty_calibration.py`: validation-only variance scaling, frozen test
-  NLL/coverage/z-score decomposition, stratification, and OOD disagreement.
+- `uncertainty_calibration.py`: validation-only variance scaling, exact full-
+  mixture PIT/interval calibration, frozen test NLL decomposition,
+  stratification, OOD disagreement, and recursive 1/2/4/8-mark rollouts;
+- `learning_curves.py`: nested whole-trajectory data fractions, three-seed
+  data/capacity/ensemble/family matrices, resumable checkpoints, resource
+  accounting, and declared diagnosis rules;
+- `mixture_transition.py`: the normalized offline/shadow identity-plus-
+  consequence local transition likelihood.
 
 AI-108's accepted simulation-only corpus contains 16 v2 trajectories and 256
 transitions split 10/3/3, with required material/action/reach and fixed/dynamic
@@ -836,6 +851,9 @@ likelihood, latent-outcome, and bootstrap-member uncertainty separately. It is
 not loaded by `SpatialActiveInferencePainter`, is absent from EFE, and cannot
 change a painting policy. See
 `docs/CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+This cVAE predicts coarse material-posterior patches. It is not the owner's
+proposed action-conditioned visual VAE, and its results cannot be used as
+evidence against that visual model family.
 
 AI-107 has now evaluated a 2,500-step CNN ensemble and 3,000-step shadow cVAE
 ensemble on the accepted held-out trajectories. Both failed the provisional
@@ -847,23 +865,44 @@ density or calibration over the CNN. All offline-checkpoint precision-ledger
 entries were unobserved declared priors, not inferred posteriors. See
 `docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md`.
 
-1. Profile passage planning and batch motor realizations across candidate
+AI-109 has now measured 27 unique local-model runs across seeds 109, 211, and
+307. Nested 3/6/10-trajectory subsets show modest but non-monotonic data
+sensitivity; a 716,772-parameter CNN is worse than the 137,028-parameter base,
+and five ensemble members materially improve density over one. The cVAE does
+not materially improve the base CNN and is unstable under recursive rollout.
+The normalized identity/consequence mixture improves mean exact test NLL by
+1.392 nats and has 0.0738 eight-mark RMSE, but validation-scaled nominal
+50%/90% intervals cover 90.60%/95.75% and all seeds fail calibration. It is the
+leading shadow likelihood family, not an admitted runtime model. The accepted
+hierarchy curve remains unavailable because AI-108 has fixed-horizon
+truncations rather than policy-selected terminal paintings. A 2026-08-12
+eight-episode stop pilot produced six genuine selected stops and two
+truncations, which validates the collection path, but it retained only coarse
+final posteriors rather than the registered image stream required by the
+accepted visual hierarchy. See
+`docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md`.
+
+1. Extend collection to retain registered, rectified pre/post camera images,
+   action-aligned crops, calibration/timing/mask provenance, brush belief,
+   action, motor realization, and genuine-stop versus truncation provenance.
+2. Establish deterministic and stochastic action-conditioned visual
+   mark-consequence baselines, judged on held-out likelihood, tone and oriented
+   boundary fidelity, calibration, and multistep visual rollout.
+3. Build the slow hierarchy around predictive visual masses, uncertain
+   boundaries, and relations; do not train it to reconstruct persistent coarse
+   wetness. Resume terminal composition experiments only after that visual
+   representation and a genuine-stop visual corpus exist.
+4. Profile passage planning and batch motor realizations across candidate
    policies without changing posterior semantics.
-2. Replace diagonal motor outcome covariance with structured joint/contact
+5. Replace diagonal motor outcome covariance with structured joint/contact
    covariance and calibrate it against representative hardware data.
-3. Run AI-109 data/capacity/seed learning curves comparing the shadow cVAE,
-   existing Gaussian CNN, and an explicit near-no-change plus continuous-
-   consequence likelihood hypothesis. Held-out calibration is now measured
-   and negative; do not admit the cVAE to policy inference without passing the
-   recorded likelihood, calibration, conditioning, out-of-support, and
-   sequential-rollout gates.
-4. Learn a conditional brush/contact likelihood whose pressure trajectory
+6. Keep the current identity/consequence material likelihood and material cVAE
+   outside policy inference until their declared admission gates pass.
+7. Learn a conditional brush/contact likelihood whose pressure trajectory
    depends on stroke phase, speed, curvature, brush loading, and local wet paint.
-5. Stress-test long runs, checkpoint compatibility, and replay retention before
+8. Stress-test long runs, checkpoint compatibility, and replay retention before
    raising policy depth or candidate count.
-6. Add learned spatial/material latents only after pixel transition likelihoods
-   are calibrated; retain deterministic decoding to material fields.
-7. Replace the current deterministic composition ELBO approximation with an
+9. Replace the current deterministic composition ELBO approximation with an
    uncertainty-integrated higher-level latent model.
 
 See `docs/history/CODEX_CONTINUATION_BRIEF.md` for the historical continuation

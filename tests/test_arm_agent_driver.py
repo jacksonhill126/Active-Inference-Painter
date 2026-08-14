@@ -1295,7 +1295,17 @@ def test_stop_demoted_by_declared_prior_is_reported_and_not_executed() -> None:
     assert driver.current is not None
     assert driver.current.action == stroke
     assert driver.last_components is continue_components
-    assert driver.diagnostics()["lastStopBlocked"] is True
+    diagnostics = driver.diagnostics()
+    assert diagnostics["lastStopBlocked"] is True
+    assert diagnostics["planningRevision"] == 1
+    stop = diagnostics["stopDecision"]
+    assert stop["schema"] == "stop-decision-diagnostic-v1"
+    assert stop["selected_stop"] is False
+    assert stop["stop_rank"] == 2
+    assert stop["stop_posterior"] == 0.01
+    assert stop["stop_had_lowest_efe_but_prior_demoted"] is True
+    assert stop["best_continuation_posterior"] == 0.99
+    assert stop["stop_minus_best_continuation_efe"] == -10.0
 
 
 def test_stop_selected_by_policy_inference_is_accepted_without_veto() -> None:
@@ -1304,6 +1314,8 @@ def test_stop_selected_by_policy_inference_is_accepted_without_veto() -> None:
     driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
     stop_policy = Policy((StrokeAction.stop_action(),))
     stop_components = EFEComponents(0.0, 0.0, 0.0, 0.0, 0.8, 0.0)
+    observed_decisions = []
+    driver.on_policy_decision = observed_decisions.append
 
     def infer_stop_first():
         return stop_policy, stop_components, [(stop_policy, stop_components, 1.0)]
@@ -1314,4 +1326,9 @@ def test_stop_selected_by_policy_inference_is_accepted_without_veto() -> None:
 
     assert driver.stopped
     assert driver.current is None
-    assert driver.diagnostics()["lastStopBlocked"] is False
+    diagnostics = driver.diagnostics()
+    assert diagnostics["lastStopBlocked"] is False
+    assert diagnostics["stopDecision"]["selected_stop"] is True
+    assert diagnostics["stopDecision"]["stop_rank"] == 1
+    assert diagnostics["stopDecision"]["best_continuation_posterior"] is None
+    assert observed_decisions == [diagnostics["stopDecision"]]

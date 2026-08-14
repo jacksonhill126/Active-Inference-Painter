@@ -25,6 +25,27 @@ coverage and for canvases that its own hierarchy can compress better than a
 flat pixel model. That is enough to produce nontrivial spatial behavior, but
 not enough to guarantee coherent images.
 
+## 0.1 Accepted perceptual correction (2026-08-12)
+
+The current six-channel material hierarchy below is an implemented baseline,
+not the accepted target architecture. The canonical direction is
+`VISUAL_GENERATIVE_MODEL_BOUNDARY.md`:
+
+- detailed thickness, wetness, pigment, brush, and contact variables remain in
+  the physical generative process;
+- the target agent model is observation-first and prioritizes registered tone,
+  oriented edges, continuous masses/boundaries, and their relations;
+- persistent canvas-wide wetness is not a target latent;
+- local material behavior may be compressed into an ephemeral
+  action-conditioned interaction latent inferred from a fresh target image;
+- unidentifiable paint mechanics remain calibrated variation in predicted
+  visual mark outcomes.
+
+Sections describing `SpatialCanvasState`, 16x16 fields, material CNNs, and the
+material cVAE document what the code currently does. They must not be read as
+approval of that representation for composition or as a rejection of a
+visual action-conditioned VAE.
+
 ## 1. The shortest useful mental model
 
 The current spatial web system has roughly six layers:
@@ -231,10 +252,11 @@ The target architecture does not replace six hand-selected global aggregates
 with a larger hand-selected global list. It learns multiscale latent causes
 whose usefulness is established by prediction:
 
-- local material/contact latents explain immediate camera patches and brush
-  interaction;
-- perceptual spatial latents explain visible pigment, edges, regions, texture,
-  and contrast relationships without receiving exact material truth;
+- fresh local image patches and optional ephemeral interaction latents explain
+  action-conditioned visual mark consequences without maintaining a
+  canvas-wide inverse-physics state;
+- perceptual spatial latents preserve tone, oriented edges, continuous regions,
+  texture, and contrast relationships without receiving exact material truth;
 - slower canvas and relational latents predict later observations and
   subordinate mark trajectories;
 - passage and painting latents provide temporally deep transition priors.
@@ -246,6 +268,11 @@ held-out prediction/calibration and survives freeze, shuffle, reset, and
 substitution tests. Hand-defined thickness, wetness, coverage, commands, and
 safety limits remain process variables, readouts, preferences, or engineering
 boundaries—not the learned painting-level representation.
+
+The 2026-08-12 correction further restricts that last sentence: wetness is not
+a persistent target canvas latent at any higher level. The six-channel state
+remains compatibility evidence about the implemented baseline, not the target
+factorization.
 
 ## 5. Current live web configuration
 
@@ -1498,7 +1525,7 @@ currently include this architecture document.
 
 ## 27. What the system can actually learn
 
-### Local material consequences
+### Current local material-posterior consequences
 
 The strongest learning path is local:
 
@@ -1507,9 +1534,22 @@ The strongest learning path is local:
 - how width, amount, geometry, and motor kind affect a local patch;
 - where the model is uncertain about those effects.
 
-This is the part most directly grounded in pixel transition data.
+This is the part most directly grounded in the currently retained posterior
+transition data. The corpus does not retain the registered full-resolution
+camera images needed by the accepted visual model.
 
-### Coarse spatial regularity
+AI-109 now provides three-seed learning curves for this path. The current
+Gaussian CNN is modestly data-sensitive but not generically capacity-limited;
+a much larger CNN fits both train and test data worse. The conditional
+material-patch cVAE does not materially improve held-out density and compounds
+error under recursive rollout. That result does not test the proposed visual
+mark-consequence cVAE. A normalized shadow likelihood with an identity component
+and a learned material-consequence component improves mean test NLL by 1.392
+nats and retains low eight-mark error. Its exact mixture-CDF intervals remain
+over-dispersed, so this is evidence for a better likelihood family, not a
+calibrated runtime replacement.
+
+### Implemented coarse spatial regularity
 
 The canvas hierarchy can learn statistical regularities in 16 x 16 material
 fields. In principle it can learn that certain arrangements, repeated
@@ -1519,6 +1559,17 @@ together than independently.
 It does not receive labels such as "circle," "figure," "horizon," or "gesture."
 Any broader concept must emerge only because it helps compress the online
 painting distribution.
+
+This is not the accepted representation of tone mass or boundary shape. A
+16x16 square-cell field can preserve gross occupancy while erasing the very
+angle, curvature, and contour continuity the visual hierarchy must explain.
+
+The accepted AI-108 corpus cannot currently validate this claim at terminal
+painting scale. All sixteen trajectories end at fixed collection horizons and
+none ends in a selected `stop`. Their final canvases are valid truncations but
+not valid evidence of compositional completion. AI-109 therefore leaves the
+hierarchy curve open until genuine terminal paintings are collected and split
+by whole episode.
 
 ### Passage consequences
 
@@ -1740,14 +1791,16 @@ trainer updates shared likelihood parameters while keeping online beliefs and
 histories separate. This is conventional data/SGD infrastructure around the
 active-inference policy loop. AI-108 now supplies an accepted 16-trajectory,
 256-transition, trajectory-isolated simulation corpus with fixed and dynamic
-roll conditions in every split. AI-107 held-out calibration is now measured
-and negative: trained CNN and cVAE models produced about 99.4% empirical
-coverage for nominal 90% intervals, and a fixed-condition ensemble produced
-only a 1.087x disagreement increase on unseen dynamic-roll conditions. AI-109
-multi-size/capacity/seed learning curves remain to be measured. See
-`PARALLEL_TRAINING_PIPELINE_2026-08-10.md`,
+roll conditions in every split. AI-107 held-out calibration is measured and
+negative. AI-109 has now added a 27-run local matrix across data fraction, CNN
+capacity, ensemble size, model family, and three seeds. It found modest data
+sensitivity, no generic capacity benefit, a negative cVAE comparison, and a
+1.392-nat test-NLL improvement from the normalized identity/consequence
+family. Exact full-mixture calibration still fails, and hierarchy curves
+remain structurally unavailable without policy-selected terminal paintings.
+See `PARALLEL_TRAINING_PIPELINE_2026-08-10.md`,
 `AI108_CORPUS_TECHNICAL_2026-08-11.md`, and
-`AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md`.
+`AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md`.
 
 A separate `ConditionalPatchVAEEnsemble` now provides a shadow/offline learned
 likelihood experiment over those train-only patches. Its beta-one negative
@@ -1757,9 +1810,12 @@ decoder likelihood variance, within-member latent outcome variance, and
 between-member epistemic disagreement separately. It is not connected to EFE
 or live rollouts and must remain outside policy inference until the admission
 tests in `CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md` pass on a
-manifested live-scale corpus. Its 3,000-step AI-107 run did not pass those
-calibration/OOD gates and showed effectively collapsed within-member latent
-variance, so it remains shadow-only.
+manifested live-scale corpus. Its three-seed AI-109 result did not materially
+improve the CNN, showed effectively collapsed within-member latent variance,
+and accumulated much worse eight-mark rollout error, so it remains
+shadow-only. The separate `LocalMixtureDynamicsEnsemble` is now the leading
+shadow local likelihood candidate, but it also remains outside EFE because its
+component mass and predictive intervals are not calibrated.
 
 ### Third: richer multiscale spatial dynamics
 
@@ -1850,22 +1906,26 @@ It is also meaningfully embodied: the chosen painting policy is conditioned on
 predicted joint, contact, pressure, and canvas consequences rather than being
 forced through ideal Cartesian kinematics.
 
-The main gap is no longer "the model only sees a 16 x 16 canvas." The bottom
-level now sees native pixels. The main gaps are:
+The simulator and oracle path operate at native pixels, but the accepted
+sensor corpus does not preserve registered native-resolution images and the
+slow hierarchy still operates on 16x16 material posteriors. The main gaps are:
 
-- local dynamics have limited contextual range;
-- global structure is compressed at 16 x 16;
+- the action-conditioned visual mark likelihood has not been trained;
+- local visual dynamics lack registered pre/post image evidence and useful
+  contextual range;
+- global structure is compressed into 16x16 square material cells rather than
+  predictive tone masses and uncertain oriented boundaries;
 - candidate geometry is still largely hand-proposed; the provisional learned
   proposal is disabled for emission by default, and the convergence audit
   rejects a proposal-invariant interpretation of the current posterior;
-- the hierarchy has no semantic visual training signal;
+- the hierarchy has no adequate visual likelihood or terminal visual corpus;
 - embodied forecasts are computationally expensive;
 - the mechanical and paint processes are plausible simulations rather than
   identified physical models.
 
 So the present architecture is a credible experimental scaffold for studying
-how local material prediction, multiscale beliefs, passage-level policies, and
-embodied prediction error interact. It is not yet a scalable general painting
-intelligence, but the pieces are separated cleanly enough that the next
-research steps can be tested without disguising rewards or heuristics as active
-inference.
+embodied active-inference mechanics, but its material-posterior hierarchy is
+not yet a credible visual painting model. The next research step is registered
+visual data plus calibrated action-conditioned visual prediction, followed by
+a tone/edge/mass hierarchy—not more capacity devoted to persistent coarse
+wetness.

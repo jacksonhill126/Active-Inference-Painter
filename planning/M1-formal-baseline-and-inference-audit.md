@@ -346,6 +346,9 @@ precision terms are kept separate. All precision-ledger entries were
 unobserved declared priors. This closes the measurement task with a negative
 M2 calibration result; it does not accept either model as calibrated. See
 `docs/AI107_UNCERTAINTY_CALIBRATION_TECHNICAL_2026-08-11.md`.
+Both models predicted coarse material posteriors. This result does not test the
+owner's proposed action-conditioned visual mark-consequence VAE; see
+`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 ### AI-108 Build a leakage-resistant baseline corpus
 
@@ -371,7 +374,7 @@ Acceptance:
 
 ### AI-109 Establish predictive learning curves
 
-Status: `Ready`
+Status: `Active`
 Track: Modeling/Validation  
 Depends on: AI-107, AI-108  
 Owner: Jackson/Codex  
@@ -387,12 +390,24 @@ Acceptance:
 - Record wall time, memory, model size, and optimizer steps.
 - Establish a baseline that later pretrained or larger models must beat.
 
-Ready record (2026-08-11): AI-107 and AI-108 are complete. Use the frozen
-AI-107 evaluator to vary data fraction, capacity, ensemble construction, and
-seed. The experiment must distinguish an ordinary data/capacity failure from
-the observed likelihood-shape failure and should include an explicit
-near-no-change plus continuous-consequence mixture likelihood as a tested
-hypothesis.
+Evidence/status 2026-08-12:
+
+- The local branch completed a 27-run matrix over seeds 109/211/307, nested
+  3/6/10-trajectory subsets, three CNN capacities, 1/3/5 ensemble members, the
+  shadow cVAE, and a normalized identity-plus-consequence likelihood.
+- Data helps modestly, larger generic CNN capacity does not, five ensemble
+  members improve density, and the material-posterior cVAE does not materially
+  improve the base CNN. This does not test the owner's proposed visual cVAE.
+  The identity/consequence mixture improves test NLL by 1.392 nats and
+  multistep rollout error, but still fails exact mixture-CDF calibration.
+- All AI-108 endpoints are fixed-horizon truncations. A 2026-08-12 pilot then
+  demonstrated feasible genuine-stop collection with six selected stops and
+  two truncations at 192 steps, but it retained coarse final posteriors rather
+  than the registered image stream. The hierarchy branch remains open pending
+  a trajectory-isolated genuine-stop **visual** corpus; truncations must not be
+  manufactured into terminal composition labels.
+- See `docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md` and
+  `docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md`.
 
 ### AI-110 Resolve the composition-preference closed loop
 
@@ -403,6 +418,10 @@ Owner: Jackson/Codex
 Estimate: 2-3 days
 
 Acceptance:
+
+- Apply `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`: resolve the term against a
+  predictive visual tone/edge/mass hierarchy, not the provisional 16x16
+  material posterior.
 
 - Write the exact probabilistic interpretation of the compression-gap term.
 - Determine whether it is a normalized preference, an unnormalized but

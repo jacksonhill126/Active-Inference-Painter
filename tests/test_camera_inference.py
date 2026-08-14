@@ -386,3 +386,38 @@ def test_executed_action_prior_waits_for_causally_later_camera_exposure() -> Non
     )
     assert driver.action_camera_update_count == 1
     assert len(driver.agent.replay) == replay_size + 1
+
+
+def test_sensor_driver_emits_causally_paired_visual_transition_hook() -> None:
+    cfg = PainterConfig(
+        planner_state_kind=SPATIAL_MATERIAL_PLANNER_STATE_KIND,
+        spatial_grid_size=8,
+        candidate_policies=2,
+        planning_horizon=1,
+    )
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+    rig = load_camera_rig()
+    before = _bundle(
+        _frame(rig, 0.8, sequence=1, capture_time_s=1.0, available_time_s=1.04)
+    )
+    driver.ingest_camera_observation(before)
+    observed = []
+    driver.on_visual_observed_transition = lambda *items: observed.append(items)
+    action = StrokeAction(0.25, 0.4, 0.75, 0.6, 0.08, 0.5, tone=1.0)
+
+    driver.record_executed_action_transition(action)
+    driver.register_action_camera_capture_boundary(2.0)
+    after = _bundle(
+        _frame(rig, 0.2, sequence=2, capture_time_s=2.0, available_time_s=2.04)
+    )
+    driver.ingest_camera_observation(after)
+
+    assert len(observed) == 1
+    assert observed[0][0] is before
+    assert observed[0][1] is action
+    assert observed[0][3].frames[0].sequence == after.frames[0].sequence
+    assert observed[0][3].frames[0].capture_time_s == after.frames[0].capture_time_s

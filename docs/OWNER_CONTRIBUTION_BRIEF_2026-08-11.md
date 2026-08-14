@@ -563,9 +563,11 @@ features:
    patch-selection loop you described.
 2. It does not yet have a learned mesoscopic likelihood that recognizes a
    coherent brushmark or brushmark sequence.
-3. The old VAE idea has now been selected for a bounded conditional local-
-   transition shadow experiment, not as the final runtime or composition model
-   family. See `CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+3. Your original visual VAE idea remains unimplemented. The bounded
+   `conditional-local-material-transition-cvae-v0` shadow experiment targeted
+   coarse material posteriors and was initially misattributed to your proposal.
+   The 2026-08-12 correction is canonical in
+   `VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 4. Counterfactual brush rollouts still reuse reduced process equations rather
    than a learned uncertain brush model.
 5. Dynamic roll through a stroke is not yet a robust live action primitive.

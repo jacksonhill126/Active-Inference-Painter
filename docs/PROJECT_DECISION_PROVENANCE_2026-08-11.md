@@ -411,11 +411,12 @@ Attribution labels used below:
 ### P-019 — Reconsider a pretrained VAE as an enabling low-level mark model
 
 - **Attribution:** owner-supplied project history and candidate direction.
-- **Decision candidate:** the earliest project used a pretrained VAE as the
-  low-level mark predictor. A modern conditional VAE or related latent density
-  may be useful for material consequence pretraining and/or recognizing
-  mesoscopic brushmark order, provided its likelihood and imported priors are
-  explicit.
+- **Decision candidate, clarified 2026-08-12:** the earliest project used a
+  pretrained VAE as the low-level mark predictor. The intended modern use is a
+  stochastic, action-conditioned **visual mark-consequence model** trained
+  from fresh registered pre/post image patches, action, and brush context. It
+  is distinct from both explicit coarse material-state reconstruction and the
+  slower mesoscopic composition hierarchy.
 - **Direct evidence:** current task turn
   `019ff12d-e547-7e20-88c5-7b2944e3b43e`.
 - **Technical caution:** a VAE is a model family, not an active-inference term
@@ -423,12 +424,12 @@ Attribution labels used below:
   architecture; using latent distance as an undeclared aesthetic reward is
   not. Training data must avoid hidden-state leakage if the runtime model is
   claimed to be sensor-based.
-- **Status:** selected for an offline/shadow conditional local-transition
-  experiment on 2026-08-11 and implemented as
-  `conditional-local-material-transition-cvae-v0`. It has no policy influence
-  and is not integrated into the current runtime transition or composition
-  model. Admission gates are in
-  `CONDITIONAL_PATCH_VAE_SHADOW_BASELINE_2026-08-11.md`.
+- **Status, corrected 2026-08-12:** the visual proposal remains selected but
+  unimplemented. `conditional-local-material-transition-cvae-v0` is a separate
+  measured shadow experiment over coarse material posteriors. It has no policy
+  influence, and its negative AI-107/AI-109 result does not test the visual
+  proposal. The canonical factorization, corpus contract, and admission gates
+  are in `VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 ## Evolving decisions that should not be mistaken for contradictions
 
