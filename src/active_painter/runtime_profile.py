@@ -60,6 +60,7 @@ class RuntimeProfileSettings:
     serialization_repeats: int = 3
     rendering_repeats: int = 5
     training_batch_size: int = 32
+    motor_forecast_workers: int = 1
     device: str = "cpu"
     quick: bool = False
 
@@ -96,7 +97,7 @@ def representative_config(settings: RuntimeProfileSettings) -> PainterConfig:
         motor_forecast_candidates=motor_forecast_candidates,
         motor_forecast_samples=motor_forecast_samples,
         motor_forecast_hz=45.0,
-        motor_forecast_workers=1,
+        motor_forecast_workers=settings.motor_forecast_workers,
         motor_realization_kinds=motor_kinds,
         motor_realization_candidate_limit=len(motor_kinds),
         batch_size=settings.training_batch_size,
@@ -785,6 +786,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--serialization-repeats", type=int, default=3)
     parser.add_argument("--rendering-repeats", type=int, default=5)
     parser.add_argument("--training-batch-size", type=int, default=32)
+    parser.add_argument("--motor-forecast-workers", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--quiet", action="store_true")
@@ -802,6 +804,7 @@ def main() -> None:
         serialization_repeats=args.serialization_repeats,
         rendering_repeats=args.rendering_repeats,
         training_batch_size=args.training_batch_size,
+        motor_forecast_workers=args.motor_forecast_workers,
         device=args.device,
         quick=args.quick,
     )
@@ -813,12 +816,14 @@ def main() -> None:
         settings.serialization_repeats,
         settings.rendering_repeats,
         settings.training_batch_size,
+        settings.motor_forecast_workers,
     ) <= 0:
         raise SystemExit("all profile counts must be positive")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     label = "quick" if settings.quick else "representative"
     run_dir = Path(args.output_dir) / (
-        f"ai113-{label}-{settings.device}-{stamp}-seed-{settings.seed}"
+        f"ai113-{label}-{settings.device}-workers-{settings.motor_forecast_workers}-"
+        f"{stamp}-seed-{settings.seed}"
     )
     report = run_profile(settings, run_dir)
     output = (

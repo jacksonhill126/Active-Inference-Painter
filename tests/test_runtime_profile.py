@@ -22,12 +22,15 @@ def test_representative_runtime_profile_uses_formal_m1_policy() -> None:
 
 
 def test_quick_profile_changes_budget_without_enabling_legacy_policy() -> None:
-    config = representative_config(RuntimeProfileSettings(quick=True))
+    config = representative_config(
+        RuntimeProfileSettings(quick=True, motor_forecast_workers=3)
+    )
 
     assert painting_policy_profile_id(config) == M1_FORMAL_POLICY_BASELINE_ID
     assert config.candidate_policies == 4
     assert config.planning_horizon == 1
     assert config.motor_realization_kinds == ("cartesian_ik",)
+    assert config.motor_forecast_workers == 3
 
 
 def test_phase_measurement_and_summary_report_resource_units() -> None:
