@@ -18,6 +18,7 @@ def test_representative_runtime_profile_uses_formal_m1_policy() -> None:
     assert config.candidate_policies == 32
     assert config.planning_horizon == 4
     assert config.motor_forecast_workers == 1
+    assert RuntimeProfileSettings().device == "cpu"
 
 
 def test_quick_profile_changes_budget_without_enabling_legacy_policy() -> None:
@@ -30,12 +31,13 @@ def test_quick_profile_changes_budget_without_enabling_legacy_policy() -> None:
 
 
 def test_phase_measurement_and_summary_report_resource_units() -> None:
-    result, sample = measure_phase(lambda: 7)
+    result, sample = measure_phase(lambda: 7, device="cpu")
     summary = summarize_samples([sample, dict(sample)])
 
     assert result == 7
     assert float(sample["wall_seconds"]) >= 0.0
     assert float(sample["process_cpu_seconds"]) >= 0.0
     assert float(sample["average_active_cpu_cores"]) >= 0.0
+    assert sample["peak_cuda_memory_bytes"] is None
     assert summary["sample_count"] == 2
     assert summary["wall_seconds"]["minimum"] >= 0.0

@@ -60,6 +60,7 @@ class RuntimeProfileSettings:
     serialization_repeats: int = 3
     rendering_repeats: int = 5
     training_batch_size: int = 32
+    device: str = "cpu"
     quick: bool = False
 
 
@@ -165,13 +166,25 @@ def _process_memory() -> dict[str, int | None]:
     }
 
 
-def measure_phase(function: Callable[[], _T]) -> tuple[_T, dict[str, object]]:
+def measure_phase(
+    function: Callable[[], _T],
+    *,
+    device: str = "cpu",
+) -> tuple[_T, dict[str, object]]:
     """Measure wall time, process CPU time, memory, and CUDA allocation."""
 
+    cuda_active = str(device).startswith("cuda")
+    if cuda_active and not torch.cuda.is_available():
+        raise RuntimeError("CUDA profiling requested but torch.cuda is unavailable")
+    if cuda_active:
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
     memory_before = _process_memory()
     cpu_started = time.process_time()
     wall_started = time.perf_counter()
     result = function()
+    if cuda_active:
+        torch.cuda.synchronize()
     wall_seconds = max(0.0, time.perf_counter() - wall_started)
     cpu_seconds = max(0.0, time.process_time() - cpu_started)
     memory_after = _process_memory()
@@ -188,8 +201,14 @@ def measure_phase(function: Callable[[], _T]) -> tuple[_T, dict[str, object]]:
         "working_set_after_bytes": memory_after["working_set_bytes"],
         "peak_working_set_bytes": memory_after["peak_working_set_bytes"],
         "private_bytes_after": memory_after["private_bytes"],
-        "peak_cuda_memory_bytes": None,
-        "cuda_measurement_status": "not_used_profile_device_cpu",
+        "peak_cuda_memory_bytes": (
+            int(torch.cuda.max_memory_allocated()) if cuda_active else None
+        ),
+        "cuda_measurement_status": (
+            "peak_allocation_measured_utilization_not_available_from_torch"
+            if cuda_active
+            else "not_used_profile_device_cpu"
+        ),
     }
     return result, record
 
@@ -226,11 +245,13 @@ def summarize_samples(samples: list[dict[str, object]]) -> dict[str, object]:
 def _repeat_phase(
     repeats: int,
     function: Callable[[], _T],
+    *,
+    device: str = "cpu",
 ) -> tuple[list[_T], dict[str, object]]:
     results: list[_T] = []
     samples: list[dict[str, object]] = []
     for _ in range(max(1, int(repeats))):
-        result, sample = measure_phase(function)
+        result, sample = measure_phase(function, device=device)
         results.append(result)
         samples.append(sample)
     return results, summarize_samples(samples)
@@ -269,7 +290,7 @@ def _git_revision(root: Path) -> str:
     return completed.stdout.strip()
 
 
-def _environment(root: Path) -> dict[str, object]:
+def _environment(root: Path, profile_device: str) -> dict[str, object]:
     cuda = torch.cuda.is_available()
     return {
         "platform": platform.platform(),
@@ -285,11 +306,13 @@ def _environment(root: Path) -> dict[str, object]:
         "cuda_version": torch.version.cuda,
         "gpu_name": torch.cuda.get_device_name(0) if cuda else None,
         "gpu_utilization": (
-            "not sampled: representative profile explicitly uses CPU"
+            "not available from torch; peak allocation and paired wall/CPU time reported"
+            if str(profile_device).startswith("cuda")
+            else "not sampled: representative profile explicitly uses CPU"
             if cuda
             else "not applicable: CUDA unavailable"
         ),
-        "profile_compute_device": "cpu",
+        "profile_compute_device": profile_device,
         "initial_process_memory": _process_memory(),
         "code_revision": _git_revision(root),
         "source_fingerprint": source_fingerprint(root),
@@ -349,7 +372,11 @@ def run_profile(
     started_utc = datetime.now(timezone.utc)
     total_cpu_started = time.process_time()
     total_wall_started = time.perf_counter()
-    environment = _environment(root)
+    if settings.device not in {"cpu", "cuda"}:
+        raise ValueError("profile device must be 'cpu' or 'cuda'")
+    if settings.device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA profile requested but torch.cuda is unavailable")
+    environment = _environment(root, settings.device)
     config = representative_config(settings)
     profile_id = painting_policy_profile_id(config)
     if profile_id != M1_FORMAL_POLICY_BASELINE_ID:
@@ -364,7 +391,7 @@ def run_profile(
         bootstrap_train_steps=0,
         observation_access_mode=ORACLE_OBSERVATION_ACCESS_MODE,
         seed=settings.seed,
-        device="cpu",
+        device=settings.device,
         checkpoint_provenance={
             "purpose": "AI-113 computational phase profile",
             "claim_boundary": "oracle diagnostic; not painting-quality evidence",
@@ -383,7 +410,11 @@ def run_profile(
         )
         return len(driver.agent.replay)
 
-    replay_sizes, collection_phase = _repeat_phase(1, collect)
+    replay_sizes, collection_phase = _repeat_phase(
+        1,
+        collect,
+        device=settings.device,
+    )
     transition = latest_box["transition"]
     assert isinstance(transition, tuple)
     before, action, after, primitive = transition
@@ -400,6 +431,7 @@ def run_profile(
     inference_results, inference_phase = _repeat_phase(
         settings.inference_repeats,
         infer_state,
+        device=settings.device,
     )
 
     planning_profiles: list[dict[str, object]] = []
@@ -426,7 +458,11 @@ def run_profile(
         )
         return profile
 
-    _, planning_phase = _repeat_phase(settings.planning_repeats, plan)
+    _, planning_phase = _repeat_phase(
+        settings.planning_repeats,
+        plan,
+        device=settings.device,
+    )
 
     def train() -> float:
         loss = driver.agent.train_dynamics(gradient_steps=settings.gradient_steps)
@@ -434,7 +470,11 @@ def run_profile(
             raise RuntimeError("training replay did not reach the declared batch size")
         return float(loss)
 
-    training_losses, training_phase = _repeat_phase(settings.training_repeats, train)
+    training_losses, training_phase = _repeat_phase(
+        settings.training_repeats,
+        train,
+        device=settings.device,
+    )
 
     legacy_config = replace(
         config,
@@ -447,13 +487,14 @@ def run_profile(
     legacy_agent = SpatialActiveInferencePainter(
         legacy_config,
         seed=settings.seed + 997,
-        device="cpu",
+        device=settings.device,
     )
     if legacy_agent.composition is None:
         raise RuntimeError("legacy hierarchy positive control is unavailable")
     hierarchy_fields = torch.tensor(
         after.material,
         dtype=torch.float32,
+        device=legacy_agent.device,
     ).unsqueeze(0)
 
     def hierarchy_positive_control() -> float:
@@ -463,6 +504,7 @@ def run_profile(
     hierarchy_gaps, hierarchy_phase = _repeat_phase(
         settings.inference_repeats,
         hierarchy_positive_control,
+        device=settings.device,
     )
 
     checkpoint_path = run_dir / "profile-checkpoint.pt"
@@ -478,6 +520,7 @@ def run_profile(
     checkpoint_sizes, checkpoint_phase = _repeat_phase(
         settings.serialization_repeats,
         save_checkpoint,
+        device=settings.device,
     )
 
     def serialize_diagnostics() -> int:
@@ -492,6 +535,7 @@ def run_profile(
     diagnostics_sizes, diagnostics_serialization_phase = _repeat_phase(
         settings.serialization_repeats,
         serialize_diagnostics,
+        device=settings.device,
     )
 
     render_box: dict[str, np.ndarray] = {}
@@ -505,6 +549,7 @@ def run_profile(
     _, rendering_phase = _repeat_phase(
         settings.rendering_repeats,
         render_material_canvas,
+        device=settings.device,
     )
 
     def encode_png() -> int:
@@ -515,6 +560,7 @@ def run_profile(
     png_sizes, png_serialization_phase = _repeat_phase(
         settings.serialization_repeats,
         encode_png,
+        device=settings.device,
     )
     Image.fromarray(render_box["gray"], mode="L").save(
         run_dir / "profile-canvas.png",
@@ -620,7 +666,7 @@ def run_profile(
         ],
         "limitations": [
             "CPU utilization is process CPU time divided by wall time; it is not a system-wide utilization sample.",
-            "CUDA was unavailable when reported as such; no GPU comparison may be inferred.",
+            "GPU utilization percentage is unavailable from Torch; CUDA variants report peak allocation and paired wall/CPU time rather than inventing utilization.",
             "The registered-camera likelihood and MuJoCo camera renderer are outside this native/oracle M1 timing profile.",
             "The transition model begins from the declared seed and is trained only for the profiling steps; timings are computational evidence, not predictive-quality evidence.",
         ],
@@ -739,6 +785,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--serialization-repeats", type=int, default=3)
     parser.add_argument("--rendering-repeats", type=int, default=5)
     parser.add_argument("--training-batch-size", type=int, default=32)
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     return parser
@@ -755,6 +802,7 @@ def main() -> None:
         serialization_repeats=args.serialization_repeats,
         rendering_repeats=args.rendering_repeats,
         training_batch_size=args.training_batch_size,
+        device=args.device,
         quick=args.quick,
     )
     if min(
@@ -769,7 +817,9 @@ def main() -> None:
         raise SystemExit("all profile counts must be positive")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     label = "quick" if settings.quick else "representative"
-    run_dir = Path(args.output_dir) / f"ai113-{label}-{stamp}-seed-{settings.seed}"
+    run_dir = Path(args.output_dir) / (
+        f"ai113-{label}-{settings.device}-{stamp}-seed-{settings.seed}"
+    )
     report = run_profile(settings, run_dir)
     output = (
         {
