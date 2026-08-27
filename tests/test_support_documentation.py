@@ -130,7 +130,10 @@ def test_m1_gate_repair_has_an_executable_non_circular_status_path() -> None:
     )
     assert "Status: `Done`" in _tracker_task_block("AI-110", "AI-111")
     assert "allowed disabled decision" in _tracker_task_block("AI-110", "AI-111")
-    assert "Status: `Ready`" in _tracker_task_block("AI-112", "AI-113")
+    assert "Status: `Done`" in _tracker_task_block("AI-112", "AI-113")
+    assert "online-learning-inheritance-v0" in _tracker_task_block(
+        "AI-112", "AI-113"
+    )
     assert "Status: `Ready`" in _tracker_task_block("AI-113", "AI-114")
     assert "AI-112, AI-113" in _tracker_task_block("AI-114", "AI-115")
 

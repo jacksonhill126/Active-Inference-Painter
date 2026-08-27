@@ -465,6 +465,7 @@ def test_local_composition_risk_uses_coarse_grained_terminal_fields() -> None:
         canvas_size=32,
         spatial_grid_size=8,
         spatial_transition_mode="local_patch",
+        composition_enabled=True,
         composition_gap_precision=1.0,
         transition_precision=0.0,
         ambiguity_precision=0.0,

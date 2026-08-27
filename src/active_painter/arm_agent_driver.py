@@ -79,6 +79,19 @@ from .spatial_agent import SpatialActiveInferencePainter
 from .spatial_efe import SpatialEFEComponents
 from .spatial_hierarchy import infer_mark_event_belief
 from .local_spatial import pixel_material_from_state
+from .learning_lifecycle import (
+    CONTINUE_SHARED_PRETRAINING,
+    INITIALIZE_FROM_SHARED_PRETRAINING,
+    LEARNING_INHERITANCE_VERSION,
+    ORACLE_DIAGNOSTIC_EXECUTION,
+    REGISTERED_CAMERA_OBSERVATION,
+    RESUME_INDIVIDUAL_DEVELOPMENT,
+    SHARED_PRETRAINING,
+    checkpoint_component_manifest,
+    normalized_training_provenance,
+    require_observed_transition_source,
+    validate_checkpoint_load_mode,
+)
 from .spatial_inference import SPATIAL_TRANSITION_PRIOR_VERSION
 from .spatial_state import MATERIAL_CHANNELS, SpatialCanvasState, spatial_canvas_state, spatial_state_diagnostics
 from .stroke_execution import (
@@ -195,6 +208,7 @@ class ArmActiveInferenceDriver:
     checkpoint_path: Path | str | None = None
     checkpoint_save_every_transitions: int = 10
     checkpoint_provenance: dict[str, object] = field(default_factory=dict)
+    checkpoint_load_mode: str = RESUME_INDIVIDUAL_DEVELOPMENT
     observation_access_mode: str = OBSERVATION_ACCESS_MODE
     provisional_sensor_policy: bool = False
     enabled: bool = True
@@ -244,6 +258,7 @@ class ArmActiveInferenceDriver:
     checkpoint_last_saved: str | None = field(default=None, init=False)
     checkpoint_last_error: str | None = field(default=None, init=False)
     checkpoint_architecture: dict[str, object] = field(default_factory=dict, init=False)
+    replay_evidence_counts: dict[str, int] = field(default_factory=dict, init=False)
     last_stop_blocked: bool = field(default=False, init=False)
     planning_revision: int = field(default=0, init=False)
     last_stop_decision: dict[str, Any] | None = field(default=None, init=False)
@@ -349,6 +364,12 @@ class ArmActiveInferenceDriver:
     camera_observation_count: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
+        self.checkpoint_load_mode = validate_checkpoint_load_mode(
+            self.checkpoint_load_mode
+        )
+        self.checkpoint_provenance = normalized_training_provenance(
+            self.checkpoint_provenance
+        )
         if self.config.planner_state_kind == SUMMARY_PLANNER_STATE_KIND:
             warnings.warn(
                 SUMMARY_PLANNER_DEPRECATION,
@@ -500,7 +521,12 @@ class ArmActiveInferenceDriver:
             state = self._planner_state(sim)
             execute_stroke_action(sim, action, dt=1.0 / 90.0)
             next_state = self._planner_state(sim)
-            self._add_transition_to_agent(state, action, next_state)
+            self._add_transition_to_agent(
+                state,
+                action,
+                next_state,
+                evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+            )
             episode_actions.append(action)
             self._bootstrap_painted_path_length += float(
                 np.hypot(action.x1 - action.x0, action.y1 - action.y0)
@@ -512,7 +538,13 @@ class ArmActiveInferenceDriver:
                 and isinstance(state, SpatialCanvasState)
                 and isinstance(next_state, SpatialCanvasState)
             ):
-                self.agent.add_passage_step_transition(state, passage, step_index, next_state)
+                self.agent.add_passage_step_transition(
+                    state,
+                    passage,
+                    step_index,
+                    next_state,
+                    evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+                )
             self.trained_transitions += 1
             if len(self.agent.replay) >= self.config.batch_size and i % 4 == 0:
                 self.last_training_loss = self.agent.train_dynamics(gradient_steps=2)
@@ -578,7 +610,12 @@ class ArmActiveInferenceDriver:
             and episode_actions
             and isinstance(episode_start, SpatialCanvasState)
         ):
-            self.agent.add_passage_transition(episode_start, tuple(episode_actions), final)
+            self.agent.add_passage_transition(
+                episode_start,
+                tuple(episode_actions),
+                final,
+                evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+            )
         budget = int(self.config.bootstrap_composition_train_steps)
         if budget > 0:
             self.agent.train_composition(gradient_steps=budget)
@@ -737,7 +774,8 @@ class ArmActiveInferenceDriver:
     def _checkpoint_architecture_metadata(self) -> dict[str, object]:
         cfg = self.config
         return {
-            "schema_version": 6,
+            "schema_version": 7,
+            "learning_inheritance_version": LEARNING_INHERITANCE_VERSION,
             "painting_policy_profile": painting_policy_profile_id(cfg),
             "agent_kind": "spatial_material" if self._uses_spatial_planner() else "summary",
             "observation_access_mode": self.observation_access_mode,
@@ -806,16 +844,61 @@ class ArmActiveInferenceDriver:
                 self.checkpoint_status = "incompatible"
                 self.checkpoint_last_error = self._checkpoint_mismatch_summary(found, expected)
                 return False
+            if payload.get("inheritance_manifest") != checkpoint_component_manifest():
+                self.checkpoint_status = "incompatible"
+                self.checkpoint_last_error = (
+                    "checkpoint learning-inheritance manifest differs from the "
+                    "current AI-112 contract"
+                )
+                return False
+
+            shared_initialization = (
+                self.checkpoint_load_mode == INITIALIZE_FROM_SHARED_PRETRAINING
+            )
+            shared_continuation = (
+                self.checkpoint_load_mode == CONTINUE_SHARED_PRETRAINING
+            )
+            resume_individual = not shared_initialization and not shared_continuation
+            training_provenance = payload.get("training_provenance")
+            if shared_initialization or shared_continuation:
+                if not isinstance(training_provenance, dict):
+                    raise ValueError(
+                        "shared-pretraining load mode requires checkpoint "
+                        "training provenance"
+                    )
+                if training_provenance.get("training_role") != SHARED_PRETRAINING:
+                    raise ValueError(
+                        f"{self.checkpoint_load_mode} requires a checkpoint "
+                        f"with training_role={SHARED_PRETRAINING!r}"
+                    )
+
+            # Shared generative parameters are loaded in every mode. Other
+            # component classes follow the explicit ownership matrix.
             self.agent.dynamics.load_state_dict(payload["dynamics_state"])
-            if "optimizer_state" in payload:
-                self.agent.optimizer.load_state_dict(payload["optimizer_state"])
-            self._restore_replay(self.agent.replay, payload.get("replay"))
             if (
                 isinstance(self.agent, SpatialActiveInferencePainter)
                 and self.agent.composition is not None
                 and payload.get("composition_state") is not None
             ):
                 self.agent.composition.load_state_dict(payload["composition_state"])
+                kind_support = payload.get("passage_kind_update_counts")
+                if isinstance(kind_support, dict):
+                    self.agent.composition.passage_kind_update_counts = {
+                        kind: max(0, int(kind_support.get(kind, 0)))
+                        for kind in ("band", "chain", "polyline")
+                    }
+
+            if resume_individual or shared_continuation:
+                if "optimizer_state" in payload:
+                    self.agent.optimizer.load_state_dict(payload["optimizer_state"])
+            if resume_individual:
+                self._restore_replay(self.agent.replay, payload.get("replay"))
+            if (
+                (resume_individual or shared_continuation)
+                and isinstance(self.agent, SpatialActiveInferencePainter)
+                and self.agent.composition is not None
+                and payload.get("composition_state") is not None
+            ):
                 if (
                     self.agent.composition_optimizer is not None
                     and payload.get("composition_optimizer_state") is not None
@@ -828,7 +911,8 @@ class ArmActiveInferenceDriver:
                     "last_passage_trajectory_evaluation"
                 )
             if (
-                isinstance(self.agent, SpatialActiveInferencePainter)
+                resume_individual
+                and isinstance(self.agent, SpatialActiveInferencePainter)
                 and self.agent.policy_proposal is not None
                 and payload.get("proposal_state") is not None
             ):
@@ -852,28 +936,41 @@ class ArmActiveInferenceDriver:
                         payload["proposal_optimizer_state"]
                     )
                 self.agent.last_proposal_loss = payload.get("last_proposal_loss")
-            if isinstance(self.agent, SpatialActiveInferencePainter):
+            if (
+                resume_individual
+                and isinstance(self.agent, SpatialActiveInferencePainter)
+            ):
                 self._restore_replay(self.agent.composition_replay, payload.get("composition_replay"))
                 self._restore_replay(self.agent.passage_replay, payload.get("passage_replay"))
                 self._restore_replay(self.agent.passage_step_replay, payload.get("passage_step_replay"))
-                kind_support = payload.get("passage_kind_update_counts")
-                if self.agent.composition is not None and isinstance(kind_support, dict):
-                    self.agent.composition.passage_kind_update_counts = {
-                        kind: max(0, int(kind_support.get(kind, 0)))
-                        for kind in ("band", "chain", "polyline")
-                    }
-                else:
+                if self.agent.composition is not None and not isinstance(
+                    payload.get("passage_kind_update_counts"), dict
+                ):
                     self.agent.rebuild_passage_kind_support()
-            self.trained_transitions = int(payload.get("trained_transitions", 0))
-            self.last_training_loss = payload.get("last_training_loss")
-            self.motion_reliability.restore(payload.get("motion_reliability"))
-            # Learned state, restored best effort: a pre-Feature-C checkpoint
-            # lacks both keys and must still load with status 'loaded' and
-            # fresh beliefs, so these are NOT architecture metadata.
-            self.precision_ledger.restore(payload.get("precision_ledger"))
-            self.gap_increment.restore(payload.get("gap_increment_belief"))
+            if resume_individual:
+                self.trained_transitions = int(payload.get("trained_transitions", 0))
+                self.last_training_loss = payload.get("last_training_loss")
+                self.motion_reliability.restore(payload.get("motion_reliability"))
+                self.precision_ledger.restore(payload.get("precision_ledger"))
+                counts = payload.get("replay_evidence_counts")
+                if isinstance(counts, dict):
+                    self.replay_evidence_counts = {
+                        str(source): max(0, int(count))
+                        for source, count in counts.items()
+                    }
+            # Gap increments, body/canvas/brush posteriors, and passage history
+            # are episode state. They are deliberately absent from schema 7 and
+            # remain at their freshly constructed priors in either load mode.
             self.checkpoint_loaded = True
-            self.checkpoint_status = "loaded"
+            self.checkpoint_status = (
+                "initialized_from_shared_pretraining"
+                if shared_initialization
+                else (
+                    "continued_shared_pretraining"
+                    if shared_continuation
+                    else "loaded"
+                )
+            )
             self.checkpoint_last_error = None
             return True
         except Exception as exc:  # pragma: no cover - surfaced in diagnostics.
@@ -893,8 +990,9 @@ class ArmActiveInferenceDriver:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload: dict[str, object] = {
-                "schema_version": 6,
+                "schema_version": 7,
                 "architecture": self._checkpoint_architecture_metadata(),
+                "inheritance_manifest": checkpoint_component_manifest(),
                 "config": asdict(self.config),
                 "trained_transitions": self.trained_transitions,
                 "last_training_loss": self.last_training_loss,
@@ -903,7 +1001,7 @@ class ArmActiveInferenceDriver:
                 "replay": self._replay_snapshot(self.agent.replay),
                 "motion_reliability": self.motion_reliability.snapshot(),
                 "precision_ledger": self.precision_ledger.snapshot(),
-                "gap_increment_belief": self.gap_increment.snapshot(),
+                "replay_evidence_counts": dict(self.replay_evidence_counts),
                 "training_provenance": dict(self.checkpoint_provenance),
             }
             if isinstance(self.agent, SpatialActiveInferencePainter):
@@ -992,6 +1090,14 @@ class ArmActiveInferenceDriver:
     def reset(self, sim: ArmPainterSim) -> None:
         with self._planner_lock:
             self._planner_generation += 1
+            # A new painting keeps learned model/calibration state but starts
+            # with fresh episode-local beliefs. In sensor mode the blank prior
+            # remains in force until a registered likelihood is ingested.
+            self.agent.reset_episode_prior()
+            self.gap_increment.reset(self.config)
+            self.belief = self.agent.belief
+            self.body_belief = None
+            self.body_vfe = None
             self.current = None
             self.stopped = False
             self.stroke_count = 0
@@ -1216,6 +1322,7 @@ class ArmActiveInferenceDriver:
                 posterior,
                 pending.motor_primitive,
                 pending.brush_previous,
+                evidence_source=REGISTERED_CAMERA_OBSERVATION,
             )
             if (
                 self.on_visual_observed_transition is not None
@@ -1451,17 +1558,29 @@ class ArmActiveInferenceDriver:
         next_state: np.ndarray | SpatialCanvasState,
         motor_primitive: MotorPrimitiveLatent | None = None,
         brush_belief: BrushLoadBelief | None = None,
+        *,
+        evidence_source: str,
     ) -> None:
+        resolved_source = require_observed_transition_source(evidence_source)
         if self._uses_spatial_planner():
             assert isinstance(self.agent, SpatialActiveInferencePainter)
             assert isinstance(state, SpatialCanvasState)
             assert isinstance(next_state, SpatialCanvasState)
-            self.agent.add_transition(state, action, next_state, motor_primitive)
+            self.agent.add_transition(
+                state,
+                action,
+                next_state,
+                motor_primitive,
+                evidence_source=resolved_source,
+            )
         else:
             assert isinstance(self.agent, ActiveInferencePainter)
             assert isinstance(state, np.ndarray)
             assert isinstance(next_state, np.ndarray)
             self.agent.replay.add(state, encoded_action_vector(action, self.config, motor_primitive), next_state)
+        self.replay_evidence_counts[resolved_source] = (
+            self.replay_evidence_counts.get(resolved_source, 0) + 1
+        )
         if self.on_observed_transition is not None:
             self.on_observed_transition(
                 state,
@@ -2011,7 +2130,13 @@ class ArmActiveInferenceDriver:
                     return
                 if transition is not None:
                     before, action, motor_primitive, after = transition
-                    self._add_transition_to_agent(before, action, after, motor_primitive)
+                    self._add_transition_to_agent(
+                        before,
+                        action,
+                        after,
+                        motor_primitive,
+                        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+                    )
                     self.trained_transitions += 1
                     self._update_agent_belief(action, after, motor_primitive)
                 else:
@@ -2634,10 +2759,17 @@ class ArmActiveInferenceDriver:
                     self._active_passage,
                     passage_step_index,
                     after,
+                    evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
                 )
             if ex.initial_state is not None:
                 if passage_continues:
-                    self._add_transition_to_agent(ex.initial_state, ex.action, after, ex.motor_primitive)
+                    self._add_transition_to_agent(
+                        ex.initial_state,
+                        ex.action,
+                        after,
+                        ex.motor_primitive,
+                        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+                    )
                     self.trained_transitions += 1
                     self._update_agent_belief(ex.action, after, ex.motor_primitive)
                     self.belief = self.agent.belief
@@ -2719,7 +2851,12 @@ class ArmActiveInferenceDriver:
             before = fallback_initial_state
         actions = tuple(self._hierarchy_passage_actions)
         if before is not None and actions:
-            self.agent.add_passage_transition(before, actions, after)
+            self.agent.add_passage_transition(
+                before,
+                actions,
+                after,
+                evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+            )
             self.agent.update_hierarchy_beliefs(after, actions)
         self._hierarchy_passage_initial_state = None
         self._hierarchy_passage_actions = []
@@ -3844,10 +3981,14 @@ class ArmActiveInferenceDriver:
                 "path": str(self.checkpoint_path) if self.checkpoint_path is not None else None,
                 "status": self.checkpoint_status,
                 "loaded": self.checkpoint_loaded,
+                "loadMode": self.checkpoint_load_mode,
                 "lastSaved": self.checkpoint_last_saved,
                 "lastError": self.checkpoint_last_error,
                 "saveEveryTransitions": self.checkpoint_save_every_transitions,
                 "architecture": dict(self.checkpoint_architecture),
+                "trainingProvenance": dict(self.checkpoint_provenance),
+                "inheritance": checkpoint_component_manifest(),
+                "replayEvidenceCounts": dict(self.replay_evidence_counts),
             },
             "postStrokeRetractRemaining": self._post_stroke_retract_remaining,
             "planningScope": self._planning_scope(),

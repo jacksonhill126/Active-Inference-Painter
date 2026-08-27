@@ -294,11 +294,13 @@ class WebSimRuntime:
                 self.sim.plant.backend.capabilities,
                 MUJOCO_BODY_LIKELIHOOD,
             )
-            self._update_body_posterior()
         if self.agent_driver.observation_boundary_blocked:
             self.agent_enabled = False
         self.telemetry_log = ArmTelemetryLog(max_samples=self.telemetry_max_samples)
         self.agent_driver.reset(self.sim)
+        # Driver reset deliberately clears the painting-local body posterior.
+        # Assimilate a fresh physical packet only after that episode boundary.
+        self._reset_body_estimator()
         self._restart_initial_sensor_camera_sync()
         self._record_telemetry(force=True)
 
@@ -423,7 +425,6 @@ class WebSimRuntime:
                 self.paused = bool(data.get("value", False))
             elif action == "reset":
                 self.sim.reset_pose()
-                self._reset_body_estimator()
                 self.sim.canvas.clear()
                 if self._camera_process is not None:
                     self._camera_process.reset()
@@ -434,6 +435,7 @@ class WebSimRuntime:
                 self.telemetry_log.clear()
                 self._next_telemetry_time = 0.0
                 self.agent_driver.reset(self.sim)
+                self._reset_body_estimator()
                 self._restart_initial_sensor_camera_sync()
                 self._record_telemetry(force=True)
             elif action == "clear":
@@ -443,6 +445,7 @@ class WebSimRuntime:
                     self._camera_process.reset()
                 self._clear_fovea_trace()
                 self.agent_driver.reset(self.sim)
+                self._reset_body_estimator()
                 self._restart_initial_sensor_camera_sync()
             elif action == "clear_telemetry":
                 self.telemetry_log.clear()
@@ -969,7 +972,6 @@ class WebSimRuntime:
             self.paused = True
             return
         self.sim.reset_pose()
-        self._reset_body_estimator()
         self.sim.canvas.clear()
         if self._camera_process is not None:
             self._camera_process.reset()
@@ -977,6 +979,7 @@ class WebSimRuntime:
         self.sim.intended_contact_pressure = 0.0
         self.sim.refresh_contact()
         self.agent_driver.reset(self.sim)
+        self._reset_body_estimator()
         self._restart_initial_sensor_camera_sync()
 
     def _save_canvas_snapshot(self, painting_index: int) -> Path:

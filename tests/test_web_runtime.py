@@ -24,6 +24,7 @@ from active_painter.arm_agent_driver import (
     PrivilegedStateAccessError,
     SENSOR_OBSERVATION_ACCESS_MODE,
 )
+from active_painter.config import M1_FORMAL_POLICY_BASELINE_ID
 from active_painter.version import code_build_info, code_version, package_version
 from active_painter.web_server import (
     PainterRequestHandler,
@@ -464,14 +465,14 @@ def test_web_runtime_can_enable_spatial_material_planner() -> None:
     assert state["agent"]["spatialBelief"]["materialPyramid"][0]["name"] == "pixel"
     assert state["agent"]["spatialBelief"]["materialPyramid"][-1]["name"] == "planner"
     assert state["agent"]["markEvents"]["activeCount"] >= 0
-    hierarchy = state["agent"]["composition"]["hierarchy"]
-    assert hierarchy["canvas"]["dimensions"] == 32
-    assert hierarchy["relational"]["dimensions"] == 24
-    assert hierarchy["markSlots"] == 8
-    assert hierarchy["passageTrajectory"]["enabled"] is True
-    assert hierarchy["passageTrajectory"]["descriptorDimensions"] == 14
-    assert state["agent"]["composition"]["passageReplaySize"] == 0
-    assert state["agent"]["composition"]["passageStepReplaySize"] == 0
+    # The canonical M1 profile has the legacy material-composition hierarchy
+    # disabled. Spatial material inference remains available without promoting
+    # that diagnostic hierarchy into the formal painting policy.
+    assert (
+        state["agent"]["paintingPolicyProfile"]["id"]
+        == M1_FORMAL_POLICY_BASELINE_ID
+    )
+    assert state["agent"]["composition"] is None
     # Precision beliefs must survive json.dumps even with a clamped belief:
     # unbounded, a disagreeing F drives gamma to ~1e-3 and 1/eps to ~1e300,
     # both of which break the JSON contract the viewer depends on.

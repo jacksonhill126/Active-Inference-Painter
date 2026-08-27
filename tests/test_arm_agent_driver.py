@@ -25,6 +25,13 @@ from active_painter.brush_loading import BrushLoadBelief
 from active_painter.config import M1_FORMAL_POLICY_BASELINE_ID, PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
+from active_painter.learning_lifecycle import (
+    INITIALIZE_FROM_SHARED_PRETRAINING,
+    MODEL_IMAGINED_ROLLOUT,
+    ORACLE_DIAGNOSTIC_EXECUTION,
+    PHYSICAL_SENSOR_OBSERVATION,
+    SHARED_PRETRAINING,
+)
 from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
 from active_painter.precision_beliefs import LEDGER_KEYS, POLICY_PRECISION_KEY
 from active_painter.plant_interface import BodyBeliefSnapshot
@@ -360,11 +367,36 @@ def test_summary_driver_replay_stores_selected_motor_realization_condition() -> 
     after[0] += 0.05
     action = StrokeAction(0.2, 0.3, 0.7, 0.4, 0.08, 0.6, 1.0)
 
-    driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+    driver._add_transition_to_agent(
+        before,
+        action,
+        after,
+        MotorPrimitiveLatent("elbow_pivot"),
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
 
     stored_action = driver.agent.replay.data[-1][1]
     assert stored_action.shape == (cfg.action_dim,)
     assert np.allclose(stored_action[8:], [0.0, 0.0, 1.0, 0.0, 0.0])
+
+
+def test_online_replay_rejects_model_imagined_rollouts() -> None:
+    cfg = PainterConfig(candidate_policies=2)
+    driver = oracle_driver(config=cfg, bootstrap_transitions=0, bootstrap_train_steps=0)
+    before = np.zeros(cfg.state_dim, dtype=np.float32)
+    after = np.ones(cfg.state_dim, dtype=np.float32) * 0.05
+    action = StrokeAction(0.2, 0.3, 0.7, 0.4, 0.08, 0.6, 1.0)
+
+    with pytest.raises(ValueError, match="only realized observation evidence"):
+        driver._add_transition_to_agent(
+            before,
+            action,
+            after,
+            evidence_source=MODEL_IMAGINED_ROLLOUT,
+        )
+
+    assert len(driver.agent.replay) == 0
+    assert driver.replay_evidence_counts == {}
 
 
 def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
@@ -381,7 +413,13 @@ def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
     before = np.zeros(cfg.state_dim, dtype=np.float32)
     after = np.ones(cfg.state_dim, dtype=np.float32) * 0.05
     action = StrokeAction(0.2, 0.3, 0.7, 0.4, 0.08, 0.6, 1.0)
-    driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+    driver._add_transition_to_agent(
+        before,
+        action,
+        after,
+        MotorPrimitiveLatent("elbow_pivot"),
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
     driver.trained_transitions = 1
     with torch.no_grad():
         for parameter in driver.agent.dynamics.parameters():
@@ -407,8 +445,143 @@ def test_driver_checkpoint_round_trips_summary_weights_and_replay() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_driver_checkpoint_round_trips_precision_and_gap_beliefs() -> None:
-    """Learned precision state persists; a pre-Feature-C payload still loads.
+def test_shared_pretraining_initialization_loads_parameters_only() -> None:
+    cfg = PainterConfig(batch_size=1, hidden_dim=16, ensemble_size=2)
+    root = Path("runs/test_shared_pretraining_initialization")
+    shutil.rmtree(root, ignore_errors=True)
+    path = root / "shared_pretraining.pt"
+    try:
+        source = oracle_driver(
+            config=cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+            checkpoint_provenance={"training_role": SHARED_PRETRAINING},
+        )
+        before = np.zeros(cfg.state_dim, dtype=np.float32)
+        after = np.ones(cfg.state_dim, dtype=np.float32) * 0.05
+        action = StrokeAction(0.2, 0.3, 0.7, 0.4, 0.08, 0.6, 1.0)
+        source._add_transition_to_agent(
+            before,
+            action,
+            after,
+            evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+        )
+        source.agent.train_dynamics(gradient_steps=1)
+        source.trained_transitions = 1
+        rng = np.random.default_rng(4)
+        residuals = rng.normal(size=16)
+        source.precision_ledger.observe("transition", residuals, 0.5 * residuals)
+        with torch.no_grad():
+            for parameter in source.agent.dynamics.parameters():
+                parameter.add_(0.123)
+        expected = [
+            parameter.detach().clone()
+            for parameter in source.agent.dynamics.parameters()
+        ]
+        source._save_checkpoint_if_due(force=True)
+
+        initialized = oracle_driver(
+            config=cfg,
+            bootstrap_transitions=0,
+            bootstrap_train_steps=0,
+            checkpoint_path=path,
+            checkpoint_load_mode=INITIALIZE_FROM_SHARED_PRETRAINING,
+        )
+
+        assert initialized.checkpoint_status == "initialized_from_shared_pretraining"
+        assert initialized.trained_transitions == 0
+        assert len(initialized.agent.replay) == 0
+        assert initialized.agent.optimizer.state == {}
+        assert initialized.replay_evidence_counts == {}
+        assert initialized.precision_ledger.mean("transition") == pytest.approx(
+            cfg.transition_precision
+        )
+        for expected_parameter, actual_parameter in zip(
+            expected, initialized.agent.dynamics.parameters()
+        ):
+            assert torch.allclose(expected_parameter, actual_parameter)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_reset_preserves_learning_and_clears_episode_state() -> None:
+    cfg = PainterConfig(
+        canvas_size=24,
+        planner_state_kind="spatial_material",
+        spatial_grid_size=8,
+        spatial_hidden_channels=4,
+        spatial_residual_blocks=1,
+        spatial_ensemble_size=2,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        batch_size=1,
+    )
+    driver = ArmActiveInferenceDriver(
+        config=cfg,
+        bootstrap_transitions=0,
+        bootstrap_train_steps=0,
+    )
+    sim = ArmPainterSim(cfg)
+    action = StrokeAction(0.2, 0.3, 0.7, 0.5, 0.08, 0.7, 1.0)
+    before = SpatialCanvasState(
+        material=np.zeros((6, 8, 8), dtype=np.float32),
+        logvar=np.full((6, 8, 8), -4.5, dtype=np.float32),
+    )
+    after = SpatialCanvasState(
+        material=np.full((6, 8, 8), 0.02, dtype=np.float32),
+        logvar=np.full((6, 8, 8), -4.0, dtype=np.float32),
+    )
+    driver._add_transition_to_agent(
+        before,
+        action,
+        after,
+        evidence_source=PHYSICAL_SENSOR_OBSERVATION,
+    )
+    driver.trained_transitions = 1
+    driver.gap_increment.observe(0.0, 0)
+    driver.gap_increment.observe(0.2, 2)
+    residuals = np.linspace(-1.0, 1.0, 16)
+    driver.precision_ledger.observe("transition", residuals, 0.5 * residuals)
+    expected_precision = driver.precision_ledger.mean("transition")
+    expected_weights = [
+        parameter.detach().clone() for parameter in driver.agent.dynamics.parameters()
+    ]
+    driver.body_belief = object()  # type: ignore[assignment]
+    driver.body_vfe = object()  # type: ignore[assignment]
+    driver.brush_load_beliefs["black"] = BrushLoadBelief(
+        load_mean=0.8,
+        load_variance=0.01,
+        black_fraction_mean=1.0,
+        black_fraction_variance=0.001,
+        revision=3,
+    )
+
+    driver.reset(sim)
+
+    assert driver.trained_transitions == 1
+    assert len(driver.agent.replay) == 1
+    assert driver.precision_ledger.mean("transition") == pytest.approx(
+        expected_precision
+    )
+    for expected_parameter, actual_parameter in zip(
+        expected_weights, driver.agent.dynamics.parameters()
+    ):
+        assert torch.allclose(expected_parameter, actual_parameter)
+    assert not driver.gap_increment.has_observations()
+    assert driver.body_belief is None
+    assert driver.body_vfe is None
+    assert driver.brush_load_beliefs["black"].load_mean == pytest.approx(0.0)
+    assert isinstance(driver.belief, SpatialCanvasState)
+    assert np.count_nonzero(driver.belief.material) == 0
+    assert isinstance(driver.agent, SpatialActiveInferencePainter)
+    assert driver.agent.composition is not None
+    assert driver.agent.composition.canvas_belief is None
+    assert driver.agent.composition.relational_belief is None
+
+
+def test_driver_checkpoint_persists_precision_but_resets_episode_gap_belief() -> None:
+    """Developmental precision persists while the current-canvas gap does not.
 
     Neither belief goes into the architecture metadata, because
     `_load_checkpoint_if_available` compares that dict with strict inequality --
@@ -435,8 +608,8 @@ def test_driver_checkpoint_round_trips_precision_and_gap_beliefs() -> None:
         driver.gap_increment.observe(0.0, 0)
         driver.gap_increment.observe(0.2, 2)
         expected = {name: driver.precision_ledger.mean(name) for name in LEDGER_KEYS}
-        expected_gap = driver.gap_increment.posterior_mean()
         assert expected[POLICY_PRECISION_KEY] != cfg.policy_precision
+        assert driver.gap_increment.has_observations()
         driver.trained_transitions = 1
         driver._save_checkpoint_if_due(force=True)
 
@@ -451,17 +624,19 @@ def test_driver_checkpoint_round_trips_precision_and_gap_beliefs() -> None:
             assert restored.precision_ledger.mean(name) == pytest.approx(
                 expected[name], abs=1e-12
             ), name
-        assert restored.gap_increment.posterior_mean() == pytest.approx(expected_gap, abs=1e-12)
-        assert restored.gap_increment.has_observations()
+        assert restored.gap_increment.posterior_mean() == pytest.approx(
+            cfg.gap_increment_prior_mean,
+            abs=1e-12,
+        )
+        assert not restored.gap_increment.has_observations()
         # The shared beliefs must be the SAME objects the agent scores with.
         assert restored.agent.precision_ledger is restored.precision_ledger
         assert restored.agent.gap_increment is restored.gap_increment
 
-        # A payload written before this feature lacks both keys and must still
-        # load cleanly with fresh beliefs.
+        # Developmental calibration is optional for a schema-7 resume; if it is
+        # absent the checkpoint still loads with a fresh precision prior.
         payload = torch.load(path, map_location="cpu", weights_only=False)
         payload.pop("precision_ledger")
-        payload.pop("gap_increment_belief")
         torch.save(payload, path)
         legacy = oracle_driver(
             config=cfg,
@@ -533,13 +708,30 @@ def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
     before = driver._planner_state(sim)
     execute_stroke_action(sim, action, dt=1.0 / 120.0)
     after = driver._planner_state(sim)
-    driver._add_transition_to_agent(before, action, after, MotorPrimitiveLatent("elbow_pivot"))
+    driver._add_transition_to_agent(
+        before,
+        action,
+        after,
+        MotorPrimitiveLatent("elbow_pivot"),
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
     assert isinstance(driver.agent, SpatialActiveInferencePainter)
     assert isinstance(before, SpatialCanvasState)
     assert isinstance(after, SpatialCanvasState)
-    driver.agent.add_passage_transition(before, (action,), after)
+    driver.agent.add_passage_transition(
+        before,
+        (action,),
+        after,
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
     passage = PassageLatent("band", 0.45, 0.4, 0.0, 0.3, 0.08, 2, 0.08, 0.5, 1.0)
-    driver.agent.add_passage_step_transition(before, passage, 0, after)
+    driver.agent.add_passage_step_transition(
+        before,
+        passage,
+        0,
+        after,
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
     assert driver.agent.composition is not None
     driver.agent.composition.mark_transition_update()
     driver.agent.composition.mark_passage_trajectory_update()

@@ -24,6 +24,7 @@ from active_painter.conditional_vae_train import (
 )
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
+from active_painter.learning_lifecycle import ORACLE_DIAGNOSTIC_EXECUTION
 from active_painter.policies import MotorPrimitiveLatent
 from active_painter.spatial_state import SpatialCanvasState
 from active_painter.trajectory_corpus import (
@@ -285,7 +286,14 @@ def test_driver_observed_transition_callback_carries_pre_stroke_brush_belief() -
     observed: list[tuple[object, ...]] = []
     driver.on_observed_transition = lambda *values: observed.append(values)
 
-    driver._add_transition_to_agent(before, action, after, primitive, brush)
+    driver._add_transition_to_agent(
+        before,
+        action,
+        after,
+        primitive,
+        brush,
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
 
     assert len(observed) == 1
     assert observed[0][0] is before

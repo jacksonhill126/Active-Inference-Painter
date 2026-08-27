@@ -354,10 +354,12 @@ def test_precomputed_relations_bypass_repeated_cpu_region_extraction(
         composition_hidden_channels=4,
         canvas_latent_channels=2,
         relational_latent_dim=4,
-        hierarchy_hidden_dim=8,
-        candidate_policies=2,
-        planning_horizon=1,
-        batch_size=2,
+            hierarchy_hidden_dim=8,
+            candidate_policies=2,
+            planning_horizon=1,
+            composition_enabled=True,
+            composition_gap_precision=1.0,
+            batch_size=2,
     )
     agent = SpatialActiveInferencePainter(config, seed=3, device="cpu")
     fields = np.stack([_state(0.06, 0).material, _state(0.09, 1).material])

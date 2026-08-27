@@ -30,6 +30,11 @@ from .local_spatial import (
     LocalPatchTransition,
     local_patch_transition_from_states,
 )
+from .learning_lifecycle import (
+    CONTINUE_SHARED_PRETRAINING,
+    SHARED_PRETRAINING,
+    normalized_training_provenance,
+)
 from .models import LocalSpatialDynamicsEnsemble
 from .policies import MotorPrimitiveLatent
 from .spatial_agent import SpatialActiveInferencePainter
@@ -361,6 +366,7 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
         bootstrap_transitions=0,
         bootstrap_train_steps=0,
         checkpoint_path=input_checkpoint,
+        checkpoint_load_mode=CONTINUE_SHARED_PRETRAINING,
         observation_access_mode=SENSOR_OBSERVATION_ACCESS_MODE,
         provisional_sensor_policy=True,
         seed=int(args.seed),
@@ -375,10 +381,10 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
     if agent.device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(agent.device)
 
-    # A supplied checkpoint initializes shared parameters/optimizer moments,
-    # never the sampling pool for this run. Its replay may have unknown split
-    # provenance, so all replay containers are cleared before the manifest's
-    # training trajectories are materialized into patches.
+    # A supplied shared checkpoint continues shared parameters/optimizer
+    # moments, never its sampling pool. Replay may have unknown split
+    # provenance, so the lifecycle load mode already resets it; these clears
+    # make that boundary locally visible before this manifest is materialized.
     agent.replay.data.clear()
     agent.composition_replay.data.clear()
     agent.passage_replay.data.clear()
@@ -434,7 +440,8 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
 
     driver.trained_transitions = train_transition_count
     driver.checkpoint_path = output_checkpoint
-    driver.checkpoint_provenance = {
+    driver.checkpoint_provenance = normalized_training_provenance({
+        "training_role": SHARED_PRETRAINING,
         "mode": "shared_pretraining",
         "objective": "conditional likelihood/VFE parameter learning",
         "manifest": str(Path(args.manifest).resolve()),
@@ -450,7 +457,7 @@ def train_from_manifest(args: argparse.Namespace) -> dict[str, object]:
             _WORKER_RANDOMNESS_CONFIG_FIELDS | _COLLECTION_POLICY_CONFIG_FIELDS
         ),
         "simulation_claim": "uncalibrated simulation-only integration baseline",
-    }
+    })
     driver._save_checkpoint_if_due(force=True)
     if driver.checkpoint_status != "saved":
         raise RuntimeError(

@@ -69,6 +69,14 @@ class ActiveInferencePainter:
             torch.full((config.state_dim,), -4.5, device=self.device),
         )
 
+    def reset_episode_prior(self) -> None:
+        """Discard the painting-local posterior without touching learned state."""
+
+        self.belief = GaussianBelief(
+            torch.zeros(self.cfg.state_dim, device=self.device),
+            torch.full((self.cfg.state_dim,), -4.5, device=self.device),
+        )
+
     @property
     def last_vfe(self):
         return self.estimator.last_vfe

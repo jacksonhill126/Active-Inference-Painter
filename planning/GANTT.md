@@ -21,13 +21,15 @@ pilot produced six genuine stops and two truncations, proving stop collection
 is feasible, but it did not retain the registered image stream required by the
 accepted visual hierarchy. The gate repair closes AI-109 for M1 on the
 material-model evidence and closes AI-110 with the legacy composition
-mechanisms disabled in `m1-formal-policy-baseline-v0`. AI-112 inheritance,
-AI-113 profiling, and AI-114 replicas are now the M1 critical path. The
+mechanisms disabled in `m1-formal-policy-baseline-v0`. AI-112 inheritance
+closed on 2026-08-27 with checkpoint schema 7 and explicit individual/shared
+load modes. AI-113 profiling and AI-114 replicas are now the M1 critical path. The
 genuine-stop **visual** corpus, action-conditioned visual baseline, and
 tone/edge/mass hierarchy are the M2 critical path. Dates should be rebased only after the M1 capability gate, not from
 the amount of provisional implementation already present. The canonical
 perceptual boundary is `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`; the gate
-repair is `docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
+repair is `docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`. The inheritance
+record is `docs/ONLINE_LEARNING_INHERITANCE_2026-08-27.md`.
 
 ```mermaid
 gantt

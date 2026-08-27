@@ -43,6 +43,7 @@ from active_painter.config import (
     painting_policy_profile_id,
 )
 from active_painter.env import StrokeAction
+from active_painter.learning_lifecycle import ORACLE_DIAGNOSTIC_EXECUTION
 from active_painter.policies import Policy
 from active_painter.preferences import TerminalCoveragePreference
 from active_painter.spatial_agent import SpatialActiveInferencePainter
@@ -535,7 +536,12 @@ def test_spatial_agent_trains_composition_hierarchy_online() -> None:
         material = rng.uniform(0.0, 0.2, (cfg.spatial_material_channels, 8, 8)).astype(np.float32)
         state = SpatialCanvasState(material=material, logvar=np.full_like(material, -8.0))
         next_state = SpatialCanvasState(material=material + 0.01, logvar=np.full_like(material, -8.0))
-        agent.add_transition(state, stroke, next_state)
+        agent.add_transition(
+            state,
+            stroke,
+            next_state,
+            evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+        )
 
     agent.train_dynamics(gradient_steps=1)
 

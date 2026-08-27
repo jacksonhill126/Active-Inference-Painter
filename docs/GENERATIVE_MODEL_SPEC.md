@@ -1055,8 +1055,11 @@ derived from an explicit ELBO over `q(theta)`.
 
 Checkpointed learned parameters, optimizer state, replay, calibration beliefs,
 episodic beliefs, and current canvas have different persistence semantics.
-`AI-112` must finalize and test those semantics before inherited runs support
-research claims.
+AI-112 finalized and tested those semantics as
+`online-learning-inheritance-v0`: schema 7 separates exact individual resume,
+parameter-only inheritance from shared pretraining, and shared-training
+continuation. The detailed matrix and forgetting protocol are in
+`docs/ONLINE_LEARNING_INHERITANCE_2026-08-27.md`.
 
 ## 12. Factor-To-Code Map
 

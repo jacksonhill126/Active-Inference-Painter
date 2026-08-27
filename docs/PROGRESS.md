@@ -13,13 +13,16 @@ legacy coarse-material composition hierarchy, compression-gap terminal
 preference, canvas/relational transition precisions, passage-trajectory terms,
 and gap-progress stop prior. Explicit opt-in is reported as
 `legacy-material-composition-diagnostic-v0` and cannot support a visual
-composition claim. Checkpoint schema 6 and runtime diagnostics preserve the
-policy-profile identity.
+composition claim. Checkpoint schema 7 and runtime diagnostics preserve the
+policy-profile identity and the versioned
+`online-learning-inheritance-v0` ownership contract.
 
-M1 remains active: AI-112 inheritance semantics and AI-113 representative
-profiling are ready; AI-114 still requires three manifested replicas of the new
-profile; AI-115 remains blocked on those artifacts and owner review. See
-`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md` and the separate owner brief.
+M1 remains active: AI-112 inheritance semantics are complete; AI-113
+representative profiling is the next gate; AI-114 still requires three
+manifested replicas of the new profile; AI-115 remains blocked on those
+artifacts and owner review. See
+`docs/ONLINE_LEARNING_INHERITANCE_2026-08-27.md`,
+`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`, and their separate owner briefs.
 
 Post-change verification passed the exact 168-test deterministic CI set and a
 123-test affected suite covering composition, hierarchy, precision, stopping,
@@ -299,9 +302,10 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Complete AI-112's inheritance/reset matrix and AI-113's representative
-   runtime profile for `m1-formal-policy-baseline-v0`, then capture the three
-   manifested AI-114 replicas and present AI-115 for owner lock review.
+1. Complete AI-113's representative runtime profile for
+   `m1-formal-policy-baseline-v0`, then capture the three manifested AI-114
+   replicas with AI-112's anchor forgetting check and present AI-115 for owner
+   lock review.
 2. Keep the identity/consequence local likelihood shadow-only while diagnosing
    component responsibility and exact calibration inside/outside the action
    footprint. Test a normalized spike/hurdle identity event or richer bounded

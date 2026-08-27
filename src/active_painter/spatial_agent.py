@@ -11,6 +11,7 @@ from .camera_observation import CameraObservationBundle
 from .config import PainterConfig
 from .env import StrokeAction
 from .local_spatial import LocalPatchReplayBuffer
+from .learning_lifecycle import require_observed_transition_source
 from .models import LocalSpatialDynamicsEnsemble, SpatialDynamicsEnsemble
 from .policies import (
     MotorPrimitiveLatent,
@@ -136,6 +137,25 @@ class SpatialActiveInferencePainter:
             # where it was and the construction order above it is untouched.
             self.policy_sampler.learned_proposal = self.policy_proposal
 
+    def reset_episode_prior(self) -> None:
+        """Discard canvas-local posteriors while preserving learned parameters."""
+
+        material = np.zeros(
+            (
+                self.cfg.spatial_material_channels,
+                self.cfg.spatial_grid_size,
+                self.cfg.spatial_grid_size,
+            ),
+            dtype=np.float32,
+        )
+        self.belief = SpatialCanvasState(
+            material=material,
+            logvar=np.full_like(material, -4.5, dtype=np.float32),
+        )
+        if self.composition is not None:
+            self.composition.canvas_belief = None
+            self.composition.relational_belief = None
+
     def reset_belief(self, observation: SpatialCanvasState) -> None:
         self.belief = self.estimator.initialize(observation)
 
@@ -165,7 +185,10 @@ class SpatialActiveInferencePainter:
         state: SpatialCanvasState,
         actions: tuple[StrokeAction, ...],
         next_state: SpatialCanvasState,
+        *,
+        evidence_source: str,
     ) -> None:
+        require_observed_transition_source(evidence_source)
         self.passage_replay.add(
             state.flatten_mean(),
             policy_descriptor(actions, self.cfg),
@@ -178,9 +201,12 @@ class SpatialActiveInferencePainter:
         passage: PassageLatent,
         step_index: int,
         next_state: SpatialCanvasState,
+        *,
+        evidence_source: str,
     ) -> None:
         """Train the passage likelihood without updating the slow posterior."""
 
+        require_observed_transition_source(evidence_source)
         if not self.cfg.passage_trajectory_enabled:
             return
         self.passage_step_replay.add(
@@ -251,7 +277,10 @@ class SpatialActiveInferencePainter:
         action: StrokeAction,
         next_state: SpatialCanvasState,
         motor_primitive: MotorPrimitiveLatent | None = None,
+        *,
+        evidence_source: str,
     ) -> None:
+        require_observed_transition_source(evidence_source)
         if isinstance(self.replay, LocalPatchReplayBuffer):
             self.replay.add_from_states(state, action, next_state, self.cfg, motor_primitive)
         else:

@@ -366,16 +366,20 @@ claims.
 
 ### AI-112 Define online learning and inheritance semantics
 
-Status: `Ready`
+Status: `Done`
 Track: Continual Learning/Research Ops  
 Depends on: AI-101, AI-108  
 Owner: Jackson/Codex  
 Estimate: 1-2 days  
 Acceptance: Shared parameters, optimizer, replay, calibration, episodic beliefs, and canvas history have separate persistence and reporting rules.
-Notes: Parallel corpus/training manifests now distinguish shared pretraining
-from individual runtime history and record corpus/checkpoint provenance. The
-full inheritance/reset matrix and developmental interpretation tests remain
-undefined. AI-108 is complete, so this task is ready for that semantic work.
+Notes: Checkpoint schema 7 embeds `online-learning-inheritance-v0` and exposes
+separate exact-individual-resume, shared-parameter-initialization, and
+shared-pretraining-continuation modes. Episode beliefs reset; individual replay
+and calibration persist only for an individual resume; model-imagined
+rollouts are rejected from all runtime replay APIs. The retention and fixed
+anchor held-out forgetting protocol is defined in
+`docs/ONLINE_LEARNING_INHERITANCE_2026-08-27.md`; AI-114 must execute it rather
+than reinterpret its ownership semantics.
 
 ### AI-113 Profile inference, rollout, and learning separately
 
@@ -400,7 +404,8 @@ Estimate: 2 days
 Acceptance: At least three fixed-seed runs archive manifests, beliefs, VFE/EFE, calibration, proposal statistics, telemetry, failures, and canvases.
 Notes: The 2026-08-26 gate repair defines
 `m1-formal-policy-baseline-v0`, but no three-replica artifact set exists for
-that profile. Blocked on AI-112 inheritance semantics and AI-113 profiling.
+that profile. AI-112 is complete; replica capture remains blocked on AI-113's
+representative phase profile and the resulting bounded run budget.
 
 ### AI-115 M1 lock decision
 

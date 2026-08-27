@@ -13,6 +13,10 @@ from active_painter.canvas_hierarchy import (
 )
 from active_painter.config import PainterConfig
 from active_painter.env import StrokeAction
+from active_painter.learning_lifecycle import (
+    MODEL_IMAGINED_ROLLOUT,
+    ORACLE_DIAGNOSTIC_EXECUTION,
+)
 from active_painter.policies import PassageLatent, Policy, PolicySampler
 from active_painter.precision_beliefs import MODALITY_NAMES, PrecisionLedger
 from active_painter.preferences import TerminalCoveragePreference
@@ -321,12 +325,36 @@ def test_high_level_posteriors_update_only_at_explicit_passage_boundary() -> Non
     agent.reset_belief(after)
     assert agent.composition.canvas_belief.update_count == 0
 
-    agent.add_passage_transition(before, (action,), after)
+    agent.add_passage_transition(
+        before,
+        (action,),
+        after,
+        evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+    )
     agent.update_hierarchy_beliefs(after, (action,))
     assert agent.composition.canvas_belief.update_count == 1
     assert agent.composition.relational_belief is not None
     assert agent.composition.relational_belief.update_count == 1
     assert len(agent.passage_replay) == 1
+
+
+def test_passage_replay_rejects_model_imagined_evidence() -> None:
+    config = _config()
+    agent = SpatialActiveInferencePainter(config, seed=4, device="cpu")
+    material = _field(config, slice(1, 3), slice(1, 3))
+    before = SpatialCanvasState(material, np.full_like(material, -8.0))
+    after = SpatialCanvasState(material + 0.01, np.full_like(material, -8.0))
+    action = StrokeAction(0.2, 0.2, 0.7, 0.6, 0.1, 0.5, 1.0)
+
+    with pytest.raises(ValueError, match="only realized observation evidence"):
+        agent.add_passage_transition(
+            before,
+            (action,),
+            after,
+            evidence_source=MODEL_IMAGINED_ROLLOUT,
+        )
+
+    assert len(agent.passage_replay) == 0
 
 
 def test_passage_transition_training_marks_likelihood_as_available() -> None:
@@ -338,7 +366,12 @@ def test_passage_transition_training_marks_likelihood_as_available() -> None:
         after_material = _field(config, slice(1 + offset, 4 + offset), slice(1, 5))
         before = SpatialCanvasState(before_material, np.full_like(before_material, -8.0))
         after = SpatialCanvasState(after_material, np.full_like(after_material, -8.0))
-        agent.add_passage_transition(before, (action,), after)
+        agent.add_passage_transition(
+            before,
+            (action,),
+            after,
+            evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+        )
 
     assert agent.composition is not None
     agent._train_hierarchy_transitions((config.spatial_material_channels, 8, 8))
@@ -359,7 +392,13 @@ def test_per_mark_passage_likelihood_trains_without_fast_global_posterior_update
         after = SpatialCanvasState(after_material, np.full_like(after_material, -8.0))
         if offset == 0:
             agent.reset_hierarchy_beliefs(before)
-        agent.add_passage_step_transition(before, passage, offset, after)
+        agent.add_passage_step_transition(
+            before,
+            passage,
+            offset,
+            after,
+            evidence_source=ORACLE_DIAGNOSTIC_EXECUTION,
+        )
 
     assert agent.composition is not None
     assert agent.composition.canvas_belief is not None

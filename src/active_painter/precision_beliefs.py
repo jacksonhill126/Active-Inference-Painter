@@ -740,6 +740,18 @@ class GapIncrementBelief:
     def has_observations(self) -> bool:
         return self.observations > 0
 
+    def reset(self, config: PainterConfig) -> None:
+        """Return the painting-local progress belief to its declared prior."""
+
+        fresh = self.from_config(config)
+        self.mean = fresh.mean
+        self.variance = fresh.variance
+        self.process_variance = fresh.process_variance
+        self.observation_variance = fresh.observation_variance
+        self.last_gap = None
+        self.last_mark_index = 0
+        self.observations = 0
+
     def posterior_mean(self) -> float:
         return float(self.mean)
 

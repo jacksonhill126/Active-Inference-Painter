@@ -492,7 +492,7 @@ Notes:
 
 ### AI-112 Define online learning and inheritance semantics
 
-Status: `Ready`
+Status: `Done`
 Track: Continual Learning/Research Ops  
 Depends on: AI-101, AI-108  
 Owner: Jackson/Codex  
@@ -509,6 +509,17 @@ Acceptance:
   history.
 - Define replay retention, held-out monitoring, and catastrophic-forgetting
   checks.
+
+Evidence: checkpoint schema 7 embeds
+`online-learning-inheritance-v0`; separate load modes now cover exact
+individual resume, parameter-only individual initialization from shared
+pretraining, and shared-pretraining continuation. Episode-local body, canvas,
+brush, gap, and passage beliefs reset while learned parameters, individual
+replay, and developmental calibration follow their declared ownership rules.
+All runtime replay APIs reject model-imagined rollouts as observations. See
+`docs/ONLINE_LEARNING_INHERITANCE_2026-08-27.md` and its owner brief. The
+AI-114 replicas must still instantiate the defined anchor held-out forgetting
+check; that is evidence collection, not an open ownership decision.
 
 ### AI-113 Profile inference, rollout, and learning separately
 
