@@ -114,3 +114,38 @@ def test_material_cvae_records_do_not_claim_to_implement_the_visual_vae() -> Non
             assert stale_attribution not in text, (
                 f"stale VAE attribution in {path.relative_to(ROOT)}"
             )
+
+
+def _tracker_task_block(task_id: str, next_task_id: str) -> str:
+    text = (ROOT / "planning/PROJECT_TRACKER.md").read_text(encoding="utf-8")
+    start = text.index(f"### {task_id} ")
+    end = text.index(f"### {next_task_id} ", start)
+    return text[start:end]
+
+
+def test_m1_gate_repair_has_an_executable_non_circular_status_path() -> None:
+    assert "Status: `Done`" in _tracker_task_block("AI-109", "AI-110")
+    assert "AI-205, AI-206, AI-208, and AI-214" in _tracker_task_block(
+        "AI-109", "AI-110"
+    )
+    assert "Status: `Done`" in _tracker_task_block("AI-110", "AI-111")
+    assert "allowed disabled decision" in _tracker_task_block("AI-110", "AI-111")
+    assert "Status: `Ready`" in _tracker_task_block("AI-112", "AI-113")
+    assert "Status: `Ready`" in _tracker_task_block("AI-113", "AI-114")
+    assert "AI-112, AI-113" in _tracker_task_block("AI-114", "AI-115")
+
+
+def test_gate_repair_records_preserve_policy_and_visual_boundaries() -> None:
+    technical = (ROOT / "docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md").read_text(
+        encoding="utf-8"
+    )
+    owner = (ROOT / "docs/M1_GATE_REPAIR_OWNER_BRIEF_2026-08-26.md").read_text(
+        encoding="utf-8"
+    )
+
+    for text in (technical, owner):
+        assert "m1-formal-policy-baseline-v0" in text
+        assert "VISUAL_GENERATIVE_MODEL_BOUNDARY.md" in text
+    assert "legacy-material-composition-diagnostic-v0" in technical
+    assert "M1 is not declared complete" in technical
+    assert "Immediate `stop` remains" in owner

@@ -3,7 +3,8 @@
 Model specification: `baseline-oracle-v0`
 
 Status: implemented-model description for M1 audit, accepted for `AI-101` on
-2026-07-24. This is not the M1 lock. Later M1 tasks must independently verify
+2026-07-24, with the 2026-08-26 M1 policy-profile decision appended below.
+This is not the M1 lock. Later M1 tasks must independently verify
 the equations, sensor boundary, calibration, proposal semantics, and
 preference choices described here.
 
@@ -629,9 +630,12 @@ setting it false restores the iid-only baseline exactly.
 
 This is an unnormalized energy-based preference. Because the hierarchy is
 trained online on the same stream it evaluates, this creates a self-referential
-closed loop. It is not accepted as a principled fixed preference until
-`AI-110` approves frozen, cross-fitted, or alternative semantics. Current
-composition results are exploratory diagnostics.
+closed loop. AI-110 closed on 2026-08-26 with the disabled branch:
+`m1-formal-policy-baseline-v0` sets the legacy hierarchy, its preference and
+transition precisions, its passage terms, and its derived gap-progress stop
+factor off by default. Explicit opt-in identifies as
+`legacy-material-composition-diagnostic-v0`; those results remain exploratory
+diagnostics and are not an admitted visual hierarchy.
 
 ### 8.3 Motor homeostatic outcomes
 
@@ -1440,7 +1444,8 @@ This specification records the following current decision state:
   likelihood, and EFE precision terms are reported separately. All offline
   precision-ledger entries were unobserved declared priors. AI-109 subsequently
   tested the data/capacity and likelihood-family hypotheses;
-- `AI-109`: LOCAL BRANCH MEASURED; HIERARCHY BRANCH ACTIVE. Twenty-seven
+- `AI-109`: ANSWERED FOR M1 WITH A NEGATIVE/INCONCLUSIVE MATERIAL-MODEL
+  RESULT. Twenty-seven
   three-seed local runs show modest, non-monotonic data sensitivity and no
   generic CNN capacity benefit. Five ensemble members improve density over
   one. The material-posterior cVAE does not materially improve the CNN and
@@ -1448,10 +1453,14 @@ This specification records the following current decision state:
   normalized identity/consequence mixture improves mean exact test
   NLL by 1.392 nats and retains 0.0738 eight-mark RMSE, but validation-scaled
   50%/90% intervals cover 90.60%/95.75% and every seed fails calibration. It
-  remains shadow-only. Hierarchy learning curves are structurally unavailable
-  because all accepted corpus endpoints are fixed-horizon truncations, not
-  policy-selected terminal paintings;
-- `AI-110`: whether the composition preference can be retained;
+  remains shadow-only. The missing registered visual and hierarchy learning
+  curves move to M2 AI-205/AI-206/AI-208/AI-214 because all accepted corpus
+  endpoints are fixed-horizon truncations, not policy-selected terminal
+  paintings;
+- `AI-110`: ANSWERED FOR M1 WITH THE DISABLED DECISION. The legacy material
+  composition mechanisms are opt-in diagnostics. A future visual structural
+  preference requires a new M2 admission decision and frozen/cross-fitted
+  safeguards;
 - `AI-111`: ANSWERED FOR THE CURRENT M1 BASELINE, WITH A NEGATIVE CONVERGENCE
   RESULT. Hand-written and learned proposals are explicitly separate from
   policy priors; mixture weights are computational choices; and the current

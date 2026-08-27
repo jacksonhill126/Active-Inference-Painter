@@ -36,7 +36,12 @@ from active_painter.composition import (
     flat_log_likelihood,
     local_smoothness_log_likelihood,
 )
-from active_painter.config import PainterConfig
+from active_painter.config import (
+    LEGACY_MATERIAL_HIERARCHY_DIAGNOSTIC_ID,
+    M1_FORMAL_POLICY_BASELINE_ID,
+    PainterConfig,
+    painting_policy_profile_id,
+)
 from active_painter.env import StrokeAction
 from active_painter.policies import Policy
 from active_painter.preferences import TerminalCoveragePreference
@@ -398,7 +403,12 @@ class DeterministicFootprintDynamics:
 
 
 def test_composition_gap_enters_spatial_efe_as_declared_terminal_preference() -> None:
-    cfg = PainterConfig(canvas_size=32, spatial_grid_size=16, composition_gap_precision=1.0)
+    cfg = PainterConfig(
+        canvas_size=32,
+        spatial_grid_size=16,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+    )
     material = np.zeros((6, 16, 16), dtype=np.float32)
     belief = SpatialCanvasState(material=material, logvar=np.full_like(material, -12.0))
     efe = SpatialExpectedFreeEnergy(
@@ -466,6 +476,41 @@ def test_composition_structural_flag_is_separate_from_its_precision() -> None:
     assert components.composition_risk == 0.0
 
 
+def test_default_m1_policy_baseline_disables_legacy_material_hierarchy_terms() -> None:
+    cfg = PainterConfig()
+
+    assert painting_policy_profile_id(cfg) == M1_FORMAL_POLICY_BASELINE_ID
+    assert not cfg.composition_enabled
+    assert cfg.composition_gap_precision == 0.0
+    assert cfg.canvas_latent_transition_precision == 0.0
+    assert cfg.relational_transition_precision == 0.0
+    assert not cfg.passage_trajectory_enabled
+    assert not cfg.gap_progress_stop_enabled
+
+    agent = SpatialActiveInferencePainter(cfg, seed=3, device="cpu")
+    assert agent.composition is None
+    assert agent.policy_proposal is None
+
+
+def test_legacy_material_hierarchy_requires_an_explicit_diagnostic_opt_in() -> None:
+    cfg = PainterConfig(
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        canvas_latent_transition_precision=0.30,
+        relational_transition_precision=0.30,
+        passage_trajectory_enabled=True,
+        gap_progress_stop_enabled=True,
+    )
+
+    assert (
+        painting_policy_profile_id(cfg)
+        == LEGACY_MATERIAL_HIERARCHY_DIAGNOSTIC_ID
+    )
+    agent = SpatialActiveInferencePainter(cfg, seed=3, device="cpu")
+    assert agent.composition is not None
+    assert agent.policy_proposal is not None
+
+
 def test_spatial_agent_trains_composition_hierarchy_online() -> None:
     cfg = PainterConfig(
         spatial_grid_size=8,
@@ -474,6 +519,11 @@ def test_spatial_agent_trains_composition_hierarchy_online() -> None:
         spatial_ensemble_size=2,
         composition_hidden_channels=8,
         composition_latent_dim=8,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        canvas_latent_transition_precision=0.30,
+        relational_transition_precision=0.30,
+        passage_trajectory_enabled=True,
         batch_size=4,
     )
     agent = SpatialActiveInferencePainter(cfg, seed=5, device="cpu")

@@ -2,6 +2,14 @@
 
 Date: 2026-08-12
 
+## August 26 scope update
+
+The material-model experiment described below now closes AI-109 for M1. Its
+unfinished registered visual and hierarchy work moves to M2 rather than
+keeping M1 dependent on the architecture it is meant to unblock. Nothing below
+turns truncations into completed paintings; the original evidence boundary is
+unchanged. See `docs/M1_GATE_REPAIR_OWNER_BRIEF_2026-08-26.md`.
+
 ## Where we landed
 
 We learned something decisive about the low-level material predictor, but we
@@ -89,9 +97,10 @@ transition is still a valid example. For a slow composition model it is not
 fine. Calling the final frame a completed painting would teach the hierarchy
 that “the data collector's timer expired” means “this painting is resolved.”
 
-I deliberately did not manufacture those labels. AI-109 is therefore active,
-not complete: the local branch has been measured, and the hierarchy branch
-needs genuine terminal paintings.
+I deliberately did not manufacture those labels. At the time of this record,
+AI-109 therefore remained active. The 2026-08-26 gate repair closes its M1
+material-model question and moves the hierarchy branch to M2, where genuine
+terminal visual paintings remain required.
 
 ## What I recommend next
 

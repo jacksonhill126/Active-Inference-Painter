@@ -374,7 +374,7 @@ Acceptance:
 
 ### AI-109 Establish predictive learning curves
 
-Status: `Active`
+Status: `Done`
 Track: Modeling/Validation  
 Depends on: AI-107, AI-108  
 Owner: Jackson/Codex  
@@ -390,7 +390,7 @@ Acceptance:
 - Record wall time, memory, model size, and optimizer steps.
 - Establish a baseline that later pretrained or larger models must beat.
 
-Evidence/status 2026-08-12:
+Evidence/decision:
 
 - The local branch completed a 27-run matrix over seeds 109/211/307, nested
   3/6/10-trajectory subsets, three CNN capacities, 1/3/5 ensemble members, the
@@ -403,15 +403,18 @@ Evidence/status 2026-08-12:
 - All AI-108 endpoints are fixed-horizon truncations. A 2026-08-12 pilot then
   demonstrated feasible genuine-stop collection with six selected stops and
   two truncations at 192 steps, but it retained coarse final posteriors rather
-  than the registered image stream. The hierarchy branch remains open pending
-  a trajectory-isolated genuine-stop **visual** corpus; truncations must not be
-  manufactured into terminal composition labels.
+  than the registered image stream. Truncations must not be manufactured into
+  terminal composition labels.
+- Closed for M1 on 2026-08-26. The 27-run matrix is the accepted negative/
+  inconclusive capacity decision for the old material models. Terminal visual
+  collection and visual hierarchy curves move to AI-205, AI-206, AI-208, and
+  AI-214 so M1 no longer depends on the M2 architecture it gates.
 - See `docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md` and
   `docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md`.
 
 ### AI-110 Resolve the composition-preference closed loop
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Preferences  
 Depends on: AI-101, AI-105, AI-109  
 Owner: Jackson/Codex  
@@ -433,6 +436,13 @@ Acceptance:
 - Compare same-data, cross-fitted, periodically frozen, and disabled variants.
 - Either approve one declared preference formulation with limitations or set
   `composition_gap_precision` to zero by default until M2 resolves it.
+
+Decision 2026-08-26: choose the disabled branch. The default profile is
+`m1-formal-policy-baseline-v0`; every legacy material-hierarchy preference,
+transition-risk precision, passage term, and derived gap-progress stop factor
+is disabled. Controlled opt-in runs identify as
+`legacy-material-composition-diagnostic-v0` and cannot support a visual
+composition claim. See `docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
 
 ### AI-111 Separate proposal distributions from policy priors
 
@@ -482,7 +492,7 @@ Notes:
 
 ### AI-112 Define online learning and inheritance semantics
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Continual Learning/Research Ops  
 Depends on: AI-101, AI-108  
 Owner: Jackson/Codex  
@@ -502,7 +512,7 @@ Acceptance:
 
 ### AI-113 Profile inference, rollout, and learning separately
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Performance/Feasibility  
 Depends on: AI-109  
 Owner: Jackson/Codex  
@@ -523,7 +533,7 @@ Acceptance:
 
 Status: `Blocked`  
 Track: Research Ops  
-Depends on: AI-104, AI-105, AI-106, AI-107, AI-109, AI-110, AI-111, AI-113  
+Depends on: AI-104, AI-105, AI-106, AI-107, AI-109, AI-110, AI-111, AI-112, AI-113
 Owner: Jackson/Codex  
 Estimate: 2 days
 

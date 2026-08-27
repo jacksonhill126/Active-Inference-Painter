@@ -5,7 +5,7 @@ for one investigator, not a staffing plan. Overlapping bars indicate work that
 can be interleaved; they do not assume two full-time people. Dates must be
 revised after each capability gate.
 
-Status review 2026-08-11: the calendar envelope has not slipped—M1 was planned
+Status review updated 2026-08-26: the calendar envelope has not slipped—M1 was planned
 as a six-week effort after M0—but implementation has run ahead into provisional
 M2/S2/M5 branches while M1 scientific acceptance remains the critical path.
 Those branches do not advance their milestone gates. AI-106 terminal/stopping
@@ -19,12 +19,15 @@ likelihood. That mixture still fails exact predictive-mixture calibration; the
 result does not test the owner's visual VAE proposal. A subsequent 192-step
 pilot produced six genuine stops and two truncations, proving stop collection
 is feasible, but it did not retain the registered image stream required by the
-accepted visual hierarchy. Near-term critical-path work is therefore a
-genuine-stop **visual** corpus and action-conditioned visual baseline, followed
-by the tone/edge/mass hierarchy and revised AI-110 structural-preference
-decision. Dates should be rebased only after the M1 capability gate, not from
+accepted visual hierarchy. The gate repair closes AI-109 for M1 on the
+material-model evidence and closes AI-110 with the legacy composition
+mechanisms disabled in `m1-formal-policy-baseline-v0`. AI-112 inheritance,
+AI-113 profiling, and AI-114 replicas are now the M1 critical path. The
+genuine-stop **visual** corpus, action-conditioned visual baseline, and
+tone/edge/mass hierarchy are the M2 critical path. Dates should be rebased only after the M1 capability gate, not from
 the amount of provisional implementation already present. The canonical
-perceptual boundary is `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
+perceptual boundary is `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`; the gate
+repair is `docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
 
 ```mermaid
 gantt

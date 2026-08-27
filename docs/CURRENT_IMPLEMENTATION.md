@@ -169,7 +169,12 @@ The immediate `stop` policy is always available. Continuation policies are sampl
 
 ## Composition hierarchy (compression gap)
 
-Spatial mode carries a hierarchical composition layer (`canvas_hierarchy.py`):
+This is now an explicit legacy diagnostic, disabled in the default
+`m1-formal-policy-baseline-v0`. The equations below describe the opt-in
+`legacy-material-composition-diagnostic-v0`, not an admitted visual hierarchy
+or default policy term.
+
+When explicitly enabled, spatial mode carries a hierarchical composition layer (`canvas_hierarchy.py`):
 a spatial canvas latent with a learned decoder over the material fields. The
 single declared structural preference over terminal canvases is
 
@@ -402,14 +407,16 @@ EFE, not composition rewards.
   motions that amplify body-parameter uncertainty forecast wider even before
   reliability evidence arrives. This is the sim-to-real seam: on hardware the
   same residuals calibrate the body model instead of a copied simulator.
-- **Per-modality precision BELIEFS.** The seven modality precisions
+- **Per-modality precision BELIEFS.** The seven modality precision slots
   (`terminal_risk_precision`, `ambiguity_precision`, `transition_precision`,
   `composition_gap_precision`, `canvas_latent_transition_precision`,
   `relational_transition_precision`, and the modality-level
   `motor_modality_precision`) plus `policy_precision` are the posterior means of
   Gamma beliefs (`precision_beliefs.py`), updated by the reference textbook's
   Chapter 10 rule `dF/dgamma = (alpha/gamma - beta0) + (pi - pi0).(-G)` from the
-  realized `(G, F)` candidate pair after each planning round. `F` is the
+  realized `(G, F)` candidate pair after each planning round when enabled.
+  The three legacy composition/hierarchy prior means are zero in the M1
+  baseline. `F` is the
   brush-preparation negative log marginal evidence, which is free of the painting
   policy precision, so no learned gamma appears on both sides of its own update.
   Each belief's prior mean is exactly the previous declared constant and an
@@ -428,7 +435,8 @@ EFE, not composition rewards.
   the motor modality's raw 27-channel sum is the only new divisor, and that is a
   27x reweighting rather than a tidy-up. `modality_normalization_enabled=False`
   restores the historical mixed units.
-- **Gap-progress stopping as a policy prior.** `log p(stop-first)` is a product
+- **Gap-progress stopping as a policy prior (legacy diagnostic, default off).**
+  When explicitly enabled, `log p(stop-first)` is a product
   of the coverage sigmoid and `logsigmoid(-s * E[dGap]/sd[dGap])` over a Gaussian
   random-walk belief on the per-mark compression-gap increment. Both factors are
   <= 0 and the progress factor is exactly 0 for continuations and for an
@@ -804,6 +812,16 @@ Use `--telemetry-sample-hz` and `--telemetry-max-samples` to control the log
 rate and retention window.
 
 ## Architectural boundary
+
+The default painting-policy identity is
+`m1-formal-policy-baseline-v0`. The older coarse-material composition model,
+its compression-gap terminal preference, canvas/relational transition terms,
+passage trajectory, and gap-progress stop prior are disabled by default.
+Controlled opt-in reports
+`legacy-material-composition-diagnostic-v0`; it remains a diagnostic over the
+provisional material posterior and is not the accepted visual hierarchy. See
+`M1_GATE_REPAIR_TECHNICAL_2026-08-26.md` and
+`VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 Painting cognition should remain active-inference based. A later robot backend may use conventional:
 

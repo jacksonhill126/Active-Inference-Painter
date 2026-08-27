@@ -99,10 +99,16 @@ and [owner brief](docs/AI107_UNCERTAINTY_CALIBRATION_OWNER_BRIEF_2026-08-11.md).
 AI-109's 27-run local learning-curve branch found that a normalized
 identity/consequence mixture materially improves held-out density and
 multistep prediction, but still fails exact full-mixture calibration. The
-hierarchy curve remains open because the accepted corpus has no genuine
-policy-selected terminal paintings. See the
+material-model question closes as a negative/inconclusive M1 result. The
+registered visual and hierarchy curves move to M2 because the accepted corpus
+has no genuine policy-selected terminal paintings. See the
 [technical learning-curve record](docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md)
 and [owner brief](docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md).
+The default `m1-formal-policy-baseline-v0` also disables the unaccepted legacy
+coarse-material composition preference, hierarchy-transition terms, and
+gap-progress stop prior; see the
+[technical gate-repair record](docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md)
+and [owner brief](docs/M1_GATE_REPAIR_OWNER_BRIEF_2026-08-26.md).
 
 An experimental conditional patch-transition VAE can be trained against the
 same whole-trajectory splits in shadow mode:

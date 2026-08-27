@@ -283,7 +283,7 @@ brief.
 
 ### AI-109 Establish predictive learning curves
 
-Status: `Active`
+Status: `Done`
 Track: Modeling/Validation  
 Depends on: AI-107, AI-108  
 Owner: Jackson/Codex  
@@ -305,15 +305,18 @@ is a fixed-horizon truncation. A 2026-08-12 collection pilot produced six
 policy-selected stops and two truncations at a 192-step cap, demonstrating
 that genuine-stop collection is feasible. It retained coarse final posteriors,
 not the registered pre/post image stream required by the selected hierarchy.
-AI-109 remains active until a trajectory-isolated **visual** terminal corpus
-supports hierarchy data/capacity/seed curves. Do not relabel truncations as
+Decision 2026-08-26: this closes the M1 question with a measured negative/
+inconclusive result for the then-current coarse-material models. Requiring a
+new terminal registered-image corpus and tone/edge/mass hierarchy here created
+a circular M1 -> M2 -> M1 dependency. That unfinished visual work is preserved
+under AI-205, AI-206, AI-208, and AI-214. Do not relabel truncations as
 completed paintings. See
 `docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md` and the owner
-brief.
+brief, plus `docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
 
 ### AI-110 Resolve the composition-preference closed loop
 
-Status: `Blocked`  
+Status: `Done`
 Track: Active Inference/Preferences  
 Depends on: AI-101, AI-105, AI-109  
 Owner: Jackson/Codex  
@@ -324,14 +327,14 @@ patches whose observations are locally difficult to explain or incompatible
 with slower painting structure, then prefers predicted outcomes that reduce
 that posterior predictive mismatch. The material-transition predictor may
 forecast mark consequences but is not itself the painting objective.
-Notes: The older scalar compression-gap implementation remains provisional and
-must not be treated as acceptance of this broader formulation. AI-110 cannot
-be resolved against the 16x16 material-posterior hierarchy: first establish the
-visual tone/edge/mass representation and genuine-stop visual corpus required by
-`docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`. The 2026-08-11 conditional material
-patch cVAE is a shadow low-level likelihood only; it is neither the owner's
-visual VAE nor a contour/composition layer and does not influence policy
-selection.
+Notes: Closed 2026-08-26 with the allowed disabled decision. The canonical
+`m1-formal-policy-baseline-v0` sets the legacy coarse-material hierarchy,
+compression-gap preference, canvas/relational transition precisions,
+passage-trajectory terms, and gap-progress stop prior off by default. Explicit
+opt-in is identified as `legacy-material-composition-diagnostic-v0`; it is not
+an accepted visual composition model. A future visual structural preference
+requires a new M2 admission decision with frozen/cross-fitted safeguards. See
+`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md` and the separate owner brief.
 
 ### AI-111 Separate proposal distributions from policy priors
 
@@ -376,7 +379,7 @@ undefined. AI-108 is complete, so this task is ready for that semantic work.
 
 ### AI-113 Profile inference, rollout, and learning separately
 
-Status: `Blocked`  
+Status: `Ready`
 Track: Performance/Feasibility  
 Depends on: AI-109  
 Owner: Jackson/Codex  
@@ -384,17 +387,20 @@ Estimate: 1 day
 Acceptance: State inference, EFE, motor forecasting, hierarchy, training, serialization, and rendering have separate timings and a ranked optimization plan.
 Notes: Phase timers and a 1/4/6/8-worker collection benchmark harness now exist,
 but a representative measured profile and ranked optimization decision do not.
-The task remains blocked on AI-109 rather than being inferred complete from
-parallelization code.
+AI-109 closed for M1 on 2026-08-26, so this task is ready; existing harness code
+alone is not acceptance.
 
 ### AI-114 Capture reproducible baseline replicas
 
 Status: `Blocked`  
 Track: Research Ops  
-Depends on: AI-104, AI-105, AI-106, AI-107, AI-109, AI-110, AI-111, AI-113  
+Depends on: AI-104, AI-105, AI-106, AI-107, AI-109, AI-110, AI-111, AI-112, AI-113
 Owner: Jackson/Codex  
 Estimate: 2 days  
 Acceptance: At least three fixed-seed runs archive manifests, beliefs, VFE/EFE, calibration, proposal statistics, telemetry, failures, and canvases.
+Notes: The 2026-08-26 gate repair defines
+`m1-formal-policy-baseline-v0`, but no three-replica artifact set exists for
+that profile. Blocked on AI-112 inheritance semantics and AI-113 profiling.
 
 ### AI-115 M1 lock decision
 
@@ -724,10 +730,13 @@ AI-213 by itself.
 
 Status: `Blocked`  
 Track: Feasibility/Modeling  
-Depends on: AI-109, AI-204, AI-208, AI-213  
+Depends on: AI-204, AI-205, AI-206, AI-208, AI-213
 Owner: Jackson/Codex  
 Estimate: 2-3 days  
-Acceptance: Learning curves, latency, memory, cost, and a narrow frozen-feature adapter define whether larger or pretrained perception is justified.
+Acceptance: Visual local and hierarchy data/capacity/seed learning curves,
+latency, memory, cost, and a narrow frozen-feature adapter define whether
+larger or pretrained perception is justified. This owns the visual learning-
+curve continuation moved out of M1 AI-109 on 2026-08-26.
 
 ### AI-215 Run the M2 capability-gate suite
 

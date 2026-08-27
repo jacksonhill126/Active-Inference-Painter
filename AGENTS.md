@@ -315,6 +315,16 @@ mark-consequence VAE; see `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
 
 Separate posterior beliefs, transition priors, and preferences. Higher-level priors must have slower dynamics and higher temporal depth; do not let them copy lower-level observations through fast moving averages.
 
+The canonical default policy profile is now
+`m1-formal-policy-baseline-v0`. It disables the legacy coarse-material
+compression-gap preference, canvas/relational transition precisions,
+passage-trajectory terms, and gap-progress stop prior. Explicit opt-in is
+`legacy-material-composition-diagnostic-v0`; it is a diagnostic over the
+provisional `SpatialCanvasState`, not an admitted visual composition model.
+Do not use that opt-in for canonical visual-corpus collection or describe it
+as hierarchy admission. The decision record is
+`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
+
 ## Safety
 
 Hard joint, current, force, workspace, watchdog, and non-finite-state limits remain external to the active-inference painting model.

@@ -66,6 +66,8 @@ def _blank_candidate_set(**overrides):
         planning_horizon=3,
         spatial_grid_size=16,
         spatial_transition_mode="local_patch",
+        composition_enabled=True,
+        composition_gap_precision=1.0,
         **overrides,
     )
     agent = SpatialActiveInferencePainter(cfg, seed=5, device="cpu")
@@ -247,7 +249,9 @@ def test_gap_increment_belief_cannot_leak_into_expected_free_energy() -> None:
     feature is most at risk of.
     """
 
-    cfg, agent, policies, before = _blank_candidate_set()
+    cfg, agent, policies, before = _blank_candidate_set(
+        gap_progress_stop_enabled=True
+    )
     agent.gap_increment.observe(0.0, 0)
     agent.gap_increment.observe(25.0, 1)
     assert agent.gap_increment.has_observations()

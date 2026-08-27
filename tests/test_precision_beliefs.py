@@ -265,7 +265,7 @@ def test_summary_is_json_serializable_with_only_finite_builtin_floats() -> None:
 def test_unobserved_gap_belief_contributes_exactly_zero_to_the_stop_prior() -> None:
     """The zero is EXACT, which is what preserves log(0.5) at the midpoint."""
 
-    cfg = PainterConfig()
+    cfg = PainterConfig(gap_progress_stop_enabled=True)
     belief = GapIncrementBelief.from_config(cfg)
     assert not belief.has_observations()
     assert belief.stop_log_prior_term(cfg) == 0.0
@@ -279,7 +279,7 @@ def test_unobserved_gap_belief_contributes_exactly_zero_to_the_stop_prior() -> N
 def test_gap_progress_stop_term_is_never_positive_and_rises_as_progress_falls() -> None:
     """A PRIOR factor, so it can only make stopping less unlikely."""
 
-    cfg = PainterConfig()
+    cfg = PainterConfig(gap_progress_stop_enabled=True)
     terms = []
     for increment in (0.5, 0.2, 0.05, 0.0, -0.05, -0.4):
         belief = GapIncrementBelief.from_config(cfg)

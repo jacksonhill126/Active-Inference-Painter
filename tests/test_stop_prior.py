@@ -96,7 +96,7 @@ def test_gap_progress_is_a_separable_second_prior_factor() -> None:
     minus the progress factor must still be exactly log(0.5).
     """
 
-    cfg = PainterConfig()
+    cfg = PainterConfig(gap_progress_stop_enabled=True)
     stop = Policy((StrokeAction.stop_action(),))
     belief = _observed_gap_belief(cfg, 0.30)
     progress = belief.stop_log_prior_term(cfg)
@@ -108,7 +108,7 @@ def test_gap_progress_is_a_separable_second_prior_factor() -> None:
 
 
 def test_gap_progress_factor_rises_as_believed_progress_falls() -> None:
-    cfg = PainterConfig()
+    cfg = PainterConfig(gap_progress_stop_enabled=True)
     stop = Policy((StrokeAction.stop_action(),))
     values = [
         policy_stop_log_prior(stop, 0.5, cfg, _observed_gap_belief(cfg, increment))
@@ -119,7 +119,7 @@ def test_gap_progress_factor_rises_as_believed_progress_falls() -> None:
 
 
 def test_continuations_stay_exactly_flat_with_a_fully_observed_gap_belief() -> None:
-    cfg = PainterConfig()
+    cfg = PainterConfig(gap_progress_stop_enabled=True)
     continuation = Policy(
         (StrokeAction(0.1, 0.1, 0.9, 0.9, 0.08, 0.5, 1.0), StrokeAction.stop_action())
     )
@@ -131,7 +131,7 @@ def test_continuations_stay_exactly_flat_with_a_fully_observed_gap_belief() -> N
 def test_stop_stays_admissible_at_every_coverage_with_the_progress_factor() -> None:
     # The progress factor is bounded above by 0 and below by a finite value, so
     # it can never veto stopping -- only make it a priori less likely.
-    cfg = PainterConfig()
+    cfg = PainterConfig(gap_progress_stop_enabled=True)
     stop = Policy((StrokeAction.stop_action(),))
     belief = _observed_gap_belief(cfg, 5.0)
     for coverage in (0.0, 0.05, 0.5, cfg.minimum_stop_coverage, 0.9, 1.0):

@@ -36,6 +36,11 @@ def _config() -> PainterConfig:
         batch_size=2,
         hierarchy_transition_batch_size=2,
         passage_trajectory_batch_size=2,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        canvas_latent_transition_precision=0.30,
+        relational_transition_precision=0.30,
+        passage_trajectory_enabled=True,
     )
 
 

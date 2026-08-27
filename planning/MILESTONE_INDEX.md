@@ -4,15 +4,18 @@ This is the compact index for project milestones and simulation-support
 milestones. Detailed task state remains authoritative in
 `planning/PROJECT_TRACKER.md`; this file summarizes milestone-level readiness.
 
-Status snapshot: 2026-08-12.
+Status snapshot: 2026-08-26.
 
 AI-104/AI-105 reference verification is accepted, AI-111 is closed with a
 negative proposal-convergence decision, and AI-106 terminal/stopping validation
 is closed with a required M2 forecast-family replacement. The posterior remains
 conditional on its sampled candidate set and AI-306 must correct finite-
-proposal inference before broader claims. M1 remains active until held-out
-calibration/learning curves, the composition decision,
-inheritance semantics, reproducible replicas, and the AI-115 lock are accepted.
+proposal inference before broader claims. The 2026-08-26 gate repair closes
+AI-109 for M1 on its measured material-model result and closes AI-110 with the
+legacy material composition mechanisms disabled in
+`m1-formal-policy-baseline-v0`. M1 remains active until inheritance semantics,
+representative profiling, reproducible replicas, and the AI-115 lock are
+accepted.
 Bounded M2 camera/body, corpus, parallel-training, and conditional patch-cVAE
 components were implemented ahead of M1 as explicit provisional experiments;
 they do not make M2 active or satisfy their scientific acceptance gates.
@@ -23,13 +26,15 @@ AI-107 calibration is also complete, with a negative M2 result. AI-109's
 capacity did not help, the material-posterior cVAE was not materially better
 than the CNN, and a
 normalized identity/consequence likelihood improved mean test NLL by 1.392
-nats but did not pass calibration. AI-109 remains active because its hierarchy
-branch requires genuine policy-selected terminal visual paintings; AI-108
-contains only fixed-horizon truncations and no registered image stream. A
+nats but did not pass calibration. The terminal registered-image corpus and
+visual hierarchy learning curves now belong to M2 AI-205/AI-206/AI-208/AI-214
+rather than holding the M1 gate open. AI-108 contains only fixed-horizon
+truncations and no registered image stream. A
 2026-08-12 pilot produced six genuine stops and two truncations, establishing
 feasibility but not an accepted visual corpus. Registered visual collection,
 visual mark-consequence baselines, and the tone/edge/mass hierarchy are the
-current critical path. See `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md`.
+current M2 critical path. See `docs/VISUAL_GENERATIVE_MODEL_BOUNDARY.md` and
+`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
 
 Current physical-design records are aligned to the fixed RobStride assignment
 (03 yaw/pitch, 02 upper-arm roll/elbow) and the selected-but-not-purchased

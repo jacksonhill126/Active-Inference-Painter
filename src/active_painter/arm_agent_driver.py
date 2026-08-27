@@ -23,10 +23,12 @@ from .brush_loading import (
 )
 from .body_inference import BodyVFEComponents
 from .config import (
+    M1_FORMAL_POLICY_BASELINE_ID,
     PainterConfig,
     SPATIAL_MATERIAL_PLANNER_STATE_KIND,
     SUMMARY_PLANNER_DEPRECATION,
     SUMMARY_PLANNER_STATE_KIND,
+    painting_policy_profile_id,
 )
 from .canvas_hierarchy import PASSAGE_STEP_DESCRIPTOR_DIM
 from .camera_inference import CAMERA_SPATIAL_LIKELIHOOD_VERSION
@@ -735,7 +737,8 @@ class ArmActiveInferenceDriver:
     def _checkpoint_architecture_metadata(self) -> dict[str, object]:
         cfg = self.config
         return {
-            "schema_version": 5,
+            "schema_version": 6,
+            "painting_policy_profile": painting_policy_profile_id(cfg),
             "agent_kind": "spatial_material" if self._uses_spatial_planner() else "summary",
             "observation_access_mode": self.observation_access_mode,
             "provisional_sensor_policy": self.provisional_sensor_policy,
@@ -890,7 +893,7 @@ class ArmActiveInferenceDriver:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload: dict[str, object] = {
-                "schema_version": 5,
+                "schema_version": 6,
                 "architecture": self._checkpoint_architecture_metadata(),
                 "config": asdict(self.config),
                 "trained_transitions": self.trained_transitions,
@@ -3695,6 +3698,29 @@ class ArmActiveInferenceDriver:
             "enabled": self.enabled,
             "stopped": self.stopped,
             "planning": self.planning,
+            "paintingPolicyProfile": {
+                "id": painting_policy_profile_id(self.config),
+                "m1BaselineId": M1_FORMAL_POLICY_BASELINE_ID,
+                "legacyMaterialHierarchyPolicyActive": bool(
+                    painting_policy_profile_id(self.config)
+                    != M1_FORMAL_POLICY_BASELINE_ID
+                ),
+                "compositionGapPreferenceEnabled": bool(
+                    self.config.composition_enabled
+                    and self.config.composition_gap_precision > 0.0
+                ),
+                "gapProgressStopPriorEnabled": bool(
+                    self.config.gap_progress_stop_enabled
+                ),
+                "standing": (
+                    "frozen M1 policy baseline; legacy coarse-material composition, "
+                    "hierarchy-transition, and gap-progress stop terms are disabled"
+                    if painting_policy_profile_id(self.config)
+                    == M1_FORMAL_POLICY_BASELINE_ID
+                    else "explicit legacy coarse-material hierarchy diagnostic; not "
+                    "an admitted visual composition model"
+                ),
+            },
             "observationBoundary": {
                 "baseline": (
                     ORACLE_OBSERVATION_BASELINE_ID

@@ -1715,6 +1715,10 @@ or an occluded relationship.
 The hierarchy both learns from the agent's paintings and supplies the
 compression-gap preference over future paintings. This can create a closed
 loop in which early representational accidents become preferred regularities.
+As of 2026-08-26 this mechanism and its associated hierarchy-transition and
+gap-progress stop terms are disabled in `m1-formal-policy-baseline-v0`.
+Explicit opt-in is a legacy material-hierarchy diagnostic, not the accepted
+visual architecture.
 
 ### 31.6 Proposal-limited inference
 

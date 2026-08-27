@@ -51,6 +51,8 @@ def _config(**overrides: object) -> PainterConfig:
         "canvas_latent_channels": 4,
         "relational_latent_dim": 6,
         "hierarchy_hidden_dim": 12,
+        "composition_enabled": True,
+        "composition_gap_precision": 1.0,
         "learned_proposal_hidden_dim": 12,
         "candidate_policies": 17,
         "planning_horizon": 4,

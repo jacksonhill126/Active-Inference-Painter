@@ -22,7 +22,7 @@ from active_painter.arm_agent_driver import (
 from active_painter.arm_sim import ArmPainterSim, ArmPose
 from active_painter.body_inference import BodyVFEComponents
 from active_painter.brush_loading import BrushLoadBelief
-from active_painter.config import PainterConfig
+from active_painter.config import M1_FORMAL_POLICY_BASELINE_ID, PainterConfig
 from active_painter.efe import EFEComponents
 from active_painter.env import StrokeAction
 from active_painter.policies import MotorPrimitiveLatent, PassageLatent, PassagePlanLatent, Policy
@@ -39,7 +39,22 @@ def oracle_driver(*args, **kwargs) -> ArmActiveInferenceDriver:
 
 
 def make_driver() -> ArmActiveInferenceDriver:
-    return oracle_driver(bootstrap_transitions=72, bootstrap_train_steps=24)
+    # These tests exercise the driver contract, not the expensive research
+    # rollout budget.  Keep the fixture bounded so a failed background plan
+    # does not leave CPU-heavy worker threads running into later tests.
+    config = PainterConfig(
+        canvas_size=48,
+        candidate_policies=4,
+        planning_horizon=1,
+        policy_precision=0.35,
+        batch_size=8,
+        motor_planning_enabled=False,
+    )
+    return oracle_driver(
+        config=config,
+        bootstrap_transitions=16,
+        bootstrap_train_steps=4,
+    )
 
 
 def wait_for_driver(driver: ArmActiveInferenceDriver, sim: ArmPainterSim, timeout: float = 15.0) -> None:
@@ -54,18 +69,18 @@ def wait_for_driver(driver: ArmActiveInferenceDriver, sim: ArmPainterSim, timeou
 
 
 def test_active_inference_driver_selects_stroke_at_low_coverage() -> None:
-    sim = ArmPainterSim(PainterConfig(canvas_size=48))
     driver = make_driver()
+    sim = ArmPainterSim(driver.config)
     wait_for_driver(driver, sim)
     assert driver.current is not None
     assert not driver.current.action.stop
     assert driver.last_components is not None
-    assert driver.trained_transitions >= 72
+    assert driver.trained_transitions >= 16
 
 
 def test_active_inference_driver_reports_efe_decomposition() -> None:
-    sim = ArmPainterSim(PainterConfig(canvas_size=48))
     driver = make_driver()
+    sim = ArmPainterSim(driver.config)
     wait_for_driver(driver, sim)
     diag = driver.diagnostics()
     assert diag["efe"] is not None
@@ -81,11 +96,22 @@ def test_active_inference_driver_reports_efe_decomposition() -> None:
         diag["vfe"]["complexity"] + diag["vfe"]["negative_log_likelihood"]
     )
     assert diag["transitionModel"].startswith("learned DynamicsEnsemble")
+    assert diag["paintingPolicyProfile"] == {
+        "id": M1_FORMAL_POLICY_BASELINE_ID,
+        "m1BaselineId": M1_FORMAL_POLICY_BASELINE_ID,
+        "legacyMaterialHierarchyPolicyActive": False,
+        "compositionGapPreferenceEnabled": False,
+        "gapProgressStopPriorEnabled": False,
+        "standing": (
+            "frozen M1 policy baseline; legacy coarse-material composition, "
+            "hierarchy-transition, and gap-progress stop terms are disabled"
+        ),
+    }
 
 
 def test_active_inference_driver_reports_policy_and_state_distributions() -> None:
-    sim = ArmPainterSim(PainterConfig(canvas_size=48))
     driver = make_driver()
+    sim = ArmPainterSim(driver.config)
     wait_for_driver(driver, sim)
     diag = driver.diagnostics()
     assert diag["policyPrecision"] < 1.0
@@ -244,6 +270,8 @@ def test_evidence_only_proposal_diagnostic_is_decimated_but_gap_updates_each_pla
         spatial_ensemble_size=1,
         candidate_policies=2,
         planning_horizon=1,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
         learned_proposal_diagnostic_interval_plans=3,
     )
     driver = oracle_driver(
@@ -486,6 +514,9 @@ def test_driver_checkpoint_round_trips_spatial_local_patch_replay() -> None:
         spatial_ensemble_size=2,
         composition_hidden_channels=4,
         composition_latent_dim=4,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        passage_trajectory_enabled=True,
         batch_size=1,
     )
     root = Path("runs/test_driver_checkpoint_spatial")
@@ -554,6 +585,9 @@ def test_driver_updates_persistent_hierarchy_at_passage_boundary() -> None:
         canvas_latent_channels=4,
         relational_latent_dim=6,
         hierarchy_hidden_dim=12,
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        passage_trajectory_enabled=True,
         batch_size=2,
     )
     sim = ArmPainterSim(cfg)

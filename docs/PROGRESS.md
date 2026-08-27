@@ -1,5 +1,32 @@
 # Project Progress
 
+## 2026-08-26 - M1 gate repaired; legacy material composition made opt-in
+
+The M1/M2 dependency cycle is removed. AI-109 now closes for M1 on its measured
+27-run material-model learning-curve result; the missing registered visual and
+hierarchy curves move to M2 AI-205, AI-206, AI-208, and AI-214. AI-110 closes
+with the allowed disabled decision rather than waiting for the future visual
+hierarchy.
+
+The canonical default is `m1-formal-policy-baseline-v0`. It disables the
+legacy coarse-material composition hierarchy, compression-gap terminal
+preference, canvas/relational transition precisions, passage-trajectory terms,
+and gap-progress stop prior. Explicit opt-in is reported as
+`legacy-material-composition-diagnostic-v0` and cannot support a visual
+composition claim. Checkpoint schema 6 and runtime diagnostics preserve the
+policy-profile identity.
+
+M1 remains active: AI-112 inheritance semantics and AI-113 representative
+profiling are ready; AI-114 still requires three manifested replicas of the new
+profile; AI-115 remains blocked on those artifacts and owner review. See
+`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md` and the separate owner brief.
+
+Post-change verification passed the exact 168-test deterministic CI set and a
+123-test affected suite covering composition, hierarchy, precision, stopping,
+driver checkpoint/diagnostics, and support-documentation contracts. The
+expected warnings only identify the obsolete summary-planner fixtures. These
+checks do not substitute for AI-113 profiling or AI-114 replicas.
+
 ## 2026-08-14 - Visual hierarchy centered; attention trajectory abstracted
 
 The owner clarified the scope needed to prevent the project from sprawling.
@@ -79,8 +106,8 @@ exact predictive-mixture calibration gate, so the model remains shadow-only.
 The hierarchy curve was not trained because AI-108 contains zero
 policy-selected stops; fixed-horizon truncations are not terminal composition
 labels. The later stop pilot established collection feasibility but did not
-retain registered images, so AI-109 remains active pending a genuine-stop
-visual corpus extension. See
+retain registered images. At the time AI-109 remained active; the 2026-08-26
+gate repair later moved that visual continuation to M2. See
 `docs/AI109_PREDICTIVE_LEARNING_CURVES_TECHNICAL_2026-08-12.md` and
 `docs/AI109_PREDICTIVE_LEARNING_CURVES_OWNER_BRIEF_2026-08-12.md`.
 
@@ -272,24 +299,24 @@ captured in a run manifest.
 
 ## Current Priorities
 
-1. Finish AI-109's hierarchy branch by collecting independent episodes that
-   genuinely terminate through a selected `stop`. Preserve fixed-horizon and
-   watchdog endings as truncations, split whole paintings before hierarchy
-   example construction, then run three-seed data/capacity curves for the slow
-   canvas and relational models.
+1. Complete AI-112's inheritance/reset matrix and AI-113's representative
+   runtime profile for `m1-formal-policy-baseline-v0`, then capture the three
+   manifested AI-114 replicas and present AI-115 for owner lock review.
 2. Keep the identity/consequence local likelihood shadow-only while diagnosing
    component responsibility and exact calibration inside/outside the action
    footprint. Test a normalized spike/hurdle identity event or richer bounded
    consequence family only if those diagnostics support it; do not respond by
    merely increasing generic CNN capacity.
-3. Resolve the composition-preference closed loop in AI-110 and carry AI-111's
-   negative convergence result into an explicit M3 proposal correction. Until
-   then, keep the learned mix at zero and label posterior mass as conditional on
-   the sampled candidate set.
-4. Define checkpoint inheritance and online-learning semantics, profile the
-   major runtime phases, and capture three manifested baseline replicas.
-5. Make the M1 lock decision before treating ongoing M2 work as an accepted
-   sensor model.
+3. Build the deduplicated registered visual trajectory schema and collect a
+   small composition-disabled genuine-stop visual pilot. Preserve fixed-horizon
+   and watchdog endings as truncations and split whole paintings before any
+   crop or hierarchy example construction.
+4. Run the visual local and hierarchy data/capacity/seed program under
+   AI-205/AI-206/AI-208/AI-214. Admit tone/oriented edges and continuous masses
+   before relations, motifs, policy influence, or active attention.
+5. Carry AI-111's negative convergence result into an explicit M3 proposal
+   correction. Until then, keep learned emission at zero and label posterior
+   mass as conditional on the sampled candidate set.
 6. Collect episode-split camera/body posterior transitions and train a
    sensor-compatible checkpoint for the new provisional loop. Then derive the
    local camera statistic for the brush-load likelihood without counting the

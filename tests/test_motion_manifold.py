@@ -71,6 +71,9 @@ def manifold_config(**overrides) -> PainterConfig:
         policy_precision=0.35,
         batch_size=8,
         planner_state_kind="spatial_material",
+        composition_enabled=True,
+        composition_gap_precision=1.0,
+        passage_trajectory_enabled=True,
     )
     base.update(overrides)
     return PainterConfig(**base)

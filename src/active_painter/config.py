@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 SUMMARY_PLANNER_STATE_KIND = "summary"
 SPATIAL_MATERIAL_PLANNER_STATE_KIND = "spatial_material"
+M1_FORMAL_POLICY_BASELINE_ID = "m1-formal-policy-baseline-v0"
+LEGACY_MATERIAL_HIERARCHY_DIAGNOSTIC_ID = (
+    "legacy-material-composition-diagnostic-v0"
+)
 SUMMARY_PLANNER_DEPRECATION = (
     "planner_state_kind='summary' is an obsolete six-aggregate compatibility "
     "fixture. It is non-spatial, predictively insufficient for image-making, "
@@ -276,12 +280,15 @@ class PainterConfig:
     passage_belief_geometry_std: float = 0.16
     passage_belief_transition_std: float = 0.015
     passage_belief_observation_std: float = 0.035
-    # Declared structural prior over terminal canvases (spatial mode):
+    # Legacy diagnostic structural prior over terminal canvases (spatial
+    # mode):
     # p*(s_T) ~ exp(precision * compression_gap(s_T)), where the gap is the
     # hierarchical code's explanatory advantage over the BEST member of a
     # declared, hand-written, parameter-free context-free baseline family.
-    # Zero disables the composition hierarchy entirely.
-    composition_gap_precision: float = 1.0
+    # The M1 formal baseline keeps this at zero. A nonzero value is an explicit
+    # opt-in to the legacy coarse-material diagnostic and is not an accepted
+    # visual composition preference.
+    composition_gap_precision: float = 0.0
     # Membership of the context-free baseline family the compression gap is
     # measured against. True adds a parameter-free 3x3 hollow-neighbourhood
     # local Markov code beside the iid-cell Gaussian and scores against the
@@ -301,15 +308,15 @@ class PainterConfig:
     hierarchy_hidden_dim: int = 96
     canvas_latent_process_std: float = 0.18
     relational_process_std: float = 0.14
-    canvas_latent_transition_precision: float = 0.30
-    relational_transition_precision: float = 0.30
+    canvas_latent_transition_precision: float = 0.0
+    relational_transition_precision: float = 0.0
     hierarchy_transition_batch_size: int = 8
     hierarchy_transition_train_steps: int = 1
     # A passage-conditioned Markov likelihood over the coarse canvas and
     # relational latents. It is trained from each observed mark inside a
     # passage while the persistent high-level posterior itself remains fixed
     # until the explicit passage boundary.
-    passage_trajectory_enabled: bool = True
+    passage_trajectory_enabled: bool = False
     passage_trajectory_batch_size: int = 8
     passage_trajectory_train_steps: int = 1
     # Per-member Bernoulli bootstrap keep-probability for ensemble training,
@@ -453,7 +460,10 @@ class PainterConfig:
     # composition_gap_precision so a learned precision can never construct or
     # destroy the model, and so the checkpoint architecture key stays a
     # declared constant rather than a learned quantity.
-    composition_enabled: bool = True
+    # False in the M1 formal policy baseline. Set this and the relevant
+    # precisions explicitly in controlled legacy-material hierarchy
+    # experiments; never infer visual-hierarchy admission from that opt-in.
+    composition_enabled: bool = False
 
     # --- Feature C: gap-progress stop policy prior -------------------------
     # Gaussian random-walk belief over the compression-gap increment per
@@ -462,7 +472,7 @@ class PainterConfig:
     # logsigmoid(-gap_progress_stop_sharpness * mean/sqrt(var)). Both factors
     # are <= 0, so neither can manufacture value. Delta-gap never enters
     # expected free energy and the terminal coverage preference is untouched.
-    gap_progress_stop_enabled: bool = True
+    gap_progress_stop_enabled: bool = False
     gap_increment_prior_mean: float = 0.05
     gap_increment_prior_std: float = 0.10
     gap_increment_process_std: float = 0.02
@@ -531,3 +541,26 @@ class PainterConfig:
     # default because it would open the kind-specific transition-EFE gates on
     # bootstrap-only evidence before any real painting.
     bootstrap_feeds_passage_likelihood: bool = False
+
+
+def painting_policy_profile_id(config: PainterConfig) -> str:
+    """Name the policy-level baseline implied by the resolved configuration.
+
+    The legacy material hierarchy remains executable for controlled ablations,
+    but any opt-in to its preference, transition-risk, passage, or derived stop
+    mechanisms must stop the run from identifying as the frozen M1 baseline.
+    """
+
+    legacy_hierarchy_requested = bool(
+        config.composition_enabled
+        or config.composition_gap_precision > 0.0
+        or config.canvas_latent_transition_precision > 0.0
+        or config.relational_transition_precision > 0.0
+        or config.passage_trajectory_enabled
+        or config.gap_progress_stop_enabled
+    )
+    return (
+        LEGACY_MATERIAL_HIERARCHY_DIAGNOSTIC_ID
+        if legacy_hierarchy_requested
+        else M1_FORMAL_POLICY_BASELINE_ID
+    )

@@ -2,10 +2,20 @@
 
 Date: 2026-08-12
 Task: AI-109
-Status: local-model matrix complete; hierarchy branch remains active and is
-blocked on valid terminal data
+Status: M1 task closed 2026-08-26 on the measured material-model result;
+registered visual and hierarchy continuation moved to M2
 Claim boundary: uncalibrated simulation-only likelihood evidence; no shadow
 model is active in painting-policy inference
+
+## 2026-08-26 M1 scope update
+
+This record's original 2026-08-12 conclusion correctly refused to manufacture
+terminal labels. It also left AI-109 open until a new registered visual corpus
+and hierarchy existed, which made the M1 gate depend on M2. The measured
+27-run material-model matrix now closes AI-109's M1 capacity question as a
+negative/inconclusive result. The unperformed visual work is preserved under
+AI-205, AI-206, AI-208, and AI-214. See
+`docs/M1_GATE_REPAIR_TECHNICAL_2026-08-26.md`.
 
 ## Result
 

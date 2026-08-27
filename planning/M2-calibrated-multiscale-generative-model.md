@@ -430,7 +430,7 @@ Acceptance:
 
 Status: `Blocked`  
 Track: Feasibility/Modeling  
-Depends on: AI-109, AI-204, AI-208, AI-213  
+Depends on: AI-204, AI-205, AI-206, AI-208, AI-213
 Owner: Jackson/Codex  
 Estimate: 2-3 days
 
@@ -438,6 +438,8 @@ Acceptance:
 
 - Produce data-versus-capacity learning curves for the observation and
   hierarchy models.
+- Complete the registered visual local/hierarchy learning-curve continuation
+  moved out of M1 AI-109 by the 2026-08-26 gate repair.
 - Record trainable parameters, memory, inference latency, and training cost.
 - Define a narrow feature-adapter interface that could accept a frozen
   pretrained encoder later.
