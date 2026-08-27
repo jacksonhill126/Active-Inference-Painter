@@ -1,0 +1,97 @@
+{
+  "active_inference": {
+    "formal_hierarchy": "disabled",
+    "profiled": [
+      "state inference",
+      "base expected free energy",
+      "motor expected-free-energy augmentation",
+      "sampled-candidate policy posterior"
+    ]
+  },
+  "approximations": [
+    "oracle diagnostic observation access",
+    "native abstract plant",
+    "process CPU utilization proxy rather than system sampler"
+  ],
+  "artifacts": {
+    "canvas": {
+      "path": "profile-canvas.png",
+      "status": "present"
+    },
+    "checkpoint": {
+      "path": "profile-checkpoint.pt",
+      "sha256": "ffe2d2db24df588fa8dd055028e46e8cb4dc02ba9dca254538da4a3097128096",
+      "status": "present"
+    },
+    "efe_trace": {
+      "path": "policy-efe-trace.json",
+      "status": "present"
+    },
+    "failure_log": {
+      "path": "failure-log.jsonl",
+      "status": "present"
+    },
+    "profile": {
+      "path": "profile.json",
+      "sha256": "6b84bff9f0bae15d7cd2500d26edaf511f780305f6bf585135f5f6bc3542eca0",
+      "status": "present"
+    },
+    "registered_camera_observations": {
+      "reason": "native/oracle computational profile",
+      "status": "not_applicable"
+    },
+    "resolved_config": {
+      "path": "resolved-config.json",
+      "sha256": "5221bea43b4bb4f57886778e33a6b24ea97c62e3bd433ea515083cc123aca7fa",
+      "status": "present"
+    },
+    "telemetry": {
+      "reason": "phase microbenchmark, not an executed painting episode",
+      "status": "not_applicable"
+    },
+    "version_manifest": {
+      "path": "version-manifest.json",
+      "sha256": "0ac58b8c5e8e68ce405972e424c1eda07e12bbcdc112461802e07b8364076d75",
+      "status": "present"
+    },
+    "vfe_trace": {
+      "path": "state-vfe-trace.json",
+      "status": "present"
+    }
+  },
+  "conventional_support": [
+    "native motor counterfactual integration",
+    "gradient optimization",
+    "checkpoint and JSON serialization",
+    "material canvas rendering and PNG encoding"
+  ],
+  "end_utc": "2026-08-27T15:34:06.669068+00:00",
+  "evidence_level": "provisional",
+  "learning": {
+    "inheritance": "fresh individual; no input checkpoint",
+    "online_updates_profiled": true,
+    "replay_sources": {
+      "oracle_diagnostic_execution": 32
+    }
+  },
+  "manifest_revision": 1,
+  "observation_access": {
+    "claim": "explicit oracle diagnostic; not sensor-equivalent cognition",
+    "mode": "oracle_material_state"
+  },
+  "painting_policy_profile": "m1-formal-policy-baseline-v0",
+  "randomness": {
+    "seed": 20260827
+  },
+  "run_id": "ai113-representative-cpu-workers-5-20260827-153343-seed-20260827",
+  "run_kind": "performance_profile",
+  "schema": "experiment-manifest-v1",
+  "start_utc": "2026-08-27T15:33:43.859736+00:00",
+  "status": "completed",
+  "timing": {
+    "phase_profile": "profile.json",
+    "total_process_cpu_seconds": 117.9375,
+    "total_wall_seconds": 22.8093230999948
+  },
+  "versions": "version-manifest.json"
+}

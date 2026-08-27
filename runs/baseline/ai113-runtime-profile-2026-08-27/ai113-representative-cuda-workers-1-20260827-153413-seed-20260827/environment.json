@@ -1,0 +1,24 @@
+{
+  "code_revision": "afad4018b75607ecf88cb4e21800e55b682fcf31",
+  "cuda_available": true,
+  "cuda_version": "12.6",
+  "gpu_name": "NVIDIA RTX A1000 Laptop GPU",
+  "gpu_utilization": "not available from torch; peak allocation and paired wall/CPU time reported",
+  "initial_process_memory": {
+    "peak_working_set_bytes": 561999872,
+    "private_bytes": 1482752000,
+    "working_set_bytes": 561999872
+  },
+  "logical_cpu_count": 20,
+  "numpy_version": "2.4.3",
+  "package_version": "0.1.0",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+  "profile_compute_device": "cuda",
+  "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+  "python_executable": "C:\\Users\\hilljx\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+  "source_fingerprint": "f81d3fbe32fa24761b1e65b64ff0eb9549bf0d51e215170afc652cf009785ed9",
+  "torch_interop_threads": 14,
+  "torch_threads": 14,
+  "torch_version": "2.11.0+cu126"
+}

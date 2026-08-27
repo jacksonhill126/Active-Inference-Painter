@@ -1,0 +1,991 @@
+{
+  "batchable_without_equation_change": [
+    "base-EFE evaluation over a fixed sampled candidate set",
+    "independent motor forecast particles and motor realizations",
+    "local transition-likelihood minibatches grouped by patch bucket",
+    "held-out likelihood evaluation over fixed trajectory splits"
+  ],
+  "claim_boundary": "uncalibrated native/oracle computational profile; no painting-quality, sensor-equivalence, or hardware-calibration claim",
+  "environment": {
+    "code_revision": "afad4018b75607ecf88cb4e21800e55b682fcf31",
+    "cuda_available": true,
+    "cuda_version": "12.6",
+    "gpu_name": "NVIDIA RTX A1000 Laptop GPU",
+    "gpu_utilization": "not available from torch; peak allocation and paired wall/CPU time reported",
+    "initial_process_memory": {
+      "peak_working_set_bytes": 561999872,
+      "private_bytes": 1482752000,
+      "working_set_bytes": 561999872
+    },
+    "logical_cpu_count": 20,
+    "numpy_version": "2.4.3",
+    "package_version": "0.1.0",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    "profile_compute_device": "cuda",
+    "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "python_executable": "C:\\Users\\hilljx\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "source_fingerprint": "f81d3fbe32fa24761b1e65b64ff0eb9549bf0d51e215170afc652cf009785ed9",
+    "torch_interop_threads": 14,
+    "torch_threads": 14,
+    "torch_version": "2.11.0+cu126"
+  },
+  "limitations": [
+    "CPU utilization is process CPU time divided by wall time; it is not a system-wide utilization sample.",
+    "GPU utilization percentage is unavailable from Torch; CUDA variants report peak allocation and paired wall/CPU time rather than inventing utilization.",
+    "The registered-camera likelihood and MuJoCo camera renderer are outside this native/oracle M1 timing profile.",
+    "The transition model begins from the declared seed and is trained only for the profiling steps; timings are computational evidence, not predictive-quality evidence."
+  ],
+  "measurements": {
+    "checkpoint_sizes_bytes": [
+      9789715,
+      9789715,
+      9789715
+    ],
+    "diagnostics_json_sizes_bytes": [
+      20989,
+      20989,
+      20989
+    ],
+    "planning_profiles": [
+      {
+        "baseEFESeconds": 1.9288758999900892,
+        "beliefUpdateRequiredBeforeInference": false,
+        "beliefUpdateSeconds": 0.0026717000000644475,
+        "brushPreparationMarginalization": "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        "candidateMotorRealizations": 10,
+        "compositionDiagnosticSeconds": 8.599978173151612e-06,
+        "kind": "planning_profile",
+        "motorEFERescoreSeconds": 0.32176930000423454,
+        "motorForecastBatchCount": 2,
+        "motorForecastBatchJobs": 10,
+        "motorForecastCacheHits": 0,
+        "motorForecastCount": 10,
+        "motorForecastSeconds": 2.6424670000269543,
+        "motorForecastWorkers": 1,
+        "motorRealizationMarginalization": "logsumexp over declared motor policy prior",
+        "policyCount": 32,
+        "policyInferenceSeconds": 4.922089599975152,
+        "policySampleSeconds": 0.004537000000709668,
+        "posteriorSeconds": 0.020012699998915195,
+        "proposalDiagnosticFresh": true,
+        "proposalDiagnosticIntervalPlans": 16,
+        "proposalTargetSupportFraction": 0.0,
+        "proposalTrainingSeconds": 0.0,
+        "publishSeconds": 8.500006515532732e-06,
+        "scope": "global",
+        "selectedForecastCacheHits": 1,
+        "selectedForecastSeconds": 0.0,
+        "totalSeconds": 4.924840199993923,
+        "trailingTrainingSeconds": 0.0,
+        "trainingAfterPublish": false
+      },
+      {
+        "baseEFESeconds": 0.5446583000011742,
+        "beliefUpdateRequiredBeforeInference": false,
+        "beliefUpdateSeconds": 0.0029050999728497118,
+        "brushPreparationMarginalization": "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        "candidateMotorRealizations": 10,
+        "compositionDiagnosticSeconds": 7.199996616691351e-06,
+        "kind": "planning_profile",
+        "motorEFERescoreSeconds": 0.125808800017694,
+        "motorForecastBatchCount": 2,
+        "motorForecastBatchJobs": 10,
+        "motorForecastCacheHits": 0,
+        "motorForecastCount": 10,
+        "motorForecastSeconds": 2.30834240000695,
+        "motorForecastWorkers": 1,
+        "motorRealizationMarginalization": "logsumexp over declared motor policy prior",
+        "policyCount": 32,
+        "policyInferenceSeconds": 2.993348599993624,
+        "policySampleSeconds": 0.005234000011114404,
+        "posteriorSeconds": 0.0044815999863203615,
+        "proposalDiagnosticFresh": true,
+        "proposalDiagnosticIntervalPlans": 16,
+        "proposalTargetSupportFraction": 0.0,
+        "proposalTrainingSeconds": 0.0,
+        "publishSeconds": 5.469997995533049e-05,
+        "scope": "global",
+        "selectedForecastCacheHits": 1,
+        "selectedForecastSeconds": 0.0,
+        "totalSeconds": 2.9963590999832377,
+        "trailingTrainingSeconds": 0.0,
+        "trainingAfterPublish": false
+      },
+      {
+        "baseEFESeconds": 0.42271769998478703,
+        "beliefUpdateRequiredBeforeInference": false,
+        "beliefUpdateSeconds": 0.0028107000107411295,
+        "brushPreparationMarginalization": "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        "candidateMotorRealizations": 10,
+        "compositionDiagnosticSeconds": 3.0999945010989904e-06,
+        "kind": "planning_profile",
+        "motorEFERescoreSeconds": 0.1329105999902822,
+        "motorForecastBatchCount": 2,
+        "motorForecastBatchJobs": 10,
+        "motorForecastCacheHits": 0,
+        "motorForecastCount": 10,
+        "motorForecastSeconds": 2.5571851000131574,
+        "motorForecastWorkers": 1,
+        "motorRealizationMarginalization": "logsumexp over declared motor policy prior",
+        "policyCount": 32,
+        "policyInferenceSeconds": 3.1284775999956764,
+        "policySampleSeconds": 0.004479900002479553,
+        "posteriorSeconds": 0.007523799984483048,
+        "proposalDiagnosticFresh": true,
+        "proposalDiagnosticIntervalPlans": 16,
+        "proposalTargetSupportFraction": 0.0,
+        "proposalTrainingSeconds": 0.0,
+        "publishSeconds": 5.989999044686556e-05,
+        "scope": "global",
+        "selectedForecastCacheHits": 1,
+        "selectedForecastSeconds": 0.0,
+        "totalSeconds": 3.131398400000762,
+        "trailingTrainingSeconds": 0.0,
+        "trainingAfterPublish": false
+      }
+    ],
+    "png_sizes_bytes": [
+      994,
+      994,
+      994
+    ],
+    "replay_evidence_counts": {
+      "oracle_diagnostic_execution": 32
+    },
+    "replay_size": 32,
+    "state_inference_vfe": [
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701778604998,
+        "expected_log_likelihood": 3.513140130453394,
+        "negative_log_likelihood": -3.513140130453394,
+        "total": -2.907569952592894,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701778604998,
+        "expected_log_likelihood": 3.513140130453394,
+        "negative_log_likelihood": -3.513140130453394,
+        "total": -2.907569952592894,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701778604998,
+        "expected_log_likelihood": 3.513140130453394,
+        "negative_log_likelihood": -3.513140130453394,
+        "total": -2.907569952592894,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701778604998,
+        "expected_log_likelihood": 3.513140130453394,
+        "negative_log_likelihood": -3.513140130453394,
+        "total": -2.907569952592894,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701778604998,
+        "expected_log_likelihood": 3.513140130453394,
+        "negative_log_likelihood": -3.513140130453394,
+        "total": -2.907569952592894,
+        "units": "nats_per_independent_cell_channel"
+      }
+    ],
+    "training_losses": [
+      1.9264915455132723,
+      -1.0137789389118552,
+      -2.172522848471999
+    ]
+  },
+  "not_batchable_as_one_shared_state": [
+    "independent research replicas",
+    "parallel collection workers with separate online beliefs and replay",
+    "causally ordered camera updates and passage-boundary posterior updates"
+  ],
+  "observation_access_mode": "oracle_material_state",
+  "painting_policy_profile": "m1-formal-policy-baseline-v0",
+  "parallelism_taxonomy": {
+    "batched_training": "conventional vectorized gradient learning over observed replay; no painting-policy selection",
+    "independent_research_replicas": "separate fixed-seed experimental units; never worker threads or particles within one posterior",
+    "parallel_data_generation": "independent simulation workers with isolated process and belief state; AI-108 evidence, not remeasured here",
+    "parallel_policy_rollouts": "same agent and frozen belief; scheduling-only batching of independent motor counterfactuals; representative profile uses one worker"
+  },
+  "phases": {
+    "checkpoint_serialization": {
+      "average_active_cpu_cores": {
+        "maximum": 1.0666645424496604,
+        "mean": 1.007080119672375,
+        "median": 1.052552397684292,
+        "minimum": 0.902023418883173
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 5.333322712248302,
+        "mean": 5.035400598361876,
+        "median": 5.2627619884214605,
+        "minimum": 4.510117094415865
+      },
+      "peak_cuda_memory_bytes": 4910080,
+      "peak_working_set_bytes": 1827459072,
+      "private_bytes_after": 3250184192,
+      "process_cpu_seconds": {
+        "maximum": 0.046875,
+        "mean": 0.046875,
+        "median": 0.046875,
+        "minimum": 0.046875
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.902023418883173,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 4.510117094415865,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3249909760,
+          "process_cpu_seconds": 0.046875,
+          "wall_seconds": 0.051966500002890825,
+          "working_set_after_bytes": 1812045824,
+          "working_set_before_bytes": 1790025728
+        },
+        {
+          "average_active_cpu_cores": 1.0666645424496604,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 5.333322712248302,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.046875,
+          "wall_seconds": 0.04394540001521818,
+          "working_set_after_bytes": 1812369408,
+          "working_set_before_bytes": 1812049920
+        },
+        {
+          "average_active_cpu_cores": 1.052552397684292,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 5.2627619884214605,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.046875,
+          "wall_seconds": 0.044534599990583956,
+          "working_set_after_bytes": 1812426752,
+          "working_set_before_bytes": 1812369408
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.051966500002890825,
+        "mean": 0.04681550000289766,
+        "median": 0.044534599990583956,
+        "minimum": 0.04394540001521818
+      },
+      "working_set_after_bytes": 1812426752
+    },
+    "diagnostics_json_serialization": {
+      "average_active_cpu_cores": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": 4910080,
+      "peak_working_set_bytes": 1827459072,
+      "private_bytes_after": 3250184192,
+      "process_cpu_seconds": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.001158999977633357,
+          "working_set_after_bytes": 1812434944,
+          "working_set_before_bytes": 1812426752
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.0009623999940231442,
+          "working_set_after_bytes": 1812443136,
+          "working_set_before_bytes": 1812434944
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.0008279999892693013,
+          "working_set_after_bytes": 1812455424,
+          "working_set_before_bytes": 1812447232
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.001158999977633357,
+        "mean": 0.0009831333203086008,
+        "median": 0.0009623999940231442,
+        "minimum": 0.0008279999892693013
+      },
+      "working_set_after_bytes": 1812455424
+    },
+    "formal_hierarchy_evaluation": {
+      "bookkeeping_timer": {
+        "maximum": 8.599978173151612e-06,
+        "mean": 6.299989763647318e-06,
+        "median": 7.199996616691351e-06,
+        "minimum": 3.0999945010989904e-06
+      },
+      "policy_influence": false,
+      "status": "disabled_by_m1_formal_policy_baseline"
+    },
+    "gradient_training": {
+      "average_active_cpu_cores": {
+        "maximum": 1.011892298046133,
+        "mean": 1.0022048120089795,
+        "median": 1.0005782541147974,
+        "minimum": 0.994143883866008
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 5.059461490230665,
+        "mean": 5.011024060044897,
+        "median": 5.002891270573987,
+        "minimum": 4.97071941933004
+      },
+      "peak_cuda_memory_bytes": 196866048,
+      "peak_working_set_bytes": 1762656256,
+      "private_bytes_after": 3192586240,
+      "process_cpu_seconds": {
+        "maximum": 0.765625,
+        "mean": 0.46875,
+        "median": 0.328125,
+        "minimum": 0.3125
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.994143883866008,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 4.97071941933004,
+          "peak_cuda_memory_bytes": 168585728,
+          "peak_working_set_bytes": 1757458432,
+          "private_bytes_after": 3189534720,
+          "process_cpu_seconds": 0.765625,
+          "wall_seconds": 0.7701349999988452,
+          "working_set_after_bytes": 1757458432,
+          "working_set_before_bytes": 1329516544
+        },
+        {
+          "average_active_cpu_cores": 1.011892298046133,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 5.059461490230665,
+          "peak_cuda_memory_bytes": 176590336,
+          "peak_working_set_bytes": 1761939456,
+          "private_bytes_after": 3192586240,
+          "process_cpu_seconds": 0.328125,
+          "wall_seconds": 0.3242686999728903,
+          "working_set_after_bytes": 1760555008,
+          "working_set_before_bytes": 1757462528
+        },
+        {
+          "average_active_cpu_cores": 1.0005782541147974,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 5.002891270573987,
+          "peak_cuda_memory_bytes": 196866048,
+          "peak_working_set_bytes": 1762656256,
+          "private_bytes_after": 3184967680,
+          "process_cpu_seconds": 0.3125,
+          "wall_seconds": 0.31231940002180636,
+          "working_set_after_bytes": 1761542144,
+          "working_set_before_bytes": 1760555008
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.7701349999988452,
+        "mean": 0.46890769999784726,
+        "median": 0.3242686999728903,
+        "minimum": 0.31231940002180636
+      },
+      "working_set_after_bytes": 1761542144
+    },
+    "legacy_hierarchy_positive_control": {
+      "compression_gap_values": [
+        -2.3463189601898193,
+        -2.3463189601898193,
+        -2.3463189601898193,
+        -2.3463189601898193,
+        -2.3463189601898193
+      ],
+      "painting_policy_profile": "legacy-material-composition-diagnostic-v0",
+      "policy_influence_in_measured_formal_run": false,
+      "status": "noncanonical_diagnostic_only",
+      "timing": {
+        "average_active_cpu_cores": {
+          "maximum": 7.594536763750824,
+          "mean": 1.681742402139894,
+          "median": 0.0,
+          "minimum": 0.0
+        },
+        "normalized_process_cpu_percent": {
+          "maximum": 37.97268381875412,
+          "mean": 8.40871201069947,
+          "median": 0.0,
+          "minimum": 0.0
+        },
+        "peak_cuda_memory_bytes": 5008384,
+        "peak_working_set_bytes": 1790013440,
+        "private_bytes_after": 3226890240,
+        "process_cpu_seconds": {
+          "maximum": 0.015625,
+          "mean": 0.00625,
+          "median": 0.0,
+          "minimum": 0.0
+        },
+        "sample_count": 5,
+        "samples": [
+          {
+            "average_active_cpu_cores": 0.8141752469486447,
+            "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+            "normalized_process_cpu_percent": 4.070876234743223,
+            "peak_cuda_memory_bytes": 5008384,
+            "peak_working_set_bytes": 1790005248,
+            "private_bytes_after": 3226890240,
+            "process_cpu_seconds": 0.015625,
+            "wall_seconds": 0.01919120000093244,
+            "working_set_after_bytes": 1790005248,
+            "working_set_before_bytes": 1763811328
+          },
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": 5008384,
+            "peak_working_set_bytes": 1790005248,
+            "private_bytes_after": 3226890240,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.002332500007469207,
+            "working_set_after_bytes": 1790005248,
+            "working_set_before_bytes": 1790005248
+          },
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": 5008384,
+            "peak_working_set_bytes": 1790005248,
+            "private_bytes_after": 3226890240,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.0021306999842636287,
+            "working_set_after_bytes": 1790005248,
+            "working_set_before_bytes": 1790005248
+          },
+          {
+            "average_active_cpu_cores": 7.594536763750824,
+            "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+            "normalized_process_cpu_percent": 37.97268381875412,
+            "peak_cuda_memory_bytes": 5008384,
+            "peak_working_set_bytes": 1790009344,
+            "private_bytes_after": 3226890240,
+            "process_cpu_seconds": 0.015625,
+            "wall_seconds": 0.002057400008197874,
+            "working_set_after_bytes": 1790009344,
+            "working_set_before_bytes": 1790009344
+          },
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": 5008384,
+            "peak_working_set_bytes": 1790013440,
+            "private_bytes_after": 3226890240,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.00204459999804385,
+            "working_set_after_bytes": 1790013440,
+            "working_set_before_bytes": 1790009344
+          }
+        ],
+        "wall_seconds": {
+          "maximum": 0.01919120000093244,
+          "mean": 0.0055512799997814,
+          "median": 0.0021306999842636287,
+          "minimum": 0.00204459999804385
+        },
+        "working_set_after_bytes": 1790013440
+      }
+    },
+    "material_canvas_rendering": {
+      "average_active_cpu_cores": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": 4910080,
+      "peak_working_set_bytes": 1827459072,
+      "private_bytes_after": 3250184192,
+      "process_cpu_seconds": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "sample_count": 5,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 7.770000956952572e-05,
+          "working_set_after_bytes": 1812520960,
+          "working_set_before_bytes": 1812471808
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 5.1000009989365935e-05,
+          "working_set_after_bytes": 1812533248,
+          "working_set_before_bytes": 1812533248
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 4.5599997974932194e-05,
+          "working_set_after_bytes": 1812549632,
+          "working_set_before_bytes": 1812549632
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 4.220000118948519e-05,
+          "working_set_after_bytes": 1812574208,
+          "working_set_before_bytes": 1812570112
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250184192,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 6.10999995842576e-05,
+          "working_set_after_bytes": 1812594688,
+          "working_set_before_bytes": 1812594688
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 7.770000956952572e-05,
+        "mean": 5.552000366151333e-05,
+        "median": 5.1000009989365935e-05,
+        "minimum": 4.220000118948519e-05
+      },
+      "working_set_after_bytes": 1812594688
+    },
+    "observed_training_data_collection": {
+      "average_active_cpu_cores": {
+        "maximum": 0.9973848593446324,
+        "mean": 0.9973848593446324,
+        "median": 0.9973848593446324,
+        "minimum": 0.9973848593446324
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 4.986924296723162,
+        "mean": 4.986924296723162,
+        "median": 4.986924296723162,
+        "minimum": 4.986924296723162
+      },
+      "peak_cuda_memory_bytes": 780288,
+      "peak_working_set_bytes": 755707904,
+      "private_bytes_after": 1772134400,
+      "process_cpu_seconds": {
+        "maximum": 5.09375,
+        "mean": 5.09375,
+        "median": 5.09375,
+        "minimum": 5.09375
+      },
+      "sample_count": 1,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.9973848593446324,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 4.986924296723162,
+          "peak_cuda_memory_bytes": 780288,
+          "peak_working_set_bytes": 755707904,
+          "private_bytes_after": 1772134400,
+          "process_cpu_seconds": 5.09375,
+          "wall_seconds": 5.107105800008867,
+          "working_set_after_bytes": 755707904,
+          "working_set_before_bytes": 746000384
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 5.107105800008867,
+        "mean": 5.107105800008867,
+        "median": 5.107105800008867,
+        "minimum": 5.107105800008867
+      },
+      "working_set_after_bytes": 755707904
+    },
+    "planning_driver_decomposition": {
+      "baseEFESeconds": {
+        "maximum": 1.9288758999900892,
+        "mean": 0.9654172999920169,
+        "median": 0.5446583000011742,
+        "minimum": 0.42271769998478703
+      },
+      "beliefUpdateSeconds": {
+        "maximum": 0.0029050999728497118,
+        "mean": 0.0027958333278850964,
+        "median": 0.0028107000107411295,
+        "minimum": 0.0026717000000644475
+      },
+      "compositionDiagnosticSeconds": {
+        "maximum": 8.599978173151612e-06,
+        "mean": 6.299989763647318e-06,
+        "median": 7.199996616691351e-06,
+        "minimum": 3.0999945010989904e-06
+      },
+      "motorEFERescoreSeconds": {
+        "maximum": 0.32176930000423454,
+        "mean": 0.1934962333374036,
+        "median": 0.1329105999902822,
+        "minimum": 0.125808800017694
+      },
+      "motorForecastSeconds": {
+        "maximum": 2.6424670000269543,
+        "mean": 2.5026648333490207,
+        "median": 2.5571851000131574,
+        "minimum": 2.30834240000695
+      },
+      "policySampleSeconds": {
+        "maximum": 0.005234000011114404,
+        "mean": 0.004750300004767875,
+        "median": 0.004537000000709668,
+        "minimum": 0.004479900002479553
+      },
+      "posteriorSeconds": {
+        "maximum": 0.020012699998915195,
+        "mean": 0.010672699989906201,
+        "median": 0.007523799984483048,
+        "minimum": 0.0044815999863203615
+      },
+      "publishSeconds": {
+        "maximum": 5.989999044686556e-05,
+        "mean": 4.1033325639242925e-05,
+        "median": 5.469997995533049e-05,
+        "minimum": 8.500006515532732e-06
+      },
+      "selectedForecastSeconds": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "totalSeconds": {
+        "maximum": 4.924840199993923,
+        "mean": 3.6841992333259745,
+        "median": 3.131398400000762,
+        "minimum": 2.9963590999832377
+      }
+    },
+    "planning_total": {
+      "average_active_cpu_cores": {
+        "maximum": 1.0029070853528128,
+        "mean": 1.0004765577567596,
+        "median": 1.0025501627366382,
+        "minimum": 0.9959724251808273
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 5.0145354267640645,
+        "mean": 5.002382788783797,
+        "median": 5.0127508136831915,
+        "minimum": 4.979862125904136
+      },
+      "peak_cuda_memory_bytes": 44746752,
+      "peak_working_set_bytes": 1329516544,
+      "private_bytes_after": 2534850560,
+      "process_cpu_seconds": {
+        "maximum": 4.9375,
+        "mean": 3.6875,
+        "median": 3.140625,
+        "minimum": 2.984375
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 1.0025501627366382,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 5.0127508136831915,
+          "peak_cuda_memory_bytes": 44746752,
+          "peak_working_set_bytes": 1321422848,
+          "private_bytes_after": 2527006720,
+          "process_cpu_seconds": 4.9375,
+          "wall_seconds": 4.924940600001719,
+          "working_set_after_bytes": 1321422848,
+          "working_set_before_bytes": 1086275584
+        },
+        {
+          "average_active_cpu_cores": 0.9959724251808273,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 4.979862125904136,
+          "peak_cuda_memory_bytes": 39573504,
+          "peak_working_set_bytes": 1328197632,
+          "private_bytes_after": 2533658624,
+          "process_cpu_seconds": 2.984375,
+          "wall_seconds": 2.996443399984855,
+          "working_set_after_bytes": 1328197632,
+          "working_set_before_bytes": 1321422848
+        },
+        {
+          "average_active_cpu_cores": 1.0029070853528128,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 5.0145354267640645,
+          "peak_cuda_memory_bytes": 42986496,
+          "peak_working_set_bytes": 1329516544,
+          "private_bytes_after": 2534850560,
+          "process_cpu_seconds": 3.140625,
+          "wall_seconds": 3.1315214000060223,
+          "working_set_after_bytes": 1329516544,
+          "working_set_before_bytes": 1328197632
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 4.924940600001719,
+        "mean": 3.6843017999975323,
+        "median": 3.1315214000060223,
+        "minimum": 2.996443399984855
+      },
+      "working_set_after_bytes": 1329516544
+    },
+    "png_serialization": {
+      "average_active_cpu_cores": {
+        "maximum": 1.3429077278003825,
+        "mean": 0.44763590926679414,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 6.714538639001913,
+        "mean": 2.238179546333971,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": 4910080,
+      "peak_working_set_bytes": 1827459072,
+      "private_bytes_after": 3251240960,
+      "process_cpu_seconds": {
+        "maximum": 0.015625,
+        "mean": 0.005208333333333333,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 1.3429077278003825,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 6.714538639001913,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3250192384,
+          "process_cpu_seconds": 0.015625,
+          "wall_seconds": 0.011635200004093349,
+          "working_set_after_bytes": 1813348352,
+          "working_set_before_bytes": 1812619264
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3251240960,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.00025610000011511147,
+          "working_set_after_bytes": 1813393408,
+          "working_set_before_bytes": 1813385216
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 4910080,
+          "peak_working_set_bytes": 1827459072,
+          "private_bytes_after": 3251240960,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.00020019998191855848,
+          "working_set_after_bytes": 1813417984,
+          "working_set_before_bytes": 1813413888
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.011635200004093349,
+        "mean": 0.004030499995375673,
+        "median": 0.00025610000011511147,
+        "minimum": 0.00020019998191855848
+      },
+      "working_set_after_bytes": 1813417984
+    },
+    "state_inference": {
+      "average_active_cpu_cores": {
+        "maximum": 1.4418995232500686,
+        "mean": 0.7683824546311115,
+        "median": 0.9774890782291921,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 7.209497616250343,
+        "mean": 3.8419122731555575,
+        "median": 4.8874453911459605,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": 2001408,
+      "peak_working_set_bytes": 1086251008,
+      "private_bytes_after": 2217021440,
+      "process_cpu_seconds": {
+        "maximum": 0.1875,
+        "mean": 0.04375,
+        "median": 0.015625,
+        "minimum": 0.0
+      },
+      "sample_count": 5,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.9774890782291921,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 4.8874453911459605,
+          "peak_cuda_memory_bytes": 2001408,
+          "peak_working_set_bytes": 1085603840,
+          "private_bytes_after": 2216615936,
+          "process_cpu_seconds": 0.1875,
+          "wall_seconds": 0.19181799999205396,
+          "working_set_after_bytes": 1085603840,
+          "working_set_before_bytes": 755740672
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 2001408,
+          "peak_working_set_bytes": 1085992960,
+          "private_bytes_after": 2216816640,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.01100399999995716,
+          "working_set_after_bytes": 1085992960,
+          "working_set_before_bytes": 1085632512
+        },
+        {
+          "average_active_cpu_cores": 1.4225236716762968,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 7.112618358381484,
+          "peak_cuda_memory_bytes": 2001408,
+          "peak_working_set_bytes": 1086124032,
+          "private_bytes_after": 2216919040,
+          "process_cpu_seconds": 0.015625,
+          "wall_seconds": 0.010983999993186444,
+          "working_set_after_bytes": 1086124032,
+          "working_set_before_bytes": 1086017536
+        },
+        {
+          "average_active_cpu_cores": 1.4418995232500686,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 7.209497616250343,
+          "peak_cuda_memory_bytes": 2001408,
+          "peak_working_set_bytes": 1086144512,
+          "private_bytes_after": 2216919040,
+          "process_cpu_seconds": 0.015625,
+          "wall_seconds": 0.01083640000433661,
+          "working_set_after_bytes": 1086144512,
+          "working_set_before_bytes": 1086144512
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "peak_allocation_measured_utilization_not_available_from_torch",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": 2001408,
+          "peak_working_set_bytes": 1086251008,
+          "private_bytes_after": 2217021440,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.010806100006448105,
+          "working_set_after_bytes": 1086251008,
+          "working_set_before_bytes": 1086173184
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.19181799999205396,
+        "mean": 0.047089699999196453,
+        "median": 0.010983999993186444,
+        "minimum": 0.010806100006448105
+      },
+      "working_set_after_bytes": 1086251008
+    }
+  },
+  "run_dir": "C:\\Users\\hilljx\\Downloads\\active_inference_painter_python_v0_1\\runs\\baseline\\ai113-runtime-profile-2026-08-27\\ai113-representative-cuda-workers-1-20260827-153413-seed-20260827",
+  "schema": "ai113-runtime-phase-profile-v1",
+  "settings": {
+    "device": "cuda",
+    "gradient_steps": 2,
+    "inference_repeats": 5,
+    "motor_forecast_workers": 1,
+    "planning_repeats": 3,
+    "quick": false,
+    "rendering_repeats": 5,
+    "seed": 20260827,
+    "serialization_repeats": 3,
+    "training_batch_size": 32,
+    "training_repeats": 3
+  },
+  "status": "completed",
+  "total_process_cpu_seconds": 19.0,
+  "total_wall_seconds": 19.128096400003415
+}

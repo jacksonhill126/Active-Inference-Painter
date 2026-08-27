@@ -1,0 +1,42 @@
+[
+  {
+    "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+    "complexity": 0.6055701454497466,
+    "expected_log_likelihood": 3.513140129027306,
+    "negative_log_likelihood": -3.513140129027306,
+    "total": -2.9075699835775595,
+    "units": "nats_per_independent_cell_channel"
+  },
+  {
+    "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+    "complexity": 0.6055701454497466,
+    "expected_log_likelihood": 3.513140129027306,
+    "negative_log_likelihood": -3.513140129027306,
+    "total": -2.9075699835775595,
+    "units": "nats_per_independent_cell_channel"
+  },
+  {
+    "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+    "complexity": 0.6055701454497466,
+    "expected_log_likelihood": 3.513140129027306,
+    "negative_log_likelihood": -3.513140129027306,
+    "total": -2.9075699835775595,
+    "units": "nats_per_independent_cell_channel"
+  },
+  {
+    "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+    "complexity": 0.6055701454497466,
+    "expected_log_likelihood": 3.513140129027306,
+    "negative_log_likelihood": -3.513140129027306,
+    "total": -2.9075699835775595,
+    "units": "nats_per_independent_cell_channel"
+  },
+  {
+    "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+    "complexity": 0.6055701454497466,
+    "expected_log_likelihood": 3.513140129027306,
+    "negative_log_likelihood": -3.513140129027306,
+    "total": -2.9075699835775595,
+    "units": "nats_per_independent_cell_channel"
+  }
+]

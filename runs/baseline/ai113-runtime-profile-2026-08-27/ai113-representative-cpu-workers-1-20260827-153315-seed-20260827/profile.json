@@ -1,0 +1,991 @@
+{
+  "batchable_without_equation_change": [
+    "base-EFE evaluation over a fixed sampled candidate set",
+    "independent motor forecast particles and motor realizations",
+    "local transition-likelihood minibatches grouped by patch bucket",
+    "held-out likelihood evaluation over fixed trajectory splits"
+  ],
+  "claim_boundary": "uncalibrated native/oracle computational profile; no painting-quality, sensor-equivalence, or hardware-calibration claim",
+  "environment": {
+    "code_revision": "afad4018b75607ecf88cb4e21800e55b682fcf31",
+    "cuda_available": true,
+    "cuda_version": "12.6",
+    "gpu_name": "NVIDIA RTX A1000 Laptop GPU",
+    "gpu_utilization": "not sampled: representative profile explicitly uses CPU",
+    "initial_process_memory": {
+      "peak_working_set_bytes": 561987584,
+      "private_bytes": 1482776576,
+      "working_set_bytes": 561987584
+    },
+    "logical_cpu_count": 20,
+    "numpy_version": "2.4.3",
+    "package_version": "0.1.0",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    "profile_compute_device": "cpu",
+    "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "python_executable": "C:\\Users\\hilljx\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "source_fingerprint": "f81d3fbe32fa24761b1e65b64ff0eb9549bf0d51e215170afc652cf009785ed9",
+    "torch_interop_threads": 14,
+    "torch_threads": 14,
+    "torch_version": "2.11.0+cu126"
+  },
+  "limitations": [
+    "CPU utilization is process CPU time divided by wall time; it is not a system-wide utilization sample.",
+    "GPU utilization percentage is unavailable from Torch; CUDA variants report peak allocation and paired wall/CPU time rather than inventing utilization.",
+    "The registered-camera likelihood and MuJoCo camera renderer are outside this native/oracle M1 timing profile.",
+    "The transition model begins from the declared seed and is trained only for the profiling steps; timings are computational evidence, not predictive-quality evidence."
+  ],
+  "measurements": {
+    "checkpoint_sizes_bytes": [
+      9788115,
+      9788115,
+      9788115
+    ],
+    "diagnostics_json_sizes_bytes": [
+      20982,
+      20982,
+      20982
+    ],
+    "planning_profiles": [
+      {
+        "baseEFESeconds": 0.8823740000079852,
+        "beliefUpdateRequiredBeforeInference": false,
+        "beliefUpdateSeconds": 0.0034727000165730715,
+        "brushPreparationMarginalization": "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        "candidateMotorRealizations": 10,
+        "compositionDiagnosticSeconds": 7.399998139590025e-06,
+        "kind": "planning_profile",
+        "motorEFERescoreSeconds": 0.2619173999992199,
+        "motorForecastBatchCount": 2,
+        "motorForecastBatchJobs": 10,
+        "motorForecastCacheHits": 0,
+        "motorForecastCount": 10,
+        "motorForecastSeconds": 2.7314212000055704,
+        "motorForecastWorkers": 1,
+        "motorRealizationMarginalization": "logsumexp over declared motor policy prior",
+        "policyCount": 32,
+        "policyInferenceSeconds": 3.891636699991068,
+        "policySampleSeconds": 0.005745999980717897,
+        "posteriorSeconds": 0.0057243000192102045,
+        "proposalDiagnosticFresh": true,
+        "proposalDiagnosticIntervalPlans": 16,
+        "proposalTargetSupportFraction": 0.0,
+        "proposalTrainingSeconds": 0.0,
+        "publishSeconds": 7.599999662488699e-06,
+        "scope": "global",
+        "selectedForecastCacheHits": 1,
+        "selectedForecastSeconds": 0.0,
+        "totalSeconds": 3.8951714000140782,
+        "trailingTrainingSeconds": 0.0,
+        "trainingAfterPublish": false
+      },
+      {
+        "baseEFESeconds": 0.6455025000032037,
+        "beliefUpdateRequiredBeforeInference": false,
+        "beliefUpdateSeconds": 0.0038146000006236136,
+        "brushPreparationMarginalization": "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        "candidateMotorRealizations": 10,
+        "compositionDiagnosticSeconds": 6.80002267472446e-06,
+        "kind": "planning_profile",
+        "motorEFERescoreSeconds": 0.23843330002273433,
+        "motorForecastBatchCount": 2,
+        "motorForecastBatchJobs": 10,
+        "motorForecastCacheHits": 0,
+        "motorForecastCount": 10,
+        "motorForecastSeconds": 2.4388628999877255,
+        "motorForecastWorkers": 1,
+        "motorRealizationMarginalization": "logsumexp over declared motor policy prior",
+        "policyCount": 32,
+        "policyInferenceSeconds": 3.3372876000066753,
+        "policySampleSeconds": 0.004725500009953976,
+        "posteriorSeconds": 0.005525899992790073,
+        "proposalDiagnosticFresh": true,
+        "proposalDiagnosticIntervalPlans": 16,
+        "proposalTargetSupportFraction": 0.0,
+        "proposalTrainingSeconds": 0.0,
+        "publishSeconds": 5.440000677481294e-05,
+        "scope": "global",
+        "selectedForecastCacheHits": 1,
+        "selectedForecastSeconds": 0.0,
+        "totalSeconds": 3.341210199985653,
+        "trailingTrainingSeconds": 0.0,
+        "trainingAfterPublish": false
+      },
+      {
+        "baseEFESeconds": 0.7391038999776356,
+        "beliefUpdateRequiredBeforeInference": false,
+        "beliefUpdateSeconds": 0.003438499988988042,
+        "brushPreparationMarginalization": "logsumexp over preserve/reload policy prior and conditional mark-outcome EFE; modal preparation used for motor rollout",
+        "candidateMotorRealizations": 10,
+        "compositionDiagnosticSeconds": 2.9999937396496534e-06,
+        "kind": "planning_profile",
+        "motorEFERescoreSeconds": 0.20003750000614673,
+        "motorForecastBatchCount": 2,
+        "motorForecastBatchJobs": 10,
+        "motorForecastCacheHits": 0,
+        "motorForecastCount": 10,
+        "motorForecastSeconds": 2.673160399979679,
+        "motorForecastWorkers": 1,
+        "motorRealizationMarginalization": "logsumexp over declared motor policy prior",
+        "policyCount": 32,
+        "policyInferenceSeconds": 3.6301061999984086,
+        "policySampleSeconds": 0.00521669999579899,
+        "posteriorSeconds": 0.008109200018225238,
+        "proposalDiagnosticFresh": true,
+        "proposalDiagnosticIntervalPlans": 16,
+        "proposalTargetSupportFraction": 0.0,
+        "proposalTrainingSeconds": 0.0,
+        "publishSeconds": 6.2700011767447e-05,
+        "scope": "global",
+        "selectedForecastCacheHits": 1,
+        "selectedForecastSeconds": 0.0,
+        "totalSeconds": 3.633654299977934,
+        "trailingTrainingSeconds": 0.0,
+        "trainingAfterPublish": false
+      }
+    ],
+    "png_sizes_bytes": [
+      994,
+      994,
+      994
+    ],
+    "replay_evidence_counts": {
+      "oracle_diagnostic_execution": 32
+    },
+    "replay_size": 32,
+    "state_inference_vfe": [
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701454497466,
+        "expected_log_likelihood": 3.513140129027306,
+        "negative_log_likelihood": -3.513140129027306,
+        "total": -2.9075699835775595,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701454497466,
+        "expected_log_likelihood": 3.513140129027306,
+        "negative_log_likelihood": -3.513140129027306,
+        "total": -2.9075699835775595,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701454497466,
+        "expected_log_likelihood": 3.513140129027306,
+        "negative_log_likelihood": -3.513140129027306,
+        "total": -2.9075699835775595,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701454497466,
+        "expected_log_likelihood": 3.513140129027306,
+        "negative_log_likelihood": -3.513140129027306,
+        "total": -2.9075699835775595,
+        "units": "nats_per_independent_cell_channel"
+      },
+      {
+        "approximation": "Diagonal Gaussian pixel posterior; transition moments are evaluated at the previous posterior mean, only primary material factors enter VFE, and deterministic contrast/coverage channels are projected after Gaussian fusion with provisional propagated variance.",
+        "complexity": 0.6055701454497466,
+        "expected_log_likelihood": 3.513140129027306,
+        "negative_log_likelihood": -3.513140129027306,
+        "total": -2.9075699835775595,
+        "units": "nats_per_independent_cell_channel"
+      }
+    ],
+    "training_losses": [
+      2.0820595379918814,
+      -0.8317711395211518,
+      -1.9535297825932503
+    ]
+  },
+  "not_batchable_as_one_shared_state": [
+    "independent research replicas",
+    "parallel collection workers with separate online beliefs and replay",
+    "causally ordered camera updates and passage-boundary posterior updates"
+  ],
+  "observation_access_mode": "oracle_material_state",
+  "painting_policy_profile": "m1-formal-policy-baseline-v0",
+  "parallelism_taxonomy": {
+    "batched_training": "conventional vectorized gradient learning over observed replay; no painting-policy selection",
+    "independent_research_replicas": "separate fixed-seed experimental units; never worker threads or particles within one posterior",
+    "parallel_data_generation": "independent simulation workers with isolated process and belief state; AI-108 evidence, not remeasured here",
+    "parallel_policy_rollouts": "same agent and frozen belief; scheduling-only batching of independent motor counterfactuals; representative profile uses one worker"
+  },
+  "phases": {
+    "checkpoint_serialization": {
+      "average_active_cpu_cores": {
+        "maximum": 15.531221009522746,
+        "mean": 13.027000657754124,
+        "median": 13.3958355457447,
+        "minimum": 10.153945417994928
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 77.65610504761374,
+        "mean": 65.13500328877062,
+        "median": 66.9791777287235,
+        "minimum": 50.76972708997464
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 968241152,
+      "private_bytes_after": 2040557568,
+      "process_cpu_seconds": {
+        "maximum": 0.859375,
+        "mean": 0.6510416666666666,
+        "median": 0.65625,
+        "minimum": 0.4375
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 13.3958355457447,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 66.9791777287235,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 967340032,
+          "private_bytes_after": 2039730176,
+          "process_cpu_seconds": 0.859375,
+          "wall_seconds": 0.06415239998023026,
+          "working_set_after_bytes": 952492032,
+          "working_set_before_bytes": 933015552
+        },
+        {
+          "average_active_cpu_cores": 10.153945417994928,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 50.76972708997464,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968105984,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.4375,
+          "wall_seconds": 0.04308669999591075,
+          "working_set_after_bytes": 953229312,
+          "working_set_before_bytes": 952492032
+        },
+        {
+          "average_active_cpu_cores": 15.531221009522746,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 77.65610504761374,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.65625,
+          "wall_seconds": 0.04225359999691136,
+          "working_set_after_bytes": 953364480,
+          "working_set_before_bytes": 953229312
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.06415239998023026,
+        "mean": 0.049830899991017454,
+        "median": 0.04308669999591075,
+        "minimum": 0.04225359999691136
+      },
+      "working_set_after_bytes": 953364480
+    },
+    "diagnostics_json_serialization": {
+      "average_active_cpu_cores": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 968241152,
+      "private_bytes_after": 2040557568,
+      "process_cpu_seconds": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.0016903999785427004,
+          "working_set_after_bytes": 953368576,
+          "working_set_before_bytes": 953364480
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.001042599993525073,
+          "working_set_after_bytes": 953368576,
+          "working_set_before_bytes": 953368576
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.0009690999868325889,
+          "working_set_after_bytes": 953368576,
+          "working_set_before_bytes": 953368576
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.0016903999785427004,
+        "mean": 0.001234033319633454,
+        "median": 0.001042599993525073,
+        "minimum": 0.0009690999868325889
+      },
+      "working_set_after_bytes": 953368576
+    },
+    "formal_hierarchy_evaluation": {
+      "bookkeeping_timer": {
+        "maximum": 7.399998139590025e-06,
+        "mean": 5.733338184654713e-06,
+        "median": 6.80002267472446e-06,
+        "minimum": 2.9999937396496534e-06
+      },
+      "policy_influence": false,
+      "status": "disabled_by_m1_formal_policy_baseline"
+    },
+    "gradient_training": {
+      "average_active_cpu_cores": {
+        "maximum": 13.862601289351153,
+        "mean": 13.477876190386155,
+        "median": 13.439049847355,
+        "minimum": 13.131977434452315
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 69.31300644675576,
+        "mean": 67.38938095193078,
+        "median": 67.195249236775,
+        "minimum": 65.65988717226158
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 962310144,
+      "private_bytes_after": 2013732864,
+      "process_cpu_seconds": {
+        "maximum": 14.796875,
+        "mean": 13.375,
+        "median": 13.265625,
+        "minimum": 12.0625
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 13.439049847355,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 67.195249236775,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 916238336,
+          "private_bytes_after": 1923887104,
+          "process_cpu_seconds": 14.796875,
+          "wall_seconds": 1.101035800005775,
+          "working_set_after_bytes": 889110528,
+          "working_set_before_bytes": 743866368
+        },
+        {
+          "average_active_cpu_cores": 13.862601289351153,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 69.31300644675576,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 955813888,
+          "private_bytes_after": 2012876800,
+          "process_cpu_seconds": 13.265625,
+          "wall_seconds": 0.9569362000038382,
+          "working_set_after_bytes": 955813888,
+          "working_set_before_bytes": 889114624
+        },
+        {
+          "average_active_cpu_cores": 13.131977434452315,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 65.65988717226158,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 962310144,
+          "private_bytes_after": 2013732864,
+          "process_cpu_seconds": 12.0625,
+          "wall_seconds": 0.9185593000147492,
+          "working_set_after_bytes": 931004416,
+          "working_set_before_bytes": 955813888
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 1.101035800005775,
+        "mean": 0.9921771000081208,
+        "median": 0.9569362000038382,
+        "minimum": 0.9185593000147492
+      },
+      "working_set_after_bytes": 955813888
+    },
+    "legacy_hierarchy_positive_control": {
+      "compression_gap_values": [
+        -2.3463189601898193,
+        -2.3463189601898193,
+        -2.3463189601898193,
+        -2.3463189601898193,
+        -2.3463189601898193
+      ],
+      "painting_policy_profile": "legacy-material-composition-diagnostic-v0",
+      "policy_influence_in_measured_formal_run": false,
+      "status": "noncanonical_diagnostic_only",
+      "timing": {
+        "average_active_cpu_cores": {
+          "maximum": 13.323953331125377,
+          "mean": 2.6647906662250755,
+          "median": 0.0,
+          "minimum": 0.0
+        },
+        "normalized_process_cpu_percent": {
+          "maximum": 66.61976665562688,
+          "mean": 13.323953331125375,
+          "median": 0.0,
+          "minimum": 0.0
+        },
+        "peak_cuda_memory_bytes": null,
+        "peak_working_set_bytes": 962310144,
+        "private_bytes_after": 2020806656,
+        "process_cpu_seconds": {
+          "maximum": 0.015625,
+          "mean": 0.003125,
+          "median": 0.0,
+          "minimum": 0.0
+        },
+        "sample_count": 5,
+        "samples": [
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "not_used_profile_device_cpu",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": null,
+            "peak_working_set_bytes": 962310144,
+            "private_bytes_after": 2020806656,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.0070146000070963055,
+            "working_set_after_bytes": 932986880,
+            "working_set_before_bytes": 931422208
+          },
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "not_used_profile_device_cpu",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": null,
+            "peak_working_set_bytes": 962310144,
+            "private_bytes_after": 2020806656,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.001252300018677488,
+            "working_set_after_bytes": 933011456,
+            "working_set_before_bytes": 932986880
+          },
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "not_used_profile_device_cpu",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": null,
+            "peak_working_set_bytes": 962310144,
+            "private_bytes_after": 2020806656,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.0011618999997153878,
+            "working_set_after_bytes": 933015552,
+            "working_set_before_bytes": 933015552
+          },
+          {
+            "average_active_cpu_cores": 0.0,
+            "cuda_measurement_status": "not_used_profile_device_cpu",
+            "normalized_process_cpu_percent": 0.0,
+            "peak_cuda_memory_bytes": null,
+            "peak_working_set_bytes": 962310144,
+            "private_bytes_after": 2020806656,
+            "process_cpu_seconds": 0.0,
+            "wall_seconds": 0.001358800014713779,
+            "working_set_after_bytes": 933015552,
+            "working_set_before_bytes": 933015552
+          },
+          {
+            "average_active_cpu_cores": 13.323953331125377,
+            "cuda_measurement_status": "not_used_profile_device_cpu",
+            "normalized_process_cpu_percent": 66.61976665562688,
+            "peak_cuda_memory_bytes": null,
+            "peak_working_set_bytes": 962310144,
+            "private_bytes_after": 2020806656,
+            "process_cpu_seconds": 0.015625,
+            "wall_seconds": 0.0011726999946404248,
+            "working_set_after_bytes": 933015552,
+            "working_set_before_bytes": 933015552
+          }
+        ],
+        "wall_seconds": {
+          "maximum": 0.0070146000070963055,
+          "mean": 0.002392060006968677,
+          "median": 0.001252300018677488,
+          "minimum": 0.0011618999997153878
+        },
+        "working_set_after_bytes": 933015552
+      }
+    },
+    "material_canvas_rendering": {
+      "average_active_cpu_cores": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 968241152,
+      "private_bytes_after": 2040557568,
+      "process_cpu_seconds": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "sample_count": 5,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 5.199998850002885e-05,
+          "working_set_after_bytes": 953372672,
+          "working_set_before_bytes": 953372672
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 3.399999695830047e-05,
+          "working_set_after_bytes": 953372672,
+          "working_set_before_bytes": 953372672
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 2.95999925583601e-05,
+          "working_set_after_bytes": 953372672,
+          "working_set_before_bytes": 953372672
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 2.880001557059586e-05,
+          "working_set_after_bytes": 953372672,
+          "working_set_before_bytes": 953372672
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2040557568,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 2.9700022423639894e-05,
+          "working_set_after_bytes": 953372672,
+          "working_set_before_bytes": 953372672
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 5.199998850002885e-05,
+        "mean": 3.4820003202185033e-05,
+        "median": 2.9700022423639894e-05,
+        "minimum": 2.880001557059586e-05
+      },
+      "working_set_after_bytes": 953372672
+    },
+    "observed_training_data_collection": {
+      "average_active_cpu_cores": {
+        "maximum": 0.9965271760917717,
+        "mean": 0.9965271760917717,
+        "median": 0.9965271760917717,
+        "minimum": 0.9965271760917717
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 4.982635880458858,
+        "mean": 4.982635880458858,
+        "median": 4.982635880458858,
+        "minimum": 4.982635880458858
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 652042240,
+      "private_bytes_after": 1601990656,
+      "process_cpu_seconds": {
+        "maximum": 5.140625,
+        "mean": 5.140625,
+        "median": 5.140625,
+        "minimum": 5.140625
+      },
+      "sample_count": 1,
+      "samples": [
+        {
+          "average_active_cpu_cores": 0.9965271760917717,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 4.982635880458858,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 652042240,
+          "private_bytes_after": 1601990656,
+          "process_cpu_seconds": 5.140625,
+          "wall_seconds": 5.158539700001711,
+          "working_set_after_bytes": 652042240,
+          "working_set_before_bytes": 642187264
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 5.158539700001711,
+        "mean": 5.158539700001711,
+        "median": 5.158539700001711,
+        "minimum": 5.158539700001711
+      },
+      "working_set_after_bytes": 652042240
+    },
+    "planning_driver_decomposition": {
+      "baseEFESeconds": {
+        "maximum": 0.8823740000079852,
+        "mean": 0.7556601333296081,
+        "median": 0.7391038999776356,
+        "minimum": 0.6455025000032037
+      },
+      "beliefUpdateSeconds": {
+        "maximum": 0.0038146000006236136,
+        "mean": 0.003575266668728242,
+        "median": 0.0034727000165730715,
+        "minimum": 0.003438499988988042
+      },
+      "compositionDiagnosticSeconds": {
+        "maximum": 7.399998139590025e-06,
+        "mean": 5.733338184654713e-06,
+        "median": 6.80002267472446e-06,
+        "minimum": 2.9999937396496534e-06
+      },
+      "motorEFERescoreSeconds": {
+        "maximum": 0.2619173999992199,
+        "mean": 0.23346273334270032,
+        "median": 0.23843330002273433,
+        "minimum": 0.20003750000614673
+      },
+      "motorForecastSeconds": {
+        "maximum": 2.7314212000055704,
+        "mean": 2.6144814999909918,
+        "median": 2.673160399979679,
+        "minimum": 2.4388628999877255
+      },
+      "policySampleSeconds": {
+        "maximum": 0.005745999980717897,
+        "mean": 0.0052293999954902875,
+        "median": 0.00521669999579899,
+        "minimum": 0.004725500009953976
+      },
+      "posteriorSeconds": {
+        "maximum": 0.008109200018225238,
+        "mean": 0.006453133343408505,
+        "median": 0.0057243000192102045,
+        "minimum": 0.005525899992790073
+      },
+      "publishSeconds": {
+        "maximum": 6.2700011767447e-05,
+        "mean": 4.156667273491621e-05,
+        "median": 5.440000677481294e-05,
+        "minimum": 7.599999662488699e-06
+      },
+      "selectedForecastSeconds": {
+        "maximum": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "totalSeconds": {
+        "maximum": 3.8951714000140782,
+        "mean": 3.6233452999925553,
+        "median": 3.633654299977934,
+        "minimum": 3.341210199985653
+      }
+    },
+    "planning_total": {
+      "average_active_cpu_cores": {
+        "maximum": 6.06057921534991,
+        "mean": 5.938488341940296,
+        "median": 6.053071326961749,
+        "minimum": 5.701814483509228
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 30.30289607674955,
+        "mean": 29.69244170970148,
+        "median": 30.265356634808747,
+        "minimum": 28.50907241754614
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 772440064,
+      "private_bytes_after": 1755582464,
+      "process_cpu_seconds": {
+        "maximum": 23.578125,
+        "mean": 21.515625,
+        "median": 20.71875,
+        "minimum": 20.25
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 6.053071326961749,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 30.265356634808747,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 754933760,
+          "private_bytes_after": 1733697536,
+          "process_cpu_seconds": 23.578125,
+          "wall_seconds": 3.8952332999906503,
+          "working_set_after_bytes": 754933760,
+          "working_set_before_bytes": 667500544
+        },
+        {
+          "average_active_cpu_cores": 6.06057921534991,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 30.30289607674955,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 766406656,
+          "private_bytes_after": 1755582464,
+          "process_cpu_seconds": 20.25,
+          "wall_seconds": 3.3412648000230547,
+          "working_set_after_bytes": 766406656,
+          "working_set_before_bytes": 754933760
+        },
+        {
+          "average_active_cpu_cores": 5.701814483509228,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 28.50907241754614,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 772440064,
+          "private_bytes_after": 1740951552,
+          "process_cpu_seconds": 20.71875,
+          "wall_seconds": 3.6337117000075523,
+          "working_set_after_bytes": 743866368,
+          "working_set_before_bytes": 766406656
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 3.8952332999906503,
+        "mean": 3.6234032666737526,
+        "median": 3.6337117000075523,
+        "minimum": 3.3412648000230547
+      },
+      "working_set_after_bytes": 766406656
+    },
+    "png_serialization": {
+      "average_active_cpu_cores": {
+        "maximum": 19.95081080155062,
+        "mean": 6.65027026718354,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 99.7540540077531,
+        "mean": 33.2513513359177,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 968241152,
+      "private_bytes_after": 2041618432,
+      "process_cpu_seconds": {
+        "maximum": 0.328125,
+        "mean": 0.109375,
+        "median": 0.0,
+        "minimum": 0.0
+      },
+      "sample_count": 3,
+      "samples": [
+        {
+          "average_active_cpu_cores": 19.95081080155062,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 99.7540540077531,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2041618432,
+          "process_cpu_seconds": 0.328125,
+          "wall_seconds": 0.016446699999505654,
+          "working_set_after_bytes": 954064896,
+          "working_set_before_bytes": 953372672
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2041618432,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.0003601000062189996,
+          "working_set_after_bytes": 954081280,
+          "working_set_before_bytes": 954068992
+        },
+        {
+          "average_active_cpu_cores": 0.0,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 0.0,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 968241152,
+          "private_bytes_after": 2041618432,
+          "process_cpu_seconds": 0.0,
+          "wall_seconds": 0.0002834000042639673,
+          "working_set_after_bytes": 954081280,
+          "working_set_before_bytes": 954081280
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.016446699999505654,
+        "mean": 0.005696733336662874,
+        "median": 0.0003601000062189996,
+        "minimum": 0.0002834000042639673
+      },
+      "working_set_after_bytes": 954081280
+    },
+    "state_inference": {
+      "average_active_cpu_cores": {
+        "maximum": 20.157079321624224,
+        "mean": 13.786509331963515,
+        "median": 13.199975868337333,
+        "minimum": 8.93893328821833
+      },
+      "normalized_process_cpu_percent": {
+        "maximum": 100.78539660812112,
+        "mean": 68.93254665981758,
+        "median": 65.99987934168666,
+        "minimum": 44.69466644109165
+      },
+      "peak_cuda_memory_bytes": null,
+      "peak_working_set_bytes": 667488256,
+      "private_bytes_after": 1613475840,
+      "process_cpu_seconds": {
+        "maximum": 0.328125,
+        "mean": 0.24375,
+        "median": 0.21875,
+        "minimum": 0.1875
+      },
+      "sample_count": 5,
+      "samples": [
+        {
+          "average_active_cpu_cores": 8.93893328821833,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 44.69466644109165,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 666701824,
+          "private_bytes_after": 1612869632,
+          "process_cpu_seconds": 0.21875,
+          "wall_seconds": 0.02447160001611337,
+          "working_set_after_bytes": 666701824,
+          "working_set_before_bytes": 652042240
+        },
+        {
+          "average_active_cpu_cores": 10.824322685763526,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 54.12161342881764,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 667254784,
+          "private_bytes_after": 1613271040,
+          "process_cpu_seconds": 0.1875,
+          "wall_seconds": 0.017322100000455976,
+          "working_set_after_bytes": 667254784,
+          "working_set_before_bytes": 666710016
+        },
+        {
+          "average_active_cpu_cores": 20.157079321624224,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 100.78539660812112,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 667475968,
+          "private_bytes_after": 1613475840,
+          "process_cpu_seconds": 0.328125,
+          "wall_seconds": 0.01627839999855496,
+          "working_set_after_bytes": 667475968,
+          "working_set_before_bytes": 667262976
+        },
+        {
+          "average_active_cpu_cores": 15.812235495874164,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 79.06117747937083,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 667484160,
+          "private_bytes_after": 1613475840,
+          "process_cpu_seconds": 0.265625,
+          "wall_seconds": 0.016798699973151088,
+          "working_set_after_bytes": 667484160,
+          "working_set_before_bytes": 667475968
+        },
+        {
+          "average_active_cpu_cores": 13.199975868337333,
+          "cuda_measurement_status": "not_used_profile_device_cpu",
+          "normalized_process_cpu_percent": 65.99987934168666,
+          "peak_cuda_memory_bytes": null,
+          "peak_working_set_bytes": 667488256,
+          "private_bytes_after": 1613475840,
+          "process_cpu_seconds": 0.21875,
+          "wall_seconds": 0.016571999993175268,
+          "working_set_after_bytes": 667488256,
+          "working_set_before_bytes": 667484160
+        }
+      ],
+      "wall_seconds": {
+        "maximum": 0.02447160001611337,
+        "mean": 0.018288559996290133,
+        "median": 0.016798699973151088,
+        "minimum": 0.01627839999855496
+      },
+      "working_set_after_bytes": 667488256
+    }
+  },
+  "run_dir": "C:\\Users\\hilljx\\Downloads\\active_inference_painter_python_v0_1\\runs\\baseline\\ai113-runtime-profile-2026-08-27\\ai113-representative-cpu-workers-1-20260827-153315-seed-20260827",
+  "schema": "ai113-runtime-phase-profile-v1",
+  "settings": {
+    "device": "cpu",
+    "gradient_steps": 2,
+    "inference_repeats": 5,
+    "motor_forecast_workers": 1,
+    "planning_repeats": 3,
+    "quick": false,
+    "rendering_repeats": 5,
+    "seed": 20260827,
+    "serialization_repeats": 3,
+    "training_batch_size": 32,
+    "training_repeats": 3
+  },
+  "status": "completed",
+  "total_process_cpu_seconds": 114.78125,
+  "total_wall_seconds": 20.312814700009767
+}

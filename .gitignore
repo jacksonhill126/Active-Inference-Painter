@@ -21,4 +21,6 @@ runs/*
 runs/baseline/*
 !runs/baseline/s0-native-abstract-v0-2026-08-11/
 !runs/baseline/s0-native-abstract-v0-2026-08-11/**
+!runs/baseline/ai113-runtime-profile-2026-08-27/
+!runs/baseline/ai113-runtime-profile-2026-08-27/**
 src/*.egg-info/
